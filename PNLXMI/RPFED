@@ -1,0 +1,99 @@
+)ATTR
+/* Panel: RPFED. Panel for MVS38J systems                */
+ + TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(GREEN)
+ % TYPE(TEXT)   INTENS(HIGH) SKIP(ON)    COLOR(WHITE)
+ ¬ TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(YELLOW)
+ _ TYPE(INPUT)  INTENS(LOW)  JUST(LEFT)  COLOR(TURQ)
+ # TYPE(INPUT)  INTENS(LOW)  JUST(ASIS)
+ ~ TYPE(INPUT)  INTENS(HIGH) JUST(LEFT)
+ ! TYPE(INPUT)  INTENS(HIGH) JUST(RIGHT)
+ { TYPE(OUTPUT) INTENS(LOW)  JUST(LEFT)
+ } TYPE(OUTPUT) INTENS(LOW)  JUST(RIGHT)
+ Ý TYPE(OUTPUT) INTENS(HIGH) JUST(LEFT)
+ ¨ TYPE(OUTPUT) INTENS(HIGH) JUST(RIGHT)
+ ¢ TYPE(TEXT)  INTENS(HIGH) COLOR(YELLOW)
+)BODY WIDTH(&ZSCREENW) EXPAND(//)
+%--------------------------  RPFED - ENTRY PANEL  ---------/-/-----------------
+%Command ===>_ZCMD                                                             +
++
+%ISPF Library:
++   Project%===>_PRJ1    %
++   Library%===>_LIB1    %
++   Type   %===>_TYP1    %
++   Member %===>_MEM1    %
+%Other Partitioned or sequential data set:
++   Data Set Name  %===>_Z                                                     +
++   Volume Serial  %===>_Z     +    (If not cataloged)
++  ¢RPF CP name    %===>_RPFCMD  +  (RPFED, RPFBR, RPFPD or RPFST)
++
++  ¢RPFED +calls the RPF editor or EDIT member selection list.
++  ¢RPFBR +calls the RPF browser or Browse member selection list.
++  ¢RPFPD +calls the RPF PDS(E) maintenance routine.
++  ¢RPFST +calls the RPF RESET or Delete ISPF stats routine.
++
+%New userid and ISPF vv and ISPF mm (only if CP name = RPFST)
++   New userid     %===>_NUID    +  (New userid string in ISPF stats)
++   New version    %===>_NV+        (New ISPF vv, default = 01)
++   New mod lvl    %===>_NM+        (New ISPF mm, default = 00)
+)INIT
+ .ZVARS  = (DSN1,VOL1)
+ .HELP   = RPFEDH00
+ &ROPT   = ''
+ &ZPRIM = NO
+ &ZHTOP  = RPFEDH00
+ &ZHINDEX = RPFEDH01
+ IF (&DSN1 = '')
+   .CURSOR = MEM1
+ IF (&DSN1 ¬= '')
+   .CURSOR = DSN1
+ &MEM1 = ''
+ IF (&RPFCMD = '')  &RPFCMD = 'RPFED'
+ IF (&NUID EQ '')
+   &NUID = &ZUSER
+)REINIT
+ &MEM1 = ''
+)PROC
+ VER (&RPFCMD,LIST,RPFED,RPFBR,RPFPD,RPFST)
+ &RPFPDSN = &DSN1
+ &RPFPVOL = &VOL1
+ &OPTS = 'LINES(28000)'
+ IF (&NUID NE '')
+   &OPTN = 'NEWUSER(&NUID)'
+ &OPTV = 'VERSION(0100)'
+ IF (&NV NE '')
+   &OPTV = 'VERSION(&NV.00)'
+   IF (&NM NE '')
+     &OPTV = 'VERSION(&NV.&NM)'
+ IF (&RPFPDSN NE '')
+   &RPFEQUO = TRUNC(&RPFPDSN, 1)
+   IF (&RPFEQUO = '''')
+     &RPFPDSN   = .TRAIL
+     &RPFPDSN   = TRUNC (&RPFPDSN,'''')
+     &RPFPDSN   = '''&RPFPDSN'''
+   &RPFPDSNZ    = &RPFPDSN
+   &REVS = &ZSCBR
+   IF (&RPFPVOL NE '')
+     &ROPT = 1
+   ELSE
+     &ROPT = 2
+ ELSE
+   VER (&PRJ1,NB)
+   VER (&LIB1,NB)
+   VER (&TYP1,NB)
+   IF (&MEM1 EQ '')
+     &RPFPDSNZ   = '''&PRJ1..&LIB1..&TYP1'''
+     &REVS = &ZSCML
+   ELSE
+     &RPFPDSNZ   = '''&PRJ1..&LIB1..&TYP1(&MEM1)'''
+     &REVS = &ZSCBR
+   &ROPT = 3
+ VPUT (PRJ1 LIB1 TYP1) PROFILE
+ VPUT (RPFPDSN RPFPVOL) SHARED
+ VPUT (RPFCMD NUID NV NM) PROFILE
+ &ZSEL = TRANS(&ROPT,
+               1,'CMD(&RPFCMD &RPFPDSNZ VOL(&RPFPVOL) &OPTS &OPTN &OPTV)'
+               2,'CMD(&RPFCMD &RPFPDSNZ &OPTS &OPTN &OPTV)'
+               3,'CMD(&RPFCMD &RPFPDSNZ &OPTS &OPTN &OPTV)'
+              ' ',' '
+               *,'?' )
+)END

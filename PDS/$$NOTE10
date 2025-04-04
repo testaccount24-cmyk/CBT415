@@ -1,0 +1,87 @@
+    RPF191 Release Notes
+Subject:  RPF191
+From:     <robprins2@kpnmail.nl>
+Date:     12/21/2021, 12:30 PM
+To:       "Sam Golob" <sbgolob@cbttape.org>
+
+Dear Sam,
+
+
+
+After more than 3 months, RPF191 is here.
+
+The release is a maintenance release with some update functions.
+
+In this release, 32 modules are now reentrant and reusable.
+
+The most significant update is the new TSO command processor
+RPFV.
+
+RPFV presents the DSLIST function of RPF (RPF 3.4) from the READY
+mode or from ISPF.
+
+With HELP RPFV or in the User's guide you will find more
+information about RPFV.
+
+Another update is allowing numbered data if the dataset or member
+contains variable records.
+
+You will find the release notes below and of course with RPF 7.5
+
+
+
+RPFEDIT   Primary commands I 0,n and CO/MO n,m,0 fixed.
+                    Numbered variable data supported with line
+                    numbers in columns 1-8.
+                    Primary command SCOPE renamed into BNDS.
+                    Redefine the default boundaries (BNDS) as follows:
+                    COBOL data: columns 7-72
+                    Not numbered fixed data: columns 1 - LRECL
+                    Not numbered variable data: columns 1 - LRECL-4 (RDW)
+                    Numbered fixed data: columns 1 - LRECL-8
+                    Numbered variable data: columns 9 - LRECL-4 (RDW)
+                    Fix update on last line on screen, that was
+                    not marked as changed.
+  RPFBRO     Module made re-entrant and re-usable.
+                    Sometimes the separator record missing if browsing
+                    RECFM=U data. This is fixed.
+  RPFLIB     Dynamic allocations replaced by IKJDAIR calls.
+                    Module made re-entrant and re-usable.
+  RPFOPER    Module made re-entrant and re-usable.
+  RPFED      Fix interception of an I/O error.
+  RPFSAVE    Fix msg 'Dataset/member saved' missing if EDIT
+                    workspace is saved into a sequential data set.
+  RPFTSO     Reset and set APF authorization only in MVS/ESA and
+                    above to prevent 047 abends in MVS38J
+  RPFV       New module RPFV, the DSLIST TSO command processor.
+  RPFVTOC    Menu not displayed if called by the RPFV command
+                    processor.
+  RPFMVCPY   Module made re-entrant and re-usable.
+  RPFARCH    Fix error during SAVE in ARCHIVE after EDIT.
+  RPFOUT     Increase LRECL from 133 to 255 to prevent ABEND001.
+  RPFDEF     Module (option 0) made re-entrant and re-usable.
+  RPFASM     DYNALLOC's replaced by IKJDAIR calls and RPFASM
+                    made re-entrant and re-usable.
+  RPFASM00   Module made re-entrant and re-usable.
+
+
+
+Would you like to post the enclosed file onto CBT?
+
+I wish you and your family a wonderful Christmas and a happy New
+year.
+
+Rob Prins
+Haremakers 54, 1531 LC Wormer
+Ploegdijk 2 H633, 7241 SC Lochem
+
+T 06-46312299
+E rn.prins@quicknet.nl
+www.prince-webdesign.nl
+
+Attachments:
+CBT415.zip      2.1 MB
+
+
+
+

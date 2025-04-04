@@ -1,0 +1,1394 @@
+RPFALLOC TITLE 'Data set utility'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFALLOC   (RPF option 3.2)                   *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFUTIL (opt 3.2)                             *
+*                       RPFVTOC1 (line command A)                     *
+*                                                                     *
+*        Function:      Present a data entry menu for creation of     *
+*                       a new data set or deletion of a data set.     *
+*                       In option A, you are able to                  *
+*                       allocate a sequential or partitioned data set.*
+*                       The RECFM, LRECL, BLKSIZE, primary space,     *
+*                       secondary space, directory blocks, space      *
+*                       unit (BLK, CYL or TRK) can be chosen.         *
+*                                                                     *
+*                       If an error occurs during allocation/deletion *
+*                       a suitable message will be displayed with     *
+*                       retry possibilities.                          *
+*                       In option D, you can delete a data set.       *
+*                                                                     *
+*        Input:         COMPALLO, an address of the DSN, DCB and      *
+*                       SPACE parameters of the new data set to be    *
+*                       allocated. This field will be mapped by the   *
+*                       ALLOCCOM DSECT located in RPFCOMM.            *
+*                       If COMPALLO is zero, default parameters       *
+*                       will be used.                                 *
+*                                                                     *
+*        Note:          Set variable &OS390 in member SYSVARS to 1    *
+*                       to get the RACROUTE SAF macros instead        *
+*                       of RACHECK macro's.                           *
+*                       Or set variable &SVS (for OS/VS2 rel. 1) to   *
+*                       bypass security checks.                       *
+*                                                                     *
+*        Registers:     Register 12 and 10 are the base registers.    *
+*                       Register 13 is the working storage address.   *
+*                       Register 11 points to the RPFCOMM control blk *
+*                       Register 9 points the the Allocation screen.  *
+*                                                                     *
+*        Change log:                                                  *
+*        Aug 05,2002 RPr: Add RECFM, LRECL and BLKSIZE in allocation  *
+*        Sep 20,2002 RPr: Add option 2, Delete a data set             *
+*        Oct 02,2002 RPr: Free RPFWORK data sets if current data set  *
+*                         is deleted, and OPEN/CLOSE allocated        *
+*                         sequential data set to van an ABEND001 if   *
+*                         edited afterwards.                       @rp2
+*                         avoid an 001 abend if edited afterwards  @rp3
+*        Nov 01,2002 RPr: Check of alias (hlq) deleted             @rp4
+*        Dec 03,2002 RPr: Add 7 color support in screen            @rp5
+*        Dec 17,2018 Rpr: make RPF suitable for MVS/380 and up   @rpa01
+*        Feb 25,2019 Rpr: Change option 1 and 2 into A and D       @rp6
+*        Mar 27,2019 Rpr: Support added for all kinds of 3270 screens *
+*                         up to 62 lines x 160 columns (3290)         *
+*        Dec 09,2019 RPr: BLOCK allocation added (Space unit=BLK)     *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Sep 27,2020 RPr: Fix test on PREFIX, LIBRARY and TYPE        *
+*        Oct 24,2020 RPr: Remove option X, use PF3/PF15 instead       *
+*        Jul 10,2021 RPr: Replace DYNALLOC's by IKJDAIR calls.        *
+*                         and remove DSNTYPE and add a RACHECK to     *
+*                         test if creation is allowed.                *
+*        Jan 18,2022 RPr: RPFALLOC made re-entrant and re-usable.     *
+*        Sep 12,2022 RPr: If COMPALLO contains an address use DSN     *
+*                         and DCB and SPACE parameters from the       *
+*                         parameter list pointed by COMPALLO.         *
+*        Apr 08,2023 RPr: RECFM=FA/FM/VA/VM error fixed.              *
+*        Apr 01,2024 RPr: Field 'Other data set' added.               *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFALLOC CSECT
+RPFALLOC AMODE 31                                                @rpa01
+RPFALLOC RMODE 24                                                @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save callers registers
+         LR    R12,R15                 Setup base register
+         USING RPFALLOC,R12,R10        Make module addressable
+         L     R11,0(,R1)              Pickup RPFCOMM area
+         USING COMMAREA,R11            Address it
+         LA    R10,4095(,R12)          Second base
+         LA    R10,1(,R10)                        register
+         GETMAIN R,LV=WORKL            Obtain our working storage
+         ST    R1,8(0,R13)             Forward pointer
+         ST    R13,4(,R1)              Backward pointer
+         LR    R13,R1
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         USING WORKAREA,R13            Make working storage addressable
+         ST    R11,PARMLST             Save for later use
+         AIF   (&SVS).NORA1
+         MVC   RR(RACFL),RACF          Move list form RACHECK/RACROUTE
+.NORA1   ANOP
+         MVC   RPFUT4,MDLUT4           Move model DCB
+         LA    R0,SCRN                 Output
+         LR    R9,R0                   Copy
+         LA    R1,SCREENSL             Length of ...
+         LR    R3,R1                             both operands
+         L     R2,=V(SCREENS)          Input
+         MVCL  R0,R2                   and move
+         USING SCREENS,R9              Make the screens addressable
+         MVI   SCR2CMD,C'A'            Move default in command     @rp6
+         MVC   SCR2TXT(1),COMMCMD      Move EW/EWA in data stream
+         MVC   SCR3TXT(1),COMMCMD      Move EW/EWA in data stream
+         LM    R4,R5,COMMSIZE          Pickup lines
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LR    R0,R4                   Last line
+         LA    R1,2                    Column 2+, Hit Enter ...
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR2LAST+1
+*
+         LA    R0,1                    Line 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR3TXT+3
+         STCM  R0,3,SCR2TXT+3
+*
+         LA    R0,2                    Line 2
+         LA    R1,1                    Column 1+, Option ==>
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R2C1+1
+         STCM  R0,3,SC2R2C1+1
+*
+         LA    R0,4                    Line 4, menu line-1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R4C1+1
+*
+         LA    R0,4                    Line 4, menu line-1
+         LA    R1,4                    Column 4+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R4C4+1
+*
+         LA    R0,5                    Line 5
+         LA    R1,1                    Column 1+, menu line-2
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R5C1+1
+*
+         LA    R0,5                    Line 5
+         LA    R1,4                    Column 4+, menu line-2
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R5C4+1
+*
+         LA    R0,9                    Line 9
+         LA    R1,2                    Column 2+, TSO Library
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R9C2+1
+*
+         LA    R0,10                   Line 10
+         LA    R1,1                    Column 1+, TSO library PREFIX
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R10C1+1
+*
+         LA    R0,11                   Line 11
+         LA    R1,1                    Column 1+, TSO library LIBRARY
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R11C1+1
+*
+         LA    R0,12                   Line 12
+         LA    R1,1                    Column 1+, TSO library TYPE
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R12C1+1
+*
+         LA    R0,14                   Line 14
+         LA    R1,2                    Column 2+, Other data set
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R14C2+1
+*
+*
+         LA    R0,15                   Line 15
+         LA    R1,1                    Column 1+, Data set name=
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R15C1+1
+*
+         LA    R0,17                   Line 17
+         LA    R1,2                    Column 2+ Volume/space/DCB into
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R17C2+1
+*
+         LA    R0,18                   Line 18
+         LA    R1,1                    Column 1+, unit name=
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R18C1+1
+*
+         LA    R0,18                   Line 18
+         LA    R1,39                   Column 39+, RECFM=
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S2R18C39+1
+*
+         LA    R0,19                   Line 19,
+         LA    R1,1                    Column 1+, volume serial=
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R19C1+1
+*
+         LA    R0,19                   Line 19
+         LA    R1,39                   Column 39+, LRECL=
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S2R19C39+1
+*
+         LA    R0,20                   Line 20
+         LA    R1,1                    Column 1+, Space unit=
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R20C1+1
+*
+         LA    R0,20                   Line 20
+         LA    R1,39                   Column 39+, BLKSIZE=
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S2R20C39+1
+*
+         LA    R0,22                   Line 22, space parameters
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R22C1+1
+*
+*        end of screen setup           ------------------------------*
+*
+         MVC   SCR2UID,COMMUSER        User id into screen
+         MVI   MSG2,C'-'               Clear
+         MVC   MSG2+1(L'MSG2-1),MSG2        message
+         MVC   SCR2UNIT,COMMSTOR       Move default UNIT name
+         CLI   SCR2PRE,C' '            Field contains blanks?
+         BNE   PUT1                    No: do not alter
+         MVI   SCR2PRE,C' '            Clear ...
+         MVC   SCR2PRE+1(L'SCR2PRE-1),SCR2PRE ... PREFIX field
+         MVC   SCR2PRE(7),COMMUSER     Prefix is default equal user id
+         ICM   R3,15,COMPALLO          Address of parameter list
+         BZ    PUT1                    No parm list: continue
+         USING ALLOCCOM,R3             Make DSECT addressable
+         MVC   SCR2UNIT,ALUNIT         Unit name
+         MVC   SCR2VOL,ALVOL           Volume
+         MVC   SCR2PRI,ALPRIM          Primary space
+         MVC   SCR2DIR,ALDIR           # directories
+         MVC   SCR2RECF,ALRECFM        DCB ...                (RPFCOMM)
+         MVC   SCR2BLK,ALBLKSI                ...
+         MVC   SCR2LREC,ALLRECL                  ...
+         MVC   SCR2VOL,ALVOL           Volume                 (RPFCOMM)
+         MVC   SCR2UNIT,ALUNIT         UNIT name
+         MVC   SCR2SPC,ALTYPE          Allocation type CYL or TRK
+         MVI   SCR2OTH,X'7D'           Quote
+         MVC   SCR2OTH+1(44),ALDSN     Move DSN from parmlist (RPFCOMM)
+         MVI   SCR2OTH+45,C' '         Blank last position
+         TRT   SCR2OTH,COMSKPNS        Stop at first blank
+         MVI   0(R1),X'7D'             Ending quote
+         DROP  R3                      ALLOCCOM
+PUT1     DS    0H
+         LA    R1,SCR2TXT              Parm TPUTS (address screen)
+         LA    R0,SCR2LEN              Parm TPUTS (length  screen)
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write screen
+         L     R3,COMMSCR              Load screen address of RPFCOMM
+         LA    R5,500(,R3)             First 492 bytes are input area
+         LA    R0,492                  Length
+         LR    R1,R3                   Duplicate area address
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LR    R4,R1                   Save length
+*
+*        Do an TGET ASIS to obtain the AID byte
+*        After the TGET ASIS remove the SBA's from the output
+*
+         CLI   0(R3),X'F3'             PFK3 (End) Pressed?
+         BE    RETURN                  Yes: exit
+         CLI   0(R3),X'C3'             PFK15 (End) Pressed?
+         BE    RETURN                  Yes: exit
+         XR    R2,R2                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   CONV099                 <= 0: all done
+         LA    R3,3(,R3)
+*
+*        Input screen is pointed to by register 3 (COMMSCR)
+*        Output screen is pointed to by register 5 (COMMSCR+500)
+*        The next section will remove all the SBA's
+*
+CONV001  DS    0H
+         CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  DS    0H
+         MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV099                 Finished
+CONV003  DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes input
+         SH    R4,=H'2'                Minus 2 BCT
+         BNP   CONV099                 <=0: conversion finished
+         BCT   R4,CONV001              Test next byte
+CONV099  DS    0H
+         LR    R1,R2                   Output length in register 1
+         LTR   R1,R1                   No input received?
+         BZ    PUT1                    Yes: re-display screen
+         MVI   MSG2,C'-'               Clear
+         MVC   MSG2+1(21),MSG2              message
+         XC    CMD,CMD                 Clear command field
+*---------------------------------------------------------------------*
+* Registers used in SCAN.. routine:
+* R3 = Length counter some fields.
+* R4 = address output
+* R5 = address input = address COMMSCR + 500
+* R6 = length of buffer after TGET and CONV, will be decreased.
+*---------------------------------------------------------------------*
+SCAN00   DS    0H
+         MVI   OBUFFER,C' '            Clear output ...
+         MVC   OBUFFER+1(L'OBUFFER-1),OBUFFER       buffer
+         L     R5,COMMSCR              BUFFER ...
+         LA    R5,500(,R5)                    address
+         LR    R6,R1                   Actual length of COMMSCR+500
+         LA    R4,CMD                  Pickup command
+SCAN01   DS    0H
+         CLC   S2PREF,0(R5)            Scan for 'PREFIX=' keyword
+         BE    SCAN03                  Branch if found
+         MVC   0(1,R4),0(R5)           Move 1 byte command/option
+         LA    R5,1(,R5)               Next byte
+         BCT   R6,SCAN01               Test again
+         B     PUT1                    Possible CLEAR key pressed
+SCAN03   DS    0H
+         LA    R4,PREFIX               Pickup address of PREFIX
+         LA    R5,L'S2PREF(,R5)        Point after 'PREFIX='
+         SH    R6,=AL2(L'S2PREF)       Subtract the length
+*
+SCAN05   DS    0H
+         CLC   S2LIB,0(R5)             Scan for 'LIBRARY=' keyword
+         BE    SCAN07                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte PREFIX
+         LA    R5,1(,R5)               Next byte in buffer
+         LA    R4,1(,R4)               Next byte in PREFIX
+         BCT   R6,SCAN05               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN07   DS    0H
+         LA    R4,LIBRARY              Pickup address of LIBRARY
+         LA    R5,L'S2LIB(,R5)         Point after 'LIBRARY='
+         SH    R6,=AL2(L'S2LIB)        Discount length with L'LIBRARY=
+*
+SCAN09   DS    0H
+         CLC   S2TYPE,0(R5)            Scan for keyword (low qual.)
+         BE    SCAN13                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte LIBRARY
+         LA    R5,1(,R5)               Next byte in BUFFER
+         LA    R4,1(,R4)               Next byte in LIBRARY
+         BCT   R6,SCAN09               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN13   DS    0H
+         LA    R4,TYPE                 Pickup address of TYPE
+         LA    R5,L'S2TYPE(,R5)        Point after 'TYPE='
+         SH    R6,=AL2(L'S2TYPE)       Minus length
+*
+SCAN15   DS    0H
+         CLC   S2OTHER,0(R5)           Scan for 'Data set name =' keyw
+         BE    SCAN19                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte TYPE
+         LA    R5,1(,R5)               Next byte in buffer
+         LA    R4,1(,R4)               Next byte in TYPE
+         BCT   R6,SCAN15               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN19   DS    0H
+         LA    R4,OTHDSN               Pickup address of other DSN
+         LA    R5,L'S2OTHER(,R5)       Point after 'Data set name ='
+         SH    R6,=AL2(L'S2OTHER)      Subtract the length
+*
+SCAN21   DS    0H
+         CLC   S2UNIT,0(R5)            Scan for 'UNIT=' keyword
+         BE    SCAN23                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte Other DSN
+         LA    R5,1(,R5)               Next byte in buffer
+         LA    R4,1(,R4)               Next byte in Other DSN
+         BCT   R6,SCAN21               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN23   DS    0H
+         LA    R4,BUFUNIT              Pickup address of UNIT
+         LA    R5,L'S2UNIT(,R5)        Point after 'UNIT='
+         SH    R6,=AL2(L'S2UNIT)       Subtract the length
+*
+SCAN25   DS    0H
+         CLC   S2RECF,0(R5)            Scan for 'RECFM=' keyword
+         BE    SCAN27                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte UNIT
+         LA    R5,1(,R5)               Next byte in buffer
+         LA    R4,1(,R4)               Next byte in TYPE
+         BCT   R6,SCAN25               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN27   DS    0H
+         LA    R4,BUFRECFM             Pickup address RECFM
+         LA    R5,L'S2RECF(,R5)        Point after 'RECFM='
+         SH    R6,=AL2(L'S2RECF)       Subtract the length
+*
+SCAN29   DS    0H
+         CLC   S2VOL,0(R5)             Scan for 'Volume serial='
+         BE    SCAN31                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte RECFM
+         LA    R5,1(,R5)               Next byte in buffer
+         LA    R4,1(,R4)               Next byte in RECFM
+         BCT   R6,SCAN29               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN31   DS    0H
+         LA    R4,VOL                  Pickup address VOL
+         LA    R5,L'S2VOL(,R5)         Point after 'VOLUME='
+         SH    R6,=AL2(L'S2VOL)        Subtract the length
+*
+SCAN33   DS    0H
+         CLC   S2LREC,0(R5)            Scan for 'LRECL=' keyword
+         BE    SCAN37                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte VOLUME
+         LA    R5,1(,R5)               Next byte in BUFFER
+         LA    R4,1(,R4)               Next byte in VOLUME
+         BCT   R6,SCAN33               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN37   DS    0H
+         LA    R4,BUFLRECL             Pickup address of LRECL
+         LA    R5,L'S2LREC(,R5)        Point after 'LRECL='
+         SH    R6,=AL2(L'S2LREC)       Subtract the length
+         XR    R3,R3                   Clear length of LRECL
+*
+SCAN39   DS    0H
+         CLC   S2SPC,0(R5)             Scan for 'SPACE UNIT=' keyword
+         BE    SCAN43                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte LRECL
+         CLI   0(R5),C' '              Blank in buffer?
+         BE    SCAN41                  Do not count blanks
+         LA    R3,1(,R3)               Count length of LRECL
+SCAN41   DS    0H
+         LA    R5,1(,R5)               Next byte in BUFFER
+         LA    R4,1(,R4)               Next byte in LRECL
+         BCT   R6,SCAN39               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN43   DS    0H
+         LA    R4,SPC                  Pickup address of SPC
+         STH   R3,LRECLLEN             Save length
+         LA    R5,L'S2SPC(,R5)         Point after 'SPACE UNIT='
+         SH    R6,=AL2(L'S2SPC)        Subtract the length
+*
+SCAN45   DS    0H
+         CLC   S2BLK,0(R5)             Scan for keyword
+         BE    SCAN49                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte space unit
+         LA    R5,1(,R5)               Next byte in BUFFER
+         LA    R4,1(,R4)               Next byte in LRECL
+         BCT   R6,SCAN45               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN49   DS    0H
+         LA    R4,BUFBLKSZ             Pickup address BLKSIZE
+         LA    R5,L'S2BLK(,R5)         Point after 'BLKSIZE='
+         SH    R6,=AL2(L'S2BLK)        Subtract the length
+         XR    R3,R3                   Length of BLKSIZE
+*
+SCAN51   DS    0H
+         CLC   S2PRI,0(R5)             Scan for Primary (space)
+         BE    SCAN55                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte BLKSIZE
+         CLI   0(R5),C' '              Blank in BUFFER?
+         BE    SCAN53                  Yes: do not count blanks
+         LA    R3,1(,R3)               Count length of BLKSIZE
+SCAN53   DS    0H
+         LA    R5,1(,R5)               Next byte in BUFFER
+         LA    R4,1(,R4)               Next byte in BLKSIZE
+         BCT   R6,SCAN51               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN55   DS    0H
+         LA    R4,PRI                  Pickup address of PRI
+         STH   R3,BLKSLEN              Save length
+         LA    R5,L'S2PRI(,R5)         Point after 'PRIMARY='
+         SH    R6,=AL2(L'S2PRI)        Subtract the length
+         XR    R3,R3                   Length of PRI
+*
+SCAN57   DS    0H
+         CLC   S2SEC,0(R5)             Scan for 'SECONDARY=' keyword
+         BE    SCAN61                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte PRI
+         CLI   0(R5),C' '              Blank in buffer?
+         BE    SCAN59                  Yes: do not count blanks
+         LA    R3,1(,R3)               Count length of primary SPACE
+SCAN59   DS    0H
+         LA    R5,1(,R5)               Next byte in BUFFER
+         LA    R4,1(,R4)               Next byte in primary SPACE
+         BCT   R6,SCAN57               Test next byte
+         B     PUT1                    Possible CLEAR key pressed
+SCAN61   DS    0H
+         LA    R4,SEC                  Pickup address of SEC
+         STH   R3,PRILEN               Save length
+         LA    R5,L'S2SEC(,R5)         Point after 'SECONDARY='
+         SH    R6,=AL2(L'S2SEC)        Subtract the length
+         XR    R3,R3                   Length of secondary space
+*
+SCAN63   DS    0H
+         CLC   S2DIR,0(R5)             Scan for 'DIRECTORY=' keyword
+         BE    SCAN67                  Branch if found
+         MVC   0(1,R4),0(R5)           Move byte SEC
+         CLI   0(R5),C' '              Blank in buffer?
+         BE    SCAN65                  Yes: do not count blanks
+         LA    R3,1(,R3)               Count length of secondary space
+SCAN65   DS    0H
+         LA    R5,1(,R5)               Next byte in BUFFER
+         LA    R4,1(,R4)               Next byte in SEC
+         BCT   R6,SCAN63               Test next byte
+         B     PUT1                    Clear key pressed
+SCAN67   DS    0H
+         LA    R4,DIR                  Pickup address of DIR
+         STH   R3,SECLEN               Save length
+         LA    R5,L'S2DIR(,R5)         Point after 'DIRECTORY='
+         XR    R3,R3                   Length of directory blocks
+         SH    R6,=AL2(L'S2DIR)        Minus length of keyword
+         BNP   SCAN73                  No: skip move dirs
+SCAN69   DS    0H
+         MVC   0(1,R4),0(R5)           Move byte directory block
+         CLI   0(R5),C' '              Blank in buffer?
+         BE    SCAN71                  Yes: do not count blanks
+         LA    R3,1(,R3)               Count bytes of DIR
+SCAN71   DS    0H
+         LA    R4,1(,R4)               Next byte # directory blocks
+         LA    R5,1(,R5)               Next byte buffer
+         BCT   R6,SCAN69               Next byte
+SCAN73   DS    0H
+         STH   R3,DIRLEN               Save the length
+         TR    OBUFFER,COMTCAPS        Xlate to uppercase
+         MVC   SCR2PRE,PREFIX          Move
+         MVC   SCR2LIB,LIBRARY              read
+         MVC   SCR2TYP,TYPE                      values
+         MVC   SCR2UNIT,BUFUNIT                     into   screen
+         MVC   SCR2RECF,BUFRECFM             ,,
+         MVC   SCR2VOL,VOL                   ,,
+         MVC   SCR2LREC,BUFLRECL             ,,
+         MVC   SCR2SPC,SPC                   ,,
+         MVC   SCR2BLK,BUFBLKSZ              ,,
+         MVC   SCR2PRI,PRI                   ,,
+         MVC   SCR2SEC,SEC                   ,,
+         MVC   SCR2DIR,DIR                   ,,
+         MVC   SCR2OTH,OTHDSN                ,,
+         CLI   CMD,C'A'                Option Allocate?           @rp6
+         BE    CHECK01                 Yes: scan the output of screen
+         CLI   CMD,C'D'                Option Delete?             @rp6
+         BE    CHECK01                 Yes: scan the output of screen
+         MVC   MSG2,ERR8TXT            Msg: Invalid option
+         B     PUT1                    Retry
+         TITLE 'CHECK THE ENTERED INPUT'
+*
+*        Test the entered input from the screen.
+*        If an error is found, re-display the screen to make the
+*        corrections
+*
+CHECK01  DS    0H
+         MVC   SCR2CMD,CMD             Move command in screen
+         CLI   OTHDSN,C' '             Other Data set specified?
+         BE    CHECK03                 No: allocate TSO data set
+         ST    R11,PARMFLD             Parameter for DSNPARS
+         LA    R1,OTHDSN               Unparsed data set name
+         ST    R1,PARMFLD+4
+         LA    R1,INDEXNM              To receive parsed data set name
+         ST    R1,PARMFLD+8
+         L     R15,EPDSNPA             Routine address
+         LA    R1,PARMFLD              Parameter
+         BALR  R14,R15                 Execute
+         B     CHECK13                 Allocate
+CHECK03  DS    0H
+         CLI   PREFIX,C' '             PREFIX specified?
+         BE    CHECKER1                No: error
+         MVI   INDEXNM,C' '            Blank INDEXNM
+         MVC   INDEXNM+1(43),INDEXNM               first
+         MVC   INDEXNM(L'PREFIX),PREFIX First qualifier(s)
+         TRT   INDEXNM,COMSKPNS        Stop at the first blank
+         MVI   0(R1),C'.'              Add the period after PREFIX
+         LA    R1,1(,R1)               Point after '.'
+         CLI   LIBRARY,C' '            LIBRARY spefified?
+         BE    CHECKER2                No: error
+         MVC   0(L'LIBRARY,R1),LIBRARY Move next qualifier(s)
+         CLI   TYPE,C' '               TYPE qualifier(s) present?
+         BE    CHECK13                 No: data set name is finished
+         TRT   0(44,R1),COMSKPNS       Stop at next blank
+         MVI   0(R1),C'.'              Add the period after PREFIX
+         LA    R1,1(,R1)               Point after '.'
+         MVC   0(L'TYPE,R1),TYPE       Move last qualifier(s)
+CHECK13  DS    0H
+         XC    CAMLST(16),CAMLST       Clear LOCATE parameter list
+         MVI   CAMLST,X'44'            CAMLST NAME
+         LA    R0,INDEXNM
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,LOCAREA
+         ST    R0,CAMLST+12            Option 4
+         LOCATE CAMLST                 Look in catalog
+         CLI   CMD,C'D'                Delete a data set?          @rp6
+         BE    CHECK50                 Yes: carry on
+         LTR   R15,R15                 Not found?
+         BNZ   CHECK15                 Yes: good, data set not exists
+         MVC   MSG2(L'ERR4TXT),ERR4TXT Msg: data set already exists
+         B     PUT1                    DSNAME found
+         TITLE 'CHECK THE OTHER FIELDS ON THE SCREEN'
+*---------------------------------------------------------------------*
+*        Process SPACE parameters                                     *
+*---------------------------------------------------------------------*
+CHECK15  DS    0H
+         CLC   SPC(3),=C'CYL'          Allocation unit CYL?
+         BE    CHECK17                 Yes: good
+         CLC   SPC(3),=C'TRK'          Allocation init TRK?
+         BE    CHECK17                 Yes: good
+         CLC   SPC(3),=C'BLK'          Allocation init BLK?
+         BE    CHECK17                 Yes: good
+         MVC   MSG2,ERR5TXT            Msg: Space not CYL,TRK or BLK
+         B     PUT1                    View error and retry
+CHECK17  DS    0H
+         MVC   NUMFLD,PRI              Primary space
+         MVC   NUMLEN,PRILEN           Length of primary space
+         BAL   R14,NUMTST              Numeric test
+         LTR   R15,R15                 Numeric?
+         BZ    CHECK19                 Yes: good
+CHECK18  DS    0H
+         MVC   MSG2,ERR6TXT            Msg: Space values not numeric
+         B     PUT1                    View error and retry screen
+CHECK19  DS    0H
+         STCM  R1,7,TEMPPRI            Store in PRI field
+         MVC   NUMFLD,SEC              Secondary space
+         MVC   NUMLEN,SECLEN           Length
+         BAL   R14,NUMTST              Numeric test
+         LTR   R15,R15                 Numeric?
+         BNZ   CHECK18                 No: error
+         STCM  R1,7,TEMPSEC            Store in SEC field
+         MVC   NUMFLD(5),DIR           # directory blocks
+         MVC   NUMLEN,DIRLEN           Length of DIR field from screen
+         BAL   R14,NUMTST              Numeric test
+         LTR   R15,R15                 Numeric?
+         BNZ   CHECK18                 No: error
+         STCM  R1,7,TEMPDIR            Store into DIR field
+*---------------------------------------------------------------------*
+*        Process RECFM                                                *
+*---------------------------------------------------------------------*
+         LA    R4,RECFMTB              RECFM table
+         L     R6,#RECFM               # entries in RECFMTB
+         CLC   =C'   ',BUFRECFM        RECFM specified?
+         BNE   CHECK22                 Yes: test validity
+         MVC   BUFRECFM,=CL4'FB'       Default RECFM
+         MVC   SCR2RECF,=CL4'FB'       Default RECFM in screen
+CHECK22  DS    0H
+         CLC   BUFRECFM,0(R4)          Match found of RECFM?
+         BE    CHECK24                 Yes: good, process RECFM
+         LA    R4,5(,R4)               Next entry in table
+         BCT   R6,CHECK22              Loop until found or all done
+         MVC   MSG2,ERRGTXT            Msg: invalid RECFM
+         B     PUT1                    View error and retry screen
+CHECK24  DS    0H
+         MVC   TEMPRECF,4(R4)          Move binary value RECFM
+CHECK26  DS    0H
+*---------------------------------------------------------------------*
+*        Process LRECL and BLKSIZE                                    *
+*---------------------------------------------------------------------*
+         MVC   NUMFLD(5),BUFLRECL      Move LRECL
+         MVC   NUMLEN,LRECLLEN         Actual length of LRECL field
+         BAL   R14,NUMTST              Numeric test
+         LTR   R15,R15                 LRECL numeric?
+         BZ    CHECK30                 Yes: good
+         MVC   MSG2,ERR9TXT            Msg: LRECL invalid
+         B     PUT1                    View error and retry screen
+CHECK30  DS    0H
+         STCM  R1,3,TEMPRECL           Store into temporary field
+         CLC   TEMPRECL,=X'7FF8'       LRECL > 32760?
+         BNH   CHECK32                 No: good
+         MVC   MSG2,ERRBTXT            Msg: LRECL > 32760
+         B     PUT1                    View error and retry screen
+CHECK32  DS    0H
+         CLC   TEMPRECL,=H'0'          LRECL specified?
+         BNE   CHECK34                 Good if specified
+         CLC   BUFRECFM,=CL4'U'        RECFM=U
+         BE    CHECK35                 LRECL=0 is allowed with RECFM=U
+         MVC   TEMPRECL,=H'80'         Default LRECL=80
+         MVC   SCR2LREC,=CL4'80'       and move into screen
+CHECK34  DS    0H
+         CLC   TEMPRECL,=H'18'         At least 18?
+         BNL   CHECK35                 Yes: good
+         MVC   MSG2,ERRHTXT            Msg: LRECL smaller than 18
+         B     PUT1                    View error and retry screen
+CHECK35  DS    0H
+         MVC   NUMFLD(5),BUFBLKSZ      Move LRECL
+         MVC   NUMLEN,BLKSLEN          Actual length of field
+         BAL   R14,NUMTST              Test on numeric
+         LTR   R15,R15                 LRECL numeric?
+         BZ    CHECK36                 Yes: good
+         MVC   MSG2,ERRATXT            Msg: BLKSIZE invalid
+         B     PUT1                    View error and retry screen
+CHECK36  DS    0H
+         STCM  R1,3,TEMPBLK            Save into temporary field
+         CLC   TEMPBLK,=X'7FFF'        BLKSIZE exceeds 32767?
+         BNH   CHECK37                 No: good
+         MVC   MSG2,ERRCTXT            Msg: BLKSIZE exceeds 32767
+         B     PUT1                    View error and retry screen
+CHECK37  DS    0H
+         CLC   TEMPBLK,=H'0'           No BLKSIZE specified?
+         BNE   CHECK40                 No: good
+         CLC   TEMPRECL,=H'0'          LRECL=0?
+         BNE   CHECK38                 No: good
+         MVC   TEMPBLK,=H'6144'        Default 6144 with LRECL=0
+         MVC   SCR2BLK,=CL5'6144'      Move value into screen
+         B     CHECK40                 and branch
+CHECK38  DS    0H
+         MVC   TEMPBLK,TEMPRECL        Else BLKSIZE=LRECL if BLKSIZE=0
+         MVC   SCR2BLK,SCR2LREC        And copy into screen
+         CLI   BUFRECFM,C'V'           Variable blocked?
+         BNE   CHECK40                 No: do not modify BLKSIZE
+         LH    R1,TEMPBLK              Pickup BLKSIZE
+         LA    R1,4(,R1)               Add 4
+         STCM  R1,3,TEMPBLK            and save
+         CVD   R1,DBW                  Concert to ...
+         UNPK  SCR2BLK,DBW             Set in ...
+         OI    SCR2BLK+4,X'F0'         Screen
+CHECK40  DS    0H
+         CLC   TEMPBLK,=H'18'          BLKSIZE at least 18?
+         BNL   CHECK41                 Yes: good
+         MVC   MSG2,ERRJTXT            Msg: BLKSIZE smaller than 18
+         B     PUT1                    View error and retry screen
+CHECK41  DS    0H
+         CLC   BUFRECFM(3),=C'VBS'     Variable blocked spanned?
+         BE    CHECK44                 Yes: BLKSIZE < LRECL allowed
+         CLC   TEMPRECL,TEMPBLK        Record length > BLKSIZE?
+         BNH   CHECK42                 No: good
+         MVC   MSG2,ERRDTXT            Msg: LRECL exceeds BLKSIZE
+         B     PUT1                    View error and retry screen
+CHECK42  DS    0H
+         CLI   BUFRECFM,C'V'           Variable records?
+         BNE   CHECK44                 No: branch
+         LH    R1,TEMPBLK              Pickup BLKSIZE
+         LH    R2,TEMPRECL             Pickup LRECL
+         SR    R1,R2                   Take difference
+         C     R1,=F'4'                At least 4?
+         BNL   CHECK44                 Yes: good
+         MVC   MSG2,ERRETXT            Msg: LRECL+4 exceeds BLKSIZE
+         B     PUT1                    View error and retry screen
+CHECK44  DS    0H
+         CLI   BUFRECFM,C'F'           Fixed records?
+         BNE   CHECKALC                No: bypass test BLKSIZE is
+*                                      multiple of LRECL
+         XR    R2,R2                   Clear even register for D
+         LH    R3,TEMPBLK              BLKSIZE
+         LH    R4,TEMPRECL             LRECL
+         DR    R2,R4                   Divide BLKSIZE/LRECL
+         LTR   R2,R2                   Remainder should be zero.
+         BZ    CHECKALC                Ok: BLKSIZE = multiple of LRECL
+         MVC   MSG2,ERRFTXT            Msg: BLKSIZE not mult. of LRECL
+         B     PUT1                    View error and retry screen
+CHECK50  DS    0H
+         LTR   R15,R15                 Found?
+         BZ    CHECKDEL                Yes: good
+         MVC   MSG2(L'ERRMTXT),ERRMTXT Msg: Data set not in catalog
+         B     PUT1                    Dsname found
+CHECKALC DS    0H
+         BAL   R14,ALLOC               Allocate the data set
+         B     PUT1                    Re-display screen
+CHECKDEL DS    0H
+         BAL   R14,DELETE              Delete the data set
+         B     PUT1                    Re-display screen
+CHECKER1 DS    0H
+         MVC   MSG2,ERR1TXT            Msg: PREFIX not specified
+         B     PUT1                    Display error screen and retry
+CHECKER2 DS    0H
+         MVC   MSG2,ERR2TXT            Msg: LIBRARY not specified
+         B     PUT1                    Display error screen and retry
+*
+         TITLE 'Allocate the data set'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        ALLOC  routine:                                              *
+*                                                                     *
+*                      In this routine the new data set will be       *
+*                      allocated with the parameters entered on the   *
+*                      screen.                                        *
+*                      IKJDAIR will be used to allocate and unalloc   *
+*                      the data set. Before the allocate, first the   *
+*                      attribute list will be chained with the DCB    *
+*                      parameters gotten from the screen.             *
+*                      If an error occurs a suitable message          *
+*                      will be displayed.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+ALLOC    DS    0H
+         ST    R14,R14ALLOC            Save register 14
+         TM    COMMOS,X'13'            MVS or higher
+         BNO   ALLOC10                 No: forget RACHECK/RACROUTE
+*
+         AIF   (&SVS).SVS1
+         L     R14,CVTPTR(,0)          Point to CVT
+         USING CVT,R14
+         ICM   R14,15,CVTRAC           Point to Access control CVT
+         BZ    ALLOC10                 No security
+         DROP  R14                     CVT
+         AIF   (&OS390).RACR
+         LA    R1,RR                   List form in working storage
+         RACHECK ENTITY=INDEXNM,                                       X
+               VOLSER=VOL,                                             X
+               ATTR=ALTER,                                             X
+               DSTYPE=N,MF=(E,(1))
+         AGO   .NRACR
+.RACR    ANOP
+         GETMAIN R,LV=512              Obtain SAF work area
+         LR    R3,R1                   Save its address
+         LA    R1,RR                   List form in working storage
+         RACROUTE REQUEST=AUTH,                                        X
+               ENTITY=INDEXNM,                                         X
+               VOLSER=VOL,                                             X
+               ATTR=ALTER,                                             X
+               DSTYPE=N,                                               X
+               RELEASE=1.9,                                            X
+               WORKA=(3),MF=(E,(1))
+         LR    R2,R15                  Save return code RACROUTE
+         FREEMAIN R,LV=512,A=(3)       Release SAF work area
+         LR    R15,R2                  Restore return code RACROUTE
+.NRACR   ANOP
+         LTR   R15,R15                 Allowed to allocate?
+         BZ    ALLOC10                 Yes: carry on
+         MVC   MSG2,ERRITXT            Msg: Access denied
+         B     ALLOC99                 Return
+.SVS1    ANOP
+ALLOC10  DS    0H
+         XC    RPFATTR,RPFATTR         Clear DAIR attr. control block
+         XC    RPFD08,RPFD08           Clear allocation parm block
+         XC    RPFD34,RPFD34           Clear attribute parm block
+         LA    R1,INDEXNM+44           Calculate ...
+         TRT   INDEXNM,COMSKPNS        Register -> first blank
+         LA    R0,INDEXNM              Point to beginning of dsn
+         SLR   R1,R0                   ... length
+         STCM  R1,3,INDEXL             And save real length
+         LA    R14,RPFATTR             DAIR ACB
+         USING DAIRACB,R14             Address this DSECT
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               Address this DSECT
+         LA    R15,RPFD34              Point to attribute parm block
+         USING DAPB34,R15              Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFUT4'    DDNAME to allocate
+         LA    R0,INDEXL               Length + DSNAME
+         ST    R0,DA08PDSN             Length and DSNAME
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08CAT                 CATLG
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,BUFUNIT        Move UNIT name
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVC   DA08PQTY+1(3),TEMPPRI   Primary space
+         MVC   DA08SQTY+1(3),TEMPSEC   Secondary space
+         MVC   DA08DQTY+1(3),TEMPDIR   Directory space
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         CLC   SPC(3),=C'TRK'          Track allocation?
+         BNE   *+8                     No: carry
+         MVI   DA08CTL,DA08TRKS        Set track allocation
+         CLC   SPC(3),=C'BLK'          Track allocation?
+         BNE   *+14                    No: carry
+         MVI   DA08CTL,DA08ABKL        Set block allocatio
+         MVC   DA08BLK+2(2),TEMPBLK    BLKSIZE from screen
+         OI    DA08CTL,DA08ATRL        Attibute list present
+         CLI   VOL,C' '                Is the volume specified?
+         BZ    *+10                    No: skip next MVC
+         MVC   DA08SER(6),VOL          Yes: move volume in parm block
+         MVI   DA08DSO,X'40'           DSORG=PS
+         MVC   DA08ALN,=CL8'RPFALLOC'  Attribute list name
+         MVC   DAIBLKSI,TEMPBLK        BLKSIZE
+         MVC   DAILRECL,TEMPRECL       LRECL
+         MVC   DAIRECFM,TEMPRECF       RECFM
+         MVI   DA34CD+1,X'34'          Entry code
+         MVC   DA34NAME,DA08ALN        Move attribute list name
+         MVI   DA34CTRL,DA34CHN        Chain attr. list
+         STCM  R14,15,DA34ADDR         Address of DAIRACB (attr. list)
+         LA    R1,RPFD34               Chain the attribute list
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Chaining successful?
+         BZ    ALLOC44                 Yes: continue
+         MVC   MSG2,ERR3TXT            Msg: Attribute list failed
+         B     ALLOC99                 Return
+ALLOC44  DS    0H
+         LA    R1,RPFD08               Allocate the data set
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Allocation success?
+         BZ    ALLOC52                 Yes: continue
+         MVC   MSG2,ERR7TXT            Msg: Allocation error xxxx
+         MVC   MSG2+21(4),=CL4'N/A'    Error code only if RC=8 or RC=12
+         CVD   R15,DBW                 Make decimal
+         UNPK  MSG2+14(2),DBW          Make zoned
+         OI    MSG2+15,X'F0'           and remove sign
+         LA    R1,RPFD08               Reload parm block
+         CH    R15,=H'12'              Rc=12 (Allocation error)?
+         BE    ALLOC46                 Yes: set DA08DARC
+         CH    R15,=H'8'               Rc=8 (catalog error)?
+         BNE   ALLOC50                 No: no error code in msg
+         SYCONVHX IN=DA08CTRC,OUT=MSG2+21,L=2,RENT=YES catalog field
+         B     ALLOC50                 Message complete
+ALLOC46  SYCONVHX IN=DA08DARC,OUT=MSG2+21,L=2,RENT=YES feedback field
+ALLOC50  LA    R15,RPFD34              Set attribute list
+         MVI   DA34CTRL,DA34UNCH       Unchain attribute list
+         LA    R1,RPFD34               Chain the attribute list
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         B     ALLOC99                 Produce message and retry
+ALLOC52  DS    0H
+         CLC   TEMPDIR,=X'000000'      No directory blocks ?       @rp3
+         BNE   ALLOC54                 No: PDS contains an EOF mark@rp3
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (RPFUT4,(OUTPUT)),MF=(E,COMOPN) open for output
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFUT4,MF=(E,COMCLS)    and close to add EOF mark   @rp3
+         RPFSA24                       Go to AMODE24             @rpa01
+         FREEPOOL RPFUT4                                           @rp3
+         RPFSA31                       Go to AMODE 31/32/64      @rpa01
+ALLOC54  DS    0H
+         LA    R15,RPFD34              Set attribute list
+         MVI   DA34CTRL,DA34UNCH       Unchain attribute list
+         LA    R1,RPFD34               Unchain the attribute list
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R1,R14,R15              RPFD08, RPFATTR, RPFD34
+         XC    RPFD18,RPFD18           Clear unallocation parm block
+         LA    R1,RPFD18               Point to unallocation parm blk
+         USING DAPB18,R1               Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'RPFUT4'    DDNAME to allocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         MVI   COMMDSN,X'7D'
+         MVC   COMMDSN+1(44),INDEXNM   Move combination of PREFIX,
+*                                      LIBRARY and TYPE or Other DSN
+         MVI   COMMDSN+45,X'40'        And end blank
+         TRT   COMMDSN,COMSKPNS        Stop at first blank
+         MVI   0(R1),X'7D'             and add ending quote
+         MVC   COMMVOL,VOL             Move VOLUME into RPFCOMM
+         MVI   COMMBR,C' '             Blank MEMBER ...
+         MVC   COMMBR+1(7),COMMBR                      in RPFCOMM
+         MVC   MSG2,MSG1TXT            Msg: data set allocated
+         DROP  R1                      RPFD18
+ALLOC99  DS    0H
+         L     R14,R14ALLOC            Restore register 14
+         BR    R14                     Return
+         TITLE 'Delete the data set'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        DELETE routine:                                              *
+*                                                                     *
+*                      In this routine the data set will be           *
+*                      uncataloged and deleted.                       *
+*                      If an error occurs a suitable message          *
+*                      will be displayed.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+DELETE   DS    0H
+         ST    R14,R14DEL              Save register 14
+         MVC   SCR3DSN,INDEXNM         Move data set to be deleted
+DEL000   DS    0H
+         LA    R1,SCR3TXT              Parm TPUTS (address screen)
+         LA    R0,SCR3LEN              Parm TPUTS (length  screen)
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write screen
+         LA    R1,TEMP                 Buffer
+         LA    R0,10                   Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Get AID byte
+         LTR   R1,R1                   Input length is zero ?
+         BZ    DEL000                  Yes: error
+         CLI   TEMP,X'F3'              PF03 pressed ?
+         BE    DEL002                  Yes cancel deletions
+         CLI   TEMP,X'C3'              PF15 pressed ?
+         BE    DEL002                  Yes cancel deletions
+         CLI   TEMP,X'7C'              PF12 pressed ?
+         BE    DEL001                  Yes: continue
+         CLI   TEMP,X'4C'              PF24 pressed ?
+         BNE   DEL000                  NO: Redisplay confirmation
+DEL001   DS    0H
+         CLI   LOCTYPE+2,X'20'         Is the data set on DASD?
+         BE    DEL003                  Yes: proceed
+         MVC   MSG2(L'ERRNTXT),ERRNTXT Error msg 'Data set not on DASD'
+         B     DEL999                  Display screen
+DEL002   DS    0H
+         MVC   MSG2(L'ERROTXT),ERROTXT Msg: Delete rejected (PFK3/15)
+         B     DEL999                  Go to menu
+DEL003   DS    0H
+         XC    CAMLST(16),CAMLST       Clear parameters
+         MVC   CAMLST(2),=X'0C04'      CAMLST UCATDX
+         LA    R1,INDEXNM              Data set to uncatalog
+         ST    R1,CAMLST+4             Set in CAMLST UCATDX
+         CATALOG CAMLST                UNCATALOG the data set
+         LTR   R15,R15                 UNCATLG ok?
+         BZ    DEL005                  Yes: good
+         MVC   MSG2(L'ERRKTXT),ERRKTXT Msg: UNCATLG error data set
+         B     DEL999                  Go to menu
+DEL005   DS    0H
+         XC    CAMLST(16),CAMLST       Clear parameter list
+         XC    VOLLIST(VOLL),VOLLIST   Clear volume list
+         MVI   VOLLIST+1,1             Volume count = 1
+         MVC   VOLTYPE,LOCTYPE         Move device type
+         MVC   SCRVOL,LOCVOL           Move volume
+         MVC   CAMLST(3),=X'410050'    CAMLST SCRATCH OVRD
+         LA    R1,INDEXNM              Data set to scratch
+         ST    R1,CAMLST+4             Set in CAMLST SCRATCH
+         LA    R1,VOLLIST              Volume on which data set resides
+         ST    R1,CAMLST+12            Save in CAMLST SCRATCH
+         SCRATCH CAMLST                SCRATCH the data set
+         LTR   R15,R15                 Rc = 0?
+         BZ    DEL007                  Yes: good
+         MVC   MSG2(L'ERRLTXT),ERRLTXT Msg: Scatch data set failed
+         B     DEL999                  Go to menu
+DEL007   DS    0H
+         CLC   INDEXNM,COMMDSN         DSNAME still allocated?
+         BNE   DEL009                  No: good
+         NI    COMMFLG1,255-$COMMALC   Unallocate only in RPFDAIR
+         L     R15,EPDAIR              Entry point RPFDAIR
+         LA    R1,PARMLST              Address of RPFCOMM
+         CALL  (15)                    Unallocate RPFWORK and RPFWORK2
+DEL009   DS    0H
+         MVC   MSG2(L'MSG2TXT),MSG2TXT Msg: Data set deleted
+DEL999   DS    0H
+         L     R14,R14DEL              Restore register 14
+         BR    R14                     Return
+         TITLE 'Return'
+RETURN   DS    0H
+         LR    R3,R13                  Our working storage
+         L     R13,4(,R13)             Caller's save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release
+         RETURN (14,12),RC=0           Return to RPFUTIL
+         TITLE 'NUMERIC TEST ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        NUMTST routine: check on numeric and convert to binary       *
+*                                                                     *
+*        Input is field NUMFLD, which contains the tested field       *
+*        and NUMLEN, the actual length of NUMFLD.                     *
+*        Output is a 4 bytes binary field placed in register 1        *
+*                                                                     *
+*        Return codes:                                                *
+*                   00 Field is numeric                               *
+*                   04 Field is not numeric                           *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+NUMTST   DS    0H
+         LA    R3,NUMFLD               Pickup the to be tested field
+         LH    R4,NUMLEN               Actual length
+         LTR   R4,R4                   Length zero?
+         BZ    NUM90                   Yes: set field to 0
+NUM01    DS    0H
+         CLI   0(R3),C'0'              < 0?
+         BL    NUM97                   Low: error
+         CLI   0(R3),C'9'              > 9?
+         BH    NUM97                   High: error
+         LA    R3,1(,R3)               Next byte
+         BCT   R4,NUM01
+         LH    R4,NUMLEN               Reload length
+         BCTR  R4,0                    Minus 1 for EX
+         EX    R4,PACK1                Pack the result
+         CVB   R1,DBW                  Make binary
+         XR    R15,R15                 Set rc = 0
+         B     NUM99                   Return
+NUM90    DS    0H
+         XR    R1,R1                   Set converted field to 0
+         XR    R15,R15                 Rc = 0
+         B     NUM99                   Return
+NUM97    DS    0H
+         LA    R15,4                   Rc = 4, not numeric
+NUM99    DS    0H
+         BR    R14                     Return
+PACK1    PACK  DBW(8),NUMFLD(1)        << executed >>
+*
+         LTORG ,
+         DROP
+         TITLE 'Constants'
+ERR1TXT  DC    CL25'---- PREFIX not specified'
+ERR2TXT  DC    CL25'--- LIBRARY not specified'
+ERR3TXT  DC    CL25'--- Attribute list failed'
+ERR4TXT  DC    CL25'- Data set already exists'
+ERR5TXT  DC    CL25'--- Space not CYL/TRK/BLK'
+ERR6TXT  DC    CL25' Space values not numeric'
+ERR7TXT  DC    CL25'Allocation RC=xx Err=XXXX' +14 and +21
+ERR8TXT  DC    CL25'---------- Invalid option'
+ERR9TXT  DC    CL25'----------- Invalid LRECL'
+ERRATXT  DC    CL25'--------- Invalid BLKSIZE'
+ERRBTXT  DC    CL25'----- LRECL exceeds 32760'
+ERRCTXT  DC    CL25'--- BLKSIZE exceeds 32767'
+ERRDTXT  DC    CL25'--- LRECL exceeds BLKSIZE'
+ERRETXT  DC    CL25'- LRECL+4 exceeds BLKSIZE'
+ERRFTXT  DC    CL25'BLK not multiple of LRECL'
+ERRGTXT  DC    CL25'----------- Invalid RECFM'
+ERRHTXT  DC    CL25'--- LRECL smaller than 18'
+ERRITXT  DC    CL25'----------- Access denied'
+ERRJTXT  DC    CL25'- BLKSIZE smaller than 18'
+ERRKTXT  DC    CL25'-- UNCATLG error data set'
+ERRLTXT  DC    CL25'-- Scratch error data set'
+ERRMTXT  DC    CL25'- Data set not in catalog'
+ERRNTXT  DC    CL25'---- Data set not on DASD'
+ERROTXT  DC    CL25'--------- Delete rejected'
+MSG1TXT  DC    CL25'------ Data set allocated'
+MSG2TXT  DC    CL25'-------- Data set deleted'
+RECFMTB  DS    0H
+         DC    CL4'F',X'80'
+         DC    CL4'FA',X'84'
+         DC    CL4'FB',X'90'
+         DC    CL4'FBM',X'92'
+         DC    CL4'FBA',X'94'
+         DC    CL4'FBS',X'98'
+         DC    CL4'FM',X'82'
+         DC    CL4'V',X'40'
+         DC    CL4'VA',X'44'
+         DC    CL4'VB',X'50'
+         DC    CL4'VBM',X'52'
+         DC    CL4'VBA',X'54'
+         DC    CL4'VBS',X'58'
+         DC    CL4'VM',X'42'
+         DC    CL4'U',X'C0'
+RECFME   DS    0H
+#RECFM   DC    A((RECFME-RECFMTB)/5)
+         AIF   (&SVS).NORR
+         AIF   (&OS390).RR
+RACF     RACHECK CLASS='DATASET',MF=L
+         AGO   .RRE
+.RR      ANOP
+RACF     RACROUTE CLASS='DATASET',REQUEST=AUTH,RELEASE=1.9,            X
+               MF=L
+.RRE     ANOP
+RACFL    EQU   *-RACF
+.NORR    ANOP
+         PRINT NOGEN
+MDLUT4   DCB   DDNAME=RPFUT4,DSORG=PS,MACRF=PM                     @rp3
+MDLUT4L  EQU   *-MDLUT4
+         PRINT GEN
+*
+         COPY  CALLTS
+*
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+*
+         COPY  TPUTS
+*
+         TITLE 'SCREEN FORMATS'
+SCREENS  CSECT
+SCR2TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR2TXT  DC    X'00C21100001DF8'       EW or EWA
+         DC    CL32'RPF Data set utility: User ID = '
+SCR2UID  DC    CL8' '
+         DC    CL14'-----------------'
+MSG2     DC    CL25'-------------------------'
+SC2R2C1  DC    X'110000',X'1DF8',C'Option ===>',X'1DC113'
+SCR2CMD  DC    C'A',X'1DF0'
+SC2R4C4  DC    X'110000',AL3(WHITE),C'A  ',AL3(TURQ)  r04,c04+
+         DC    C'ALLOCATE     ',AL3(GREEN)
+         DC    C'Allocate a data set'
+*
+SC2R5C4  DC    X'110000',AL3(WHITE),C'D  ',AL3(TURQ)  r05,c04+
+         DC    C'DELETE       ',AL3(GREEN)
+         DC    C'Delete a data set'
+*
+SC2R9C2  DC    X'110000',AL3(YELLOW)            r09,c02+
+         DC    C'TSO library'
+SC2R10C1 DC    X'110000',X'1DF5',AL3(TURQ)       r10,c01+
+S2PREF   DC    CL15'Prefix        ='
+         DC    X'1DC9',AL3(RED),AL3(USCORE)
+SCR2PRE  DC    CL14' ',AL3(HDEFAULT),X'1DF0'
+*
+SC2R11C1 DC    X'110000',X'1DF5',AL3(TURQ)       r11,c01+
+S2LIB    DC    CL15'Library       ='
+         DC    X'1DC9',AL3(RED),AL3(USCORE)
+SCR2LIB  DC    CL14' ',AL3(HDEFAULT),X'1DF0'
+*
+SC2R12C1 DC    X'110000',X'1DF5',AL3(TURQ)       r12,c01+
+S2TYPE   DC    CL15'Type          ='
+         DC    X'1DC9',AL3(RED),AL3(USCORE)
+SCR2TYP  DC    CL14' ',AL3(HDEFAULT),X'1DF0'
+*
+SC2R14C2 DC    X'110000',AL3(YELLOW)             r14,c02+
+         DC    C'Other data set'
+*
+SC2R15C1 DC    X'110000',X'1DF5',AL3(TURQ)       r15,c01+
+S2OTHER  DC    CL15'Data set name ='
+         DC    X'1DC9',AL3(RED),AL3(USCORE)
+SCR2OTH  DC    CL46' ',AL3(HDEFAULT),X'1DF0'
+*
+SC2R17C2 DC    X'110000',AL3(YELLOW)             r17,c02+
+         DC    C'Volume, space and DCB info (option A only)'
+*
+SC2R18C1 DC    X'110000',X'1DF5',AL3(TURQ)       r18,c01+
+S2UNIT   DC    C'Unit name     ='
+         DC    X'1DC9',AL3(RED)
+SCR2UNIT DC    CL8' ',X'1DF0'
+*
+S2R18C39 DC    X'1100001DF5'           r18,c39+
+         DC    AL3(TURQ)
+S2RECF   DC    C'RECFM    =',X'1DC9',AL3(RED)
+SCR2RECF DC    CL4'FB',X'1DF0'
+*
+SC2R19C1 DC    X'110000',X'1DF5',AL3(TURQ)       r19,c01+
+S2VOL    DC    C'Volume serial ='
+         DC    X'1DC9',AL3(RED)
+SCR2VOL  DC    CL6' ',X'1DF0'
+*
+S2R19C39 DC    X'1100001DF5'           r19,c39
+         DC    AL3(TURQ)
+S2LREC   DC    C'LRECL    =',X'1DD9',AL3(RED)
+SCR2LREC DC    CL5'80',X'1DF0'
+*
+SC2R20C1 DC    X'110000',X'1DF5',AL3(TURQ)       r20,c01+
+S2SPC    DC    C'Space unit    ='
+         DC    X'1DC9',AL3(RED)
+SCR2SPC  DC    CL3'BLK',X'1DF0',AL3(YELLOW),C'(CYL,TRK or BLK)'
+*
+S2R20C39 DC    X'1100001DF5'           r20,c39+
+         DC    AL3(TURQ)
+S2BLK    DC    C'BLKSIZE  =',X'1DD9',AL3(RED)
+SCR2BLK  DC    CL5'3120',X'1DF0'
+*
+SC2R22C1 DC    X'110000',X'1DF5',AL3(TURQ)       r22,c01+
+S2PRI    DC    C'Primary='
+         DC    X'1DD9',AL3(RED)        Attr. higlight, mdt, num
+*
+SCR2PRI  DC    CL5'100 ',X'1DF5',AL3(TURQ)
+S2SEC    DC    C'Secondary=',X'1DD9'
+         DC    AL3(RED)
+*
+SCR2SEC  DC    CL3'0  ',X'1DF5',AL3(TURQ)
+S2DIR    DC    C'Directory=',X'1DD9'
+         DC    AL3(RED)
+SCR2DIR  DC    CL5'0   ',X'1DF0'
+*
+SCR2LAST DC    X'110000'               R-last c2+
+         DC    AL3(TURQ)
+         DC    C'Hit ',AL3(WHITE),C'PF03/15 ',AL3(TURQ)
+         DC    C'to return'
+SCR2LEN  EQU   *-SCR2TXT
+*
+SCR3TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR3TXT  DC    X'00C21100001DF8'       R01,c01+
+         DC    C'Confirm DELETE of data set '
+SCR3DSN  DS    CL44
+SC3R2C1  DC    X'11000013'             R02,C01+
+SC3R4C1  DC    X'110000',X'1DF0'       R04,C01+
+         DC    C'Hit  ',X'1DF8',C'PF12/PF24',X'1DF0',C'To delete'
+SC3R5C1  DC    X'110000',X'1DF0'       R05,C01+
+         DC    C'Press',X'1DF8',C'PF03/PF15',X'1DF0',C'To cancel'
+SCR3LEN  EQU   *-SCR3TXT
+SCREENSL EQU   *-SCREENS
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area
+DBW      DS    D                       Workfield of RCTOSBA
+SBAR0R1  DS    D                       Workfield of RCTOSBA
+CNVHX01  DS    2D                      Workfield SYCONVHX RENT=YES
+R12TS    DS    F                       Register 12 CALLTS
+R14ALLOC DS    F                       Save register 14 ALLOC
+R14DEL   DS    F                       Save register 14 DELETE
+R14TS    DS    F                       Register 14 CALLTS
+PARMLST  DS    F                       Address of RPFCOMM
+PARMFLD  DS    3F                      3 parameters for DSNPARS
+RPFDAPL  DS    5F                      Dair parameter list
+RPFATTR  DS    CL48                    Attribute list
+RPFD08   DS    CL84                    Allocation parm block
+RPFD18   DS    CL40                    Unallocation parm block
+RPFD34   DS    CL20                    Attribute parm block
+         DS    0F
+RPFUT4   DS    CL(MDLUT4L)
+*
+ECB      DS    F                       An event control block
+         AIF   (&SVS).NORA2
+RR       DS    CL(RACFL)
+.NORA2   ANOP
+TEMP     DS    CL10
+TEMPPRI  DS    CL3
+TEMPSEC  DS    CL3
+TEMPDIR  DS    CL3
+TEMPBLK  DS    H
+TEMPRECL DS    H
+TEMPRECF DS    C
+*
+OBUFFER  DS    0CL133                  Output of TGET
+CMD      DS    C                       01
+PREFIX   DS    CL14                    15
+LIBRARY  DS    CL14                    29
+TYPE     DS    CL14                    43
+OTHDSN   DS    CL46                    89
+BUFUNIT  DS    CL8                     97
+BUFLRECL DS    CL5                     102
+BUFBLKSZ DS    CL5                     107
+BUFRECFM DS    CL4                     111
+VOL      DS    CL6                     117
+SPC      DS    CL3                     120
+PRI      DS    CL5                     125
+SEC      DS    CL3                     128
+DIR      DS    CL5                     133
+*                                      End of BUFFER
+PRILEN   DS    H
+SECLEN   DS    H
+DIRLEN   DS    H
+LRECLLEN DS    H
+BLKSLEN  DS    H
+NUMFLD   DS    CL5                     For numeric test
+NUMLEN   DS    H                       For numeric test
+INDEXL   DS    CL2                     \___'real' length of INDEXNM___/
+INDEXNM  DS    CL44                    /                              \
+*
+         DS    0F
+CAMLST   CAMLST NAME,INDEXNM,,LOCAREA
+LOCAREA  DS    0D
+         DS    CL2
+LOCTYPE  DS    CL4                     Device type
+LOCVOL   DS    CL6                     Found VOLUME
+         DS    CL253                   Rest of LOCAREA
+         DS    0D
+VOLLIST  DS    H                       Number of volumes
+VOLTYPE  DS    XL4                     Device type
+SCRVOL   DS    CL6
+         DS    H                       SCRATCH status code
+VOLL     EQU   *-VOLLIST
+*
+SCRN     DS    CL(SCREENSL)            Output of SCREENS
+WORKL    EQU    *-WORKAREA
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM ,                     COMMON AREA
+         TITLE 'Other DSECT''s'
+         CVT   DSECT=YES,LIST=NO
+         IKJCPPL
+         IKJDAPL
+         IKJDACB
+         IKJDAP08                      IKJDAIR allocation parm block
+         IKJDAP18                      IKJDAIR unallocation parm block
+         IKJDAP34
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9                       Address of the screen area
+R10      EQU   10                      2nd base register
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12                      1st base register
+R13      EQU   13                      Address of working storage
+R14      EQU   14
+R15      EQU   15
+         END

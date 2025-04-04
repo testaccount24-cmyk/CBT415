@@ -1,0 +1,187 @@
+RPFDOC   TITLE 'Find //* LAST UPDATE: card and add date/timestamp'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFDOC.                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFEDIT                                       *
+*                                                                     *
+*        Subroutine:    RPFCNVDT convert Julian date                  *
+*                                                                     *
+*        Function:      Find //* LAST UPDATE: card in the EDIT wrkspc *
+*                       The search starts with the first line in      *
+*                       the workspace and ended at the last line in   *
+*                       the workspace ('COMMLAST' in RPFCOMM)         *
+*                       If a match is found in a line, date and time  *
+*                       are added and this line                       *
+*                       will be the first line on the screen.         *
+*                                                                     *
+*        Note:          //* LasT UpDaTe: can be in mixed case         *
+*                                                                     *
+*        Registers:     Register 12 is the base register.             *
+*                       Register 11 points to RPFCOMM.                *
+*                       Register 13 points to the working storage.    *
+*                                                                     *
+*        Return codes:  00 Match found of string                      *
+*                       04 No match found of string.                  *
+*                          Message will be set in 'COMMPRM'           *
+*                                                                     *
+*        Change log:                                                  *
+*        Aug 13,2021 RPr: RPFDOC made re-entrant and re-usable and    *
+*                         DATE routine replaced by call to RPFCNVDT.  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFDOC   CSECT                         DOC routine
+RPFDOC   AMODE 31                      *
+RPFDOC   RMODE ANY                     *
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Clean ep register
+         USING RPFDOC,R12              Temporary addressability
+         L     R11,0(,R1)              Pickup RPFCOMM
+         USING COMMAREA,R11            Address RPFCOMM area
+         GETMAIN R,LV=WORKL            Obtain working storage
+         ST    R1,8(0,R13)             Forward pointer
+         ST    R13,4(0,R1)             Backward pointer
+         LR    R13,R1                  Load this save area
+         USING WORKAREA,R13            Make working storage addressable
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         LA    R1,JULDATE              Parm 1 RPFCNVDT
+         ST    R1,PRMCNVD1             Save
+         LA    R1,OUTPUT               Parm 2 RPFCNVDT
+         ST    R1,PRMCNVD2             Save
+RPF021   DS    0H                      Search string in workspace
+         L     R2,COMWSTRT             R2= COMWSTRT
+         L     R5,COMMLAST             R4= COMMLAST
+         L     R1,COMWRKEN             Length of workspace entry
+         LA    R5,0(R1,R5)             Point after
+         BCTR  R5,0                               COMMLAST
+         L     R4,COMWRKEN             Increment is COMWRKEN
+         ST    R2,SAVE02               Save register 2
+         LH    R6,LENSTR               Length of '//* LAST UPDATED: '
+         BCTR  R6,0                    Minus 1 for EX
+RPF023   DS    0H
+         L     R7,COMWRKEN             Length of record
+         SH    R7,LENSTR               Minus length of string
+         LA    R7,1(,R7)               PLus 1 is BCT value
+         L     R2,SAVE02               FIRST CHAR OF RECORD
+*        LA    R2,8(,R2)               Point to data portion
+*                                      See RPFCOMM, WORKSPCE dsect
+RPF025   DS    0H                      Look if string is in record
+         MVC   TESTFLD,0(R2)           Move part of workspace
+*                                      to temporary field
+         TR    TESTFLD,COMTCAPS        And xlate to caps
+         EX    R6,RPFCOMP1             Compare
+         BE    RPF051                  Yes: match found
+         LA    R2,1(,R2)               Next position
+         BCT   R7,RPF025
+         L     R2,SAVE02               Start address record
+         BXLE  R2,R4,RPF027            Next record
+         B     RPF053                  Rc=04 not match found
+RPF027   DS    0H
+         ST    R2,SAVE02               Save register 2
+         B     RPF023                  Search again
+RPFCOMP1 CLC   TESTFLD(0),STRING       << executed >>
+RPF051   DS    0H                      Match found in line
+         MVC   COMMFSCR,SAVE02         Address matched line
+*                                      Becomes first line on screen
+         CH    R7,=H'17'               At least 17 bytes from end of
+*                                      record?
+         BL    RPF055                  No: error
+         TIME  DEC                     Get time of day
+         SRL   R0,4                    Shift out thousands of seconds
+         ST    R0,TIMEWORK             Into work field
+         OI    TIMEWORK+3,X'0F'        Insert sign
+         MVC   TIMEDISP,PATT1          Pattern into output field
+         ED    TIMEDISP(8),TIMEWORK
+         XC    JULDATE,JULDATE         Use current date
+         MVI   OUTPUT,X'FF'            Parm 1 is 4 bytes
+         L     R15,EPCNVDT             RPFCNVDT routine
+         LA    R1,PRMCNVD1             Parm
+         BALR  R14,R15                 Invoke RPFCNVDT
+         MVC   17(4,R2),YY             Insert
+         MVI   21(R2),C'/'
+         MVC   22(2,R2),MM                   date
+         MVI   24(R2),C'/'
+         MVC   25(2,R2),DD                       after string
+         MVI   27(R2),C' '             Blank
+         MVC   28(2,R2),TIMEDISP+2     Insert time
+         MVI   30(R2),C':'
+         MVC   31(2,R2),TIMEDISP+4                after string
+         XR    R15,R15                 RC=0
+         XC    COMMPRM,COMMPRM         Clear COMMPRM in RPFCOMM
+         B     RPF099                  Return to caller
+RPF053   DS    0H                      No match found
+         MVC   COMMPRM(25),ERR1TXT     Msg: Last update nt fnd
+         LA    R15,4                   RC=4
+         B     RPF099                  Back to caller RPFEDIT
+RPF055   DS    0H                      No match found
+         MVC   COMMPRM(25),ERR2TXT     Msg: date/time cannot added
+         LA    R15,4                   RC=4
+         B     RPF099                  Back to caller RPFEDIT
+RPF099   DS    0H                      End of RPFDOC
+         LR    R2,R15                  Save return code
+         LR    R3,R13                  Our working storage
+         L     R13,SAVE+4              Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release working storage
+         LR    R15,R2                  Restore return code
+         RETURN (14,12),RC=(15)        Return to caller (RPFEDIT)
+         TITLE 'Constants and literals'
+         LTORG ,
+         DROP
+PATT1    DC    X'F020212020202020'
+ERR1TXT  DC    CL25'//* last update not found'
+ERR2TXT  DC    CL25'Date/Time cannot be added'
+*                0..........11.....18...22..26......
+*              C'//* LAST UPDATE: yyddmm hhmm         '
+STRING   DC    C'//* LAST UPDATE: '
+LENSTR   DC    H'17'                   LENGTH STRING
+         TITLE  'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area
+DBW      DS    D
+PRMCNVD1 DS    F                       \____ Parm 1 RPFCNVDT ________/
+PRMCNVD2 DS    F                       /     Parm 2 RPFCNVDT         \
+R14TIME  DS    F                       Save register 14 TIME
+TIMEWORK DS    F
+SAVE02   DS    F
+TIMEDISP DS    CL8
+TESTFLD  DS    CL17                    Length = L'//* last update: '
+*
+JULDATE  DS    PL4                     Date packed signed (YY)YYDDD
+OUTPUT   DS    0CL49                   Date to be given back
+DAYNUM   DS    CL2                     01 is Sunday 07 is Saturday
+DAYNAME1 DS    CL09                    Dayname in English
+DAYNAME2 DS    CL09                    Dayname in Dutch
+         DS    CL1
+DD       DS    CL2                     Date (e.g. 28 for e.g. 28 Dec)
+         DS    CL1
+MM       DS    CL2                     01 is January 12 is December
+M#NAME1  DS    CL09                    Monthname in English
+M#NAME2  DS    CL09                    Monthname in Dutch
+         DS    CL1
+YY       DS    CL4                     4 digit Year
+*
+WORKL    EQU   *-WORKAREA
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END

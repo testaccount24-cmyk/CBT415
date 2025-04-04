@@ -1,0 +1,202 @@
+Message:                                 Action:
+---------------------------------------  ---------------------------------------
+* <ddname> alloc error                *  Archiver: not executed, retry possible
+* //* last update not found           *  EDIT: Add //* last update: ' in record
+* //ISPPROF not found                 *  Add //ISPPROF DD-statement
+* nnnnnnnn abended ccc                *  Assembler/Linkage editor abended
+* xxxxx records cut                   *  EDIT: CUT command executed
+* xxxxx records pasted                *  EDIT: PASTE command executed
+* xxxxx blocks copied                 *  MVCPY: sequential data set copied
+* xxxxx change(s) made                *  EDIT: Function executed
+* xxxxx lines filled                  *  EDIT: FILL command executed
+* xxxxx lines xlated                  *  EDIT: UC or LC command executed
+* xxxxx members copied/moved          *  MVCPY: successful move/copy (DSN(*))
+* xxxxxxxx pending                    *  RPF waits for completion linecmds.
+* xxxxxxxx Not Found                  *  RPFASM wrong assembler prog. name
+* Abend xxx detected                  *  MVCPY: Retry if 913, B0A or x37
+* Abend xxx detected                  *  SAVE: Open error, refer to System Codes
+* Abendx37 in RPFSAVE                 *  EDIT not exited.
+* ACB open err. xxxxxxxx              *  HCPY: Investigate OPEN error code.
+* Access denied                       *  Data entry, Save, DSLIST:
+*                                     *  Access rejected by security system.
+* Access denied TO DSN                *  MVCPY: update access not granted
+* Address cannot be altered           *  RPFTEST: address is not altered
+* Alloc error xxxx PRINT              *  Edit PRINT and SEARCH,
+*                                     *  data set not allocated
+* Alloc RC=xx, Err=yyyy               *  Data set not created(ref.TSO TMP guide)
+* Alloc. error work data              *  Function aborted, contact syst.progr.
+* Allocation error SYSOUT             *  Command aborted, contact syst.prog.
+* ARCHIVER not installed              *  RPFARCH and RPFARSVE, no ARCHIVER
+* Attribute list failed               *  Assembler: Contact RPF support
+* AUTOSAVE not Y or N                 *  DEFAULTS: enter the correct value
+* BLK not multiple of LRECL           *  ALLOC: not allowed with RECFM=F
+* BLKSIZE smaller than 18             *  ALLOC: increase BLKSIZE
+* BLKSIZE exceeds 32767               *  ALLOC: decrease BLKSIZE
+* Bottom of data reached              *  EDIT/Browse: F(IND) exhausted
+* Boundaries invalid                  *  EDIT: Command ignored
+* Boundary too small                  *  EDIT: Command ignored
+* BROWSE substituted                  *  If trying to EDIT RECFM=U data
+* CAPS not AUT,ON or OFF              *  DEFAULTS: enter the correct value
+* Characters X'..' found              *  Successful FIND P'.' subcommand
+* Character 'string' found            *  BROWSE: Successful FIND cmd
+* Column xxx LINE xx.xxx.xxx          *  BROWSE: notify of column and line
+* COLS not Y or N                     *  DEFAULTS: retry screen displayed
+* Command name syntx err              *  TSO command ignored
+* Command not executed                *  EDIT: COBOL ON command ignored, RECFM
+*                                     *  is variable or LRECL not 80.
+* Command not supported               *  TSO command ignored.
+* Conflicting commands                *  EDIT: Line commands reset.
+* Confirm not Y or N                  *  DEFAULTS/ARCH/PDS: retry
+*                                     *  screen displayed.
+* Conflicting DCB Parms               *  MVCPY: Retry menu displayed
+* Conflicting line cmds               *  EDIT: Line commands reset.
+* Copies invalid                      *  HCPY: Command aborted
+* Copies not numeric                  *  HCPY: Command aborted
+* Copy terminated                     *  EDIT: Command ignored
+* Data saved                          *  EDIT: data written to data set/member
+* Data set allocation error           *  MVCPY: Retry menu displayed
+* Data set already exists             *  ALLOC: Data set not created
+* Data set created/repl               *  EDIT: CREATE, linerange written
+* Data set deleted                    *  Function executed
+* Data set is empty                   *  EDIT: try to APPEND empty data set
+* Data set name missing               *  Specify a data set name
+* Data set not in catalog             *  Data entry/MVCPY: Retry menu displayed
+* Data set not on volume              *  Data entry/MVCPY: Retry menu displayed
+* Data set not partitioned            *  Library/RESET: not executed
+* Data set not PS or PO               *  MVCPY: Retry menu displayed
+* Data set/member in use              *  EDIT canceled
+* Data will be lost                   *  EDIT: Warning if NONUM data renumbered
+* Date/time cannot be added           *  Add more than 12 positions
+*                                     *  after //* last update:
+* DELETE failed                       *  ALLOC/DSLIST: Command ignored
+* DELETE rejected                     *  Delete not confirmed
+* Discard changes?                    *  EDIT: Warning, reply with Yes or No
+* DS (.) same as DS (1)               *  ASM, library name rejected
+* DYNALLOC error SYSLIB               *  Function aborted, contact syst.progr.
+* Enter locate string                 *  Libmaint: waiting        ('L' cmd)
+* Enter RETRY or END                  *  EDIT: Prompt after Input Convert failed
+* Enter SAVE, CANCEL or END           *  EDIT: END cmd given with AUTOSAVE=N
+* Error in READ, code=x               *  LIBRARIAN read error, reason is 'x'
+* Error: reenter input                *  PDS: Screen refreshed
+* FREEMAIN error, sign off            *  RPF execution impossible
+* FROM and TO are the same            *  MVCPY: Retry menu displayed
+* GETMAIN error, retry                *  GETMAIN not executed
+* Hardcopy failed xxxx                *  Function cancelled, see VTAM manual
+* Hardcopy made                       *  Function completed
+* I/O error                           *  EDIT, Browse, PDS, Reset, SEARCH
+*                                     *  not executed
+* I/O error input                     *  MVCPY: Input not readable, retry
+* IEBCOPY error                       *  MVCPY: IEBCOPY RC > 0
+* Ignore case not Y or N              *  SEARCH: specify the correct value
+* Input convert failed                *  EDIT, severe error, contact support
+* Input terminated                    *  EDIT: Input mode exited
+* Invalid address specified           *  TEST: Address not altered
+* Invalid BLKSIZE                     *  ALLOC: error screen displayed
+* Invalid CANCEL request              *  OUTPUT: Delete rejected
+* Invalid character string            *  EDIT/BROWSE: command ignored
+* Invalid chars xlated                *  EDIT: Translate executed
+* Invalid column number               *  BROWSE: Command ignored
+* Invalid Command                     *  Subcommand ignored
+* Invalid Command name                *  TSO command ignored
+* Invalid copy range specified        *  EDIT: Command ignored
+* Invalid ISPF mod level              *  RESET: retry screen displayed
+* Invalid ISPF version                *  RESET: retry screen displayed
+* Invalid key pressed                 *  Assembler: key ignored.
+* Invalid LRECL                       *  Alloc: error screen displayed
+* Invalid member name                 *  Data entry, PDS, selection ignored
+* Invalid new User ID                 *  RESET: retry screen displayed
+* Invalid OPTION                      *  Function ignored
+* Invalid PARM                        *  VTOC ignored
+* Invalid PASSWORD                    *  TEST: After 3 tries: exit forced
+* Invalid PRINTER                     *  HCPY: Function cancelled
+* Invalid RECFM                       *  Alloc: error screen displayed
+* Invalid record length               *  EDIT/SAVE ignored LRECL > 255
+* Invalid scroll value                *  EDIT: Scroll set ignored
+* Invalid SET command                 *  Command ignored
+* Invalid workspace size              *  DEFAULTS: Ws-size not changed
+* Item name is required               *  ARCHIVER save, retry screen displayed
+* Job xxxxxxxx submitted              *  Command executed, jobname= xxxxxxxx
+* LANG required with Add              *  LIB: Specify lang if add requested
+* LIBRARIA not installed              *  Save in Librarian Master not
+*                                     *  executed, RPFSAVE invoked
+* LIBRARY not specified               *  Data set not created
+* Line number invalid                 *  EDIT: Command ignored
+* Line-x invalid                      *  EDIT: Command ignored
+* Line-x not found                    *  EDIT: Command ignored
+* Listing made, SYSOUT=x              *  BROWSE: Command executed
+* LRECL input > output                *  Save ignored, retry screen displayed
+* LRECL smaller than 18               *  ALLOC: increase LRECL
+* LRECL exceeds BLKSIZE               *  ALLOC: decrease LRECL or incr. BLK
+* LRECL exceeds 32760                 *  ALLOC: decrease LRECL
+* LRECL+4 exceeds BLKSIZE             *  ALLOC: not allowed with RECFM=V
+* LU=xxxxxxxx INVALID                 *  HCPY: Command aborted
+* Member "TEMPRPF" restricted         *  SAVE: Save ignored, retry.
+* Member not found                    *  'S member' ignored in Browse
+*                                     *  Data set entry and ASM: retry screen
+* Mod RPFxxxxx reloaded               *  RPFTEST: successful reload of RPFxxxxx
+* Module not in Master                *  LIBRARIAN: Function ignored
+* No clipboard file                   *  EDIT: CUT not executed
+* No data sets found                  *  VTOC: No data set with this lvl found
+* No items meet criteria              *  ARCH: no items listed
+* No JCL data set                     *  BROWSE: submit cmd ignored
+* No JOB statement found              *  EDIT: submit cmd ignored
+* No member RPFHELP.(1,2,3,4,5)       *  HELP, function ignored
+* No members in FROM data             *  MVCPY: Input PDS is empty
+* No members queued                   *  PDS: No member queued via 'X' linecmd
+* No NODE or NICKNAME                 *  PDS: Required parm missing in XMIT cmd
+* No string specified                 *  PDS/MVCPY/DS-list string missing
+*                                     *  in primary command 'L'
+* No workspace available              *  Select 0 to specify workspace
+* Not a card image data set           *  Assembler not executed
+*                                     *  JCL or SUBMIT command not executed
+* Nothing loaded, file empty          *  EDIT: Function aborted
+* Nothing to retrieve                 *  EDIT: command buffer empty
+* NULLS not YES or NO                 *  DEFAULTS: enter the correct value
+* Number of lines invalid             *  EDIT: # inserted lines too many
+* Open error, code=x                  *  LIBRARIAN open error, reason is 'x'
+* PASTE buffer to large               *  EDIT: PASTE not executed
+* PFK definition invalid              *  PFK ignored
+* PFK not defined                     *  PFK ignored
+* PFK's reset                         *  Function executed
+* Pointer not specified               *  TEST: Command ignored
+* PREFIX not specified                *  ALLOC: Data set not created
+* PRI, SEC or DIR not numeric         *  ALLOC: Data set not created
+* Printer in use, retry               *  Function cancelled, retry possible
+* Rc=xx Err=xxxx on (x)               *  See: Writing a TMP or cmd processor
+* Rc=xxxx Attribute list              *  Execute FREE FILE(ASMMACLB)
+* Replace not YES or NO               *  DEFAULTS: enter the correct value
+* Replace not YES or NO               *  MVCPY: Retry menu displayed
+* Renumber 'Yes' or 'No'              *  RPF waits for reply Yes or No
+* RPF TSO: Abended completion code=xxx*  TSO interface recovered
+* RPF TSO: Attach for processor failed*  TSO command ignored,contact sys.prog.
+* RPF TSO: Command not found          *  TSO command could not be located
+* RPF TSO: Command abended cc= xxx    *  Check errors in that TSO command
+* RPF TSO: Interupt received          *  ATTN key pressed, all input ignored
+* RPF TSO: Ready                      *  TSO command executed
+* RPFUSER1 not found                  *  Function ignored
+* Save canceled by user               *  PF3/PF15 pressed in Save menu
+*                                     *  or CANCEL subcommand given
+* Save rejected in VIEW               *  EDIT: Data not saved in VIEW mode
+* SCRATCH error data set              *  DSLIST: Data set not scratched
+* Set command accepted                *  TEST: Command executed
+* Skip numbers not Y/C/N              *  SEARCH: specify the correct value
+* Space not CYL/TRK/BLK               *  ALLOC: Data set not created
+* Specify Archive                     *  Enter DSN of Archive cluster
+* Specify Masterfile                  *  RPF waits for indicated action
+* Specify PGMR and DESC               *  Specify both parms or none
+* SUBMIT failed                       *  Command aborted, contact syst.progr.
+* SYSOUT class invalid                *  Sysout class ignored
+* Text not found                      *  EDIT: text in 'C' command not found
+* Truncate to xxxxx entries           *  First xxxxx entries in workspace
+* Truncated to LRECL=255              *  BROWSE: display truncated to 255
+* Use CUT before PASTE                *  EDIT: PASTE not executed
+* Uncatlg error data set              *  DSLIST: Data set not deleted
+* Upd. size destroys ws               *  Current workspace no longer available
+* Userid not in table                 *  Function executed
+* Volume not available                *  VTOC: Function ignored
+* Volume not specified                *  VTOC: Retry screen displayed
+* VTAM CB error                       *  HCPY: Function cancelled
+* Workspace empty                     *  Edit current workspace ignored.
+* Workspace not freed                 *  FREEMAIN error, contact syst.progr.
+* Workspace not numbered              *  EDIT: Command ignored
+* Workspace too small                 *  Data set or member not edited

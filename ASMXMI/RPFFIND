@@ -1,0 +1,520 @@
+RPFFIND  TITLE 'Find a character sting in the EDIT workspace'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFFIND                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFEDIT                                       *
+*                                                                     *
+*        Function:      Find a character string in the EDIT workspace *
+*                       The search is started with the first line     *
+*                       on the screen and ended at the last line in   *
+*                       the workspace ('COMMLAST' in RPFCOMM)         *
+*                                                                     *
+*                       If a match is found in a line, the cursor     *
+*                       will be placed on the matched string in EDIT. *
+*                       The offset of the found string will           *
+*                       be set in COMRFOFS in RPFCOMM and the         *
+*                       address of the line where the string is found *
+*                       will be set in COMRFLNE.                      *
+*                                                                     *
+*                       A pointer to the command is in 'COMMPRM' in   *
+*                       RPFCOMM and will be loaded in register 9.     *
+*                                                                     *
+*        Formats of the command:                                      *
+*        F string (nnn) Search for string.                            *
+*        F 'string' (nnn) Delimited (' or ") string.                  *
+*        F P'.' (nnn)   Search for invalid (unprintable) characters.  *
+*        F X'hh..' (nnn) Search for HEX strings.                      *
+*        F              without operands = execute last F command.    *
+*                                                                     *
+*        If the string contains blanks put the string between quotes  *
+*        or double quotes. Double quotes can be used if the string    *
+*        contains single quotes.                                      *
+*                                                                     *
+*        If nnn (start column) is specified, only column nnn will be  *
+*        searched for that string.                                    *
+*        If nnn is not specified, search will be done in the EDIT     *
+*        boundary range (start from COMBNDS and length COMBNDSL).     *
+*                                                                     *
+*        Return codes:  00 Match found of string.                     *
+*                          Offset of found string in COMRFOFS in      *
+*                          RPFCOMM. This offset will be used to       *
+*                          locate the cursor on the found string      *
+*                          in RPFEDIT.                                *
+*                       04 Find exhausted (Bottom of data reached)    *
+*                          The message is in COMMPRM in RPFCOMM.      *
+*                       08 Errors found (message set in COMMPRM in    *
+*                          RPFCOMM).                                  *
+*                                                                     *
+*        Registers:     Register 12 is the base register              *
+*                       Register 13 points to the working storage     *
+*                       Register 11 points to the RPFCOMM control blk *
+*                       Register 10 contains the address of the F cmd *
+*                                                                     *
+*        Change log:                                                  *
+*        May 24,2004 RPr: Change format of the command                *
+*        Dec 17,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Apr 15,2019 RPr: Support LRECL up to 255 instead of          *
+*                         record length of 80 only                    *
+*        Sep 23,2019 RPr: Honour subsequent matches on the same line  *
+*                         if only an 'F' (repeat find) is entered.    *
+*                         F P'.' supported                            *
+*        Jan 15,2020 RPr: F X'hhhhhh....' Find HEX characters         *
+*                         supported.                                  *
+*        Jan 16,2020 RPr: 'O' (OMIT) primary command deleted.         *
+*        Sep 28,2020 RPr: Repeat find fixed if string is in the last  *
+*                         position in the EDIT boundary (BNDS)        *
+*        Jul 06,2021 RPr: RPFFIND made reentrant                      *
+*        Jan 14,2022 RPr: Remove operands 'line1' and 'line2' and     *
+*                         replace with operand 'start column'.        *
+*        Mar 18,2024 RPr: F X'hh..' nnn checks wrong column. Fixed.   *
+*        Aug 10,2024 RPr: Set address of found string in COMRFLNE.    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFFIND  CSECT
+RPFFIND  AMODE 31                      *                         @rpa01
+RPFFIND  RMODE ANY                     *                         @rpa01
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFFIND,R12             Provide addressability
+         L     R11,0(,R1)              Pickup RPFCOMM area
+         USING COMMAREA,R11            Address RPFCOMM
+         GETMAIN R,LV=WORKL            GETMAIN dynamic workarea
+         ST    R1,8(,R13)              Forward pointer
+         ST    R13,4(,R1)              Backward pointer
+         LR    R13,R1                  Our work area
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         USING WORKAREA,R13            Make working storage addressable
+         MVC   DLMCHAR,=C''''          Default delimiter
+         ICM   R1,15,COMMPRM           Load pointer of 'F' command
+         MVI   SW,0                    Clear switch
+         MVC   MSG1TXT,TXT1TXT         Move msg to working storage
+START01  DS    0H
+         ICM   R0,15,COMRFLNE          Address of line where string
+*                                      is found of previous 'F' cmd
+         BNZ   *+8                     Found: start searching from here
+         L     R0,COMMFSCR             Else start searching from 1st
+*                                      line on EDIT screen
+         MVC   LASTLNE,COMMLAST           ... to the end of data
+         MVC   FNDBNDS,COMBNDS         Default boundary start offset
+         MVC   FNDBNDSL,COMBNDSL       Default boundary length
+         LA    R10,COMLASTF            Address area
+         CLI   2(R1),X'40'             Only 'F' entered?
+         BE    TXT000                  Yes: use string of previous
+*                                      primary command 'F'
+         L     R0,COMMFSCR             If an 'F' command with a string
+*                                      start searching from first line
+*                                      on screen in RPFEDIT.
+         MVC   COMLASTF,0(R1)          Move new 'F' command
+         XC    COMRFLNE,COMRFLNE       Clear line where string found
+*                                      because we have a new string
+         B     TXT001                  and branch
+TXT000   DS    0H
+         MVC   1(47,R1),COMLASTF+1     Move previous F primary command
+         ICM   R1,15,COMRFLNE          Is there a previous match?
+         BZ    TXT001                  No.
+         OI    SW,$RFIND               Set repeat find switch
+TXT001   DS    0H
+         ST    R0,FIRSTLNE             ...
+         LA    R2,2(,R10)              A(string) in F primary command
+         CLC   2(4,R10),=C'P''.'''     F P'.' (find invalid chars)?
+         BE    INVFIND                 Branch if yes
+         CLC   2(4,R10),=C'p''.'''     F p'.' (find invalid chars)?
+         BE    INVFIND                 Branch if yes
+         CLC   2(2,R10),=C'X'''        F X'.. (find HEX chars)?
+         BE    HEXFIND                 Branch if yes
+         CLC   2(2,R10),=C'x'''        F x'.' (find HEX chars)?
+         BE    HEXFIND                 Branch if yes
+         CLI   0(R2),C''''             Delimiter found (quote)?
+         BE    DLMFIND                 Yes: string with delimiter
+         CLI   0(R2),C'"'              Delimiter found (dbl quote)?
+         BNE   NORMFIND                No: string without delimiter
+         B     DLMFIND                 Handle delimited strings
+INVFIND  DS    0H
+*
+*        a F P'.' has been given, set the $INVCH flag and set the
+*        length of the string to 1. The invalid characters will be
+*        searched with a Translate and Test instead of a compare.
+*
+         LA    R1,1                    Length of invalid char is
+         STH   R1,LENSTR               always 1
+         OI    SW,$INVCH               Search for invalid characters
+         LA    R2,6(,R10)              Point after F P'.'
+         B     TXT011                  Look if a startpos. is specified
+HEXFIND  DS    0H
+*
+*        A F X'hhhh..' command detected. Call HEXCONV to convert
+*        The EBCDIC HEX characters into real HEX characters and
+*        calculate the length of real string.
+*
+         LR    R1,R10                  A('F' command)
+         BAL   R14,HEXCONV             Convert the string
+         LTR   R15,R15                 Conversion OK?
+         BNZ   TXT071                  No: invalid character string
+         MVC   STRING(24),0(R1)        Move converted string
+         STH   R0,LENSTR               And save length
+         LR    R3,R0                   Pickup real HEX length string
+         SLL   R3,1                    * 2 because cmd is EBCDIC
+         LA    R2,5(R3,R10)            Add length of EBCDIC string +
+*                                      add strings F ' and ' of command
+         OI    SW,$HEXCH               Mark HEX find
+         B     TXT011                  Look if a startpos. is specified
+*
+*        Handle the delimited strings, filter out the delimiter
+*        (' or ") and count the length
+*
+DLMFIND  DS    0H
+         MVC   DLMCHAR,0(R2)           Move possible delimiter
+         LA    R2,1(,R2)               Point after delimiter
+         XR    R3,R3                   R3= 0 used to count length
+         LA    R4,42                   Max L= 42 without start DLM
+TXT003   DS    0H                      *** Start loop ***
+         CLC   0(1,R2),DLMCHAR         Ending quote found?
+         BE    TXT005                  Yes: end of loop
+         LA    R2,1(,R2)               Next position in string
+         LA    R3,1(,R3)               Count length of string
+         BCT   R4,TXT003               Loop until ending quote found
+         B     TXT071                  Invalid character string
+TXT005   DS    0H
+         LA    R2,1(,R2)               Point after delimiter
+         STH   R3,LENSTR               Save length of string
+         B     TXT011                  Look if a startpos. is specified
+*
+*        Handle the not delimited strings and count the length
+*
+NORMFIND DS    0H                      F string cmd (without quotes)
+         XR    R3,R3                   R3 = 0, count # bytes of string
+         LA    R4,41                   Max length (48 - L'F ' + strt)
+TXT007   DS    0H
+         CLI   0(R2),X'40'             End of string?
+         BE    TXT009                  Yes: String complete
+         LA    R2,1(R2)                Next position
+         LA    R3,1(R3)                Count this position
+         BCT   R4,TXT007               Test again on end of string
+         B     TXT071                  No string detected, invalid ...
+TXT009   DS    0H
+         STH   R3,LENSTR               Save length of string
+         B     TXT011                  Look if a startpos. is specified
+*
+*        Look if a F 'string' nnn (nnn=start column) is given.
+*        Examine start column and update the boundary offset (start
+*        column) to search.
+*        Register 2 contains the address of first byte after the
+*        string in the F primary command.
+*        The length of the string is present in LENSTR.
+*
+TXT011   DS    0H
+         LH    R3,LENSTR               Pickup length of string
+         LA    R2,1(,R2)               Point after blank after string
+         LR    R15,R2                  Save start column if there
+         LA    R14,3                   Max length start column if there
+         XR    R1,R1                   Count length start column
+TXT013   DS    0H
+         CLI   0(R2),C' '              Blank found?
+         BE    TXT015                  Yes: end of start column
+         CLI   0(R2),C'0'              Numeric?
+         BL    TXT017                  No: ignore
+         CLI   0(R2),C'9'              Numeric?
+         BH    TXT017                  No: ignore
+         LA    R2,1(,R2)               Next byte
+         LA    R1,1(,R1)               Count length of start column n
+         BCT   R14,TXT013              Loop
+TXT015   DS    0H
+         LTR   R1,R1                   Length found?
+         BZ    TXT017                  No: ignore start column
+         BCTR  R1,0                    Minus 1 for EX
+         EX    R1,PKSTRT               Pack start position
+         CVB   R1,DWB                  Make binary
+         L     R14,COMMRECL            Record length input data
+         SR    R14,R3                  Minus length of string
+         LA    R14,1(,R14)             Including last position
+         CR    R14,R1                  Compare L'string with length
+*                                      of data - start column
+         BL    TXT079                  Low: boundary too small
+         BCTR  R1,0                    Make from startcol. start offset
+         ST    R1,FNDBNDS              And save the offset
+         ST    R3,FNDBNDSL             New boundary length
+TXT017   DS    0H
+         TM    SW,$INVCH+$HEXCH        Search for invalid/HEX chars?
+         BNZ   TXT025                  Yes: search for string
+         LH    R3,LENSTR               Pickup length of string
+         LTR   R3,R3                   No string found?
+         BZ    TXT071                  Set Rc=08 and return to caller
+         C     R3,FNDBNDSL             String fits in BNDS length?
+         BH    TXT079                  No: error
+         BCTR  R3,0                    Minus 1 for EX
+         LA    R2,2(,R10)              String after F primary command
+         CLC   DLMCHAR,0(R2)           Quoted string ?
+         BNE   *+8                     No: branch
+         LA    R2,1(,R2)               Otherwise string starts next.pos
+         MVI   STRING,C' '             Clear ...
+         MVC   STRING+1(L'STRING-1),STRING      string
+         EX    R3,TXTMOV1              Move string into field
+         TR    STRING,COMTCAPS         Xlate to upper case
+         CLC   FIRSTLNE,LASTLNE        FIRSTLNE after LASTLNE?
+         BH    TXT069                  Yes: Not found/Bottom reach
+         B     TXT025                  Search string in workspace
+PKSTRT   PACK  DWB,0(0,R15)            << executed >>
+TXTMOV1  MVC   STRING(0),0(R2)         << executed >>
+*
+*        Search the string in the EDIT workspace
+*
+TXT025   DS    0H                      Search string in workspace
+         L     R2,FIRSTLNE             Reg.2 = first line on EDIT scrn
+         L     R5,LASTLNE              Reg.5 = last record in workspace
+         LA    R5,79(,R5)              Reg.5 = adress after COMMLAST
+         L     R4,COMWRKEN             Increment is COMWRKEN (Max.263)
+         USING WORKSPCE,R2
+         L     R14,COMMRECL            Record length of input data
+         BCTR  R14,0                   Minus 1 for EX
+         EX    R14,TXTEX1              Move to uppercase record
+         TM    SW,$INVCH+$HEXCH        Search for invalid/HEX chars?
+         BNZ   *+10                    Yes: skip translate
+         TR    UCREC,COMTCAPS          Xlate to upper case
+         LH    R6,LENSTR               Length of string
+         BCTR  R6,0                    Minum 1 for EX compare
+TXT031   DS    0H
+         L     R7,FNDBNDSL             Length of BNDS
+         SH    R7,LENSTR               Minus length of string
+         LA    R7,1(,R7)               Including last character
+         LA    R8,UCREC                First character of record
+         TM    SW,$RFIND               Only an F entered?
+         BNO   TXT037                  No: normal Find
+         L     R1,COMRFOFS             Offset in same line
+         LA    R1,1(,R1)              Point after to prevent same match
+*                                      because the string can be
+*                                      present more than 1 time in the
+*                                      same line.
+         LA    R8,0(R1,R8)             Point 1 byte after prev. string
+         ST    R8,SAVER8               Save
+         LA    R7,UCREC                Pickup copied line
+         L     R1,FNDBNDS              Adjust with ....
+         LA    R7,0(R1,R7)                     ... BNDS offset
+         L     R1,FNDBNDSL             Length of EDIT boundaries
+         LA    R7,1(R1,R7)             Adjust with length of BNDS + 1
+         SR    R7,R8                   Take difference
+         SH    R7,LENSTR               Minus length of string
+         BNP   TXT057                  No: search next line
+         L     R8,SAVER8               Restore register 8
+         B     TXT039                  Branch
+TXT037   DS    0H                      Look if string is in record
+         L     R1,FNDBNDS              Adjust with ....
+         LA    R8,0(R1,R8)                     ... BNDS offset
+TXT039   DS    0H                      Look if string is in record
+         ST    R2,SAVER2               Save reg.2 (TRT use R2)
+         TM    SW,$INVCH               Look for invalid chars?
+         BNO   TXT041                  No: normal compare to find str
+         TRT   0(1,R8),COMTRTST        Test on invalid character
+         BZ    TXT045                  not found
+         STC   R2,INVCHAR              Save invalid char
+         CLI   INVCHAR,C':'            Translate X'00'?
+         BNE   *+8                     No: branch
+         MVI   INVCHAR,0               Replace by X'00'
+         UNPK  CONVWRK(3),INVCHAR(2)   Expand each byte
+         NC    CONVWRK(2),=X'0F0F'     Reset high order digits
+         TR    CONVWRK(2),=C'0123456789ABCDEF'
+         MVC   MSG1TXT+16(2),CONVWRK   Move into message
+         L     R2,SAVER2               Restore register 2 after TRT
+         B     TXT065                  Match found
+TXT041   DS    0H
+         EX    R6,TXTCOMP1             Compare
+         BE    TXT065                  Yes: match found
+TXT045   DS    0H
+         L     R2,SAVER2               Restore register 2 after TRT
+         LA    R8,1(,R8)               Next position
+         BCT   R7,TXT039
+         B     TXT057                  Search in next line
+TXT057   DS    0H
+         BXLE  R2,R4,TXT059            Next record
+         B     TXT069                  Rc=04 - no match found
+TXT059   DS    0H
+         L     R14,COMMRECL            Record length of input data
+         BCTR  R14,0                   Minus 1 for EX
+         EX    R14,TXTEX1              Move to uppercase record
+         TM    SW,$INVCH+$HEXCH        Test on invalid (p'.') or HEX
+         BNZ   *+10                    Yes: do not xlate to upper
+         TR    UCREC,COMTCAPS          Xlate to upper case
+         NI    SW,255-$RFIND           We are in the next line now
+         B     TXT031                  Search again
+TXTCOMP1 CLC   0(0,R8),STRING          << executed >>
+TXTEX1   MVC   UCREC(0),WORKDATA       << executed >>
+TXT065   DS    0H                      Match found in line
+         XC    COMMPRM,COMMPRM         Clear COMMPRM in RPFCOMM
+         ST    R2,COMRFLNE             Address matched line
+         LA    R2,UCREC                Pickup copy of record
+         SLR   R8,R2                   Minus address of found string
+         ST    R8,COMRFOFS             Save the offset here too
+         TM    SW,$INVCH               Invalid characters tested?
+         BNO   TXT067                  No: no message for RPFEDIT
+         MVC   COMMPRM(25),MSG1TXT     Msg: Char x'hh' found
+TXT067   DS    0H                      Match found in line
+         XR    R15,R15                 RC=0
+         B     TXT099                  Return to caller
+TXT069   DS    0H
+         MVC   COMMPRM(25),ERRVTXT     Msg: Not found/Bottom reach
+         B     TXT097                  string was found
+TXT071   DS    0H
+         MVC   COMMPRM(25),ERRWTXT     Msg: Invalid character string
+         B     TXT098
+TXT079   DS    0H
+         MVC   COMMPRM(25),ERRETXT     Msg: Boundary too small
+TXT097   DS    0H                      Error routine
+         XC    COMRFOFS,COMRFOFS       Clear RFIND offset
+         XC    COMRFLNE,COMRFLNE       Clear address of line where
+         LA    R15,4                   Rc = 4, Bottom of data reached
+         B     TXT099                  Exit
+TXT098   DS    0H                      Error routine
+         XC    COMRFOFS,COMRFOFS       Clear RFIND offset
+         XC    COMRFLNE,COMRFLNE       Clear address of line where
+         LA    R15,8                   Rc = 8, other error
+TXT099   DS    0H                      End of routine
+         LR    R2,R15                  Save return code
+         LR    R3,R13                  Save adress working storage
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release our working storage
+         LR     R15,R2                 Restore return code
+         RETURN (14,12),RC=(15)        Return
+         DROP   R2
+*---------------------------------------------------------------------*
+*                                                                     *
+*        H E X C O N V - filter out the HEX characters and convert    *
+*                        the 'EBCDIC' hex characters to real HEX      *
+*                        character.                                   *
+*                                                                     *
+*                  Input   Register 1, Address of the 'F' command     *
+*                          from RPFEDIT                               *
+*                                                                     *
+*                  Output: Register 0, length of the string           *
+*                          Register 1, the address of the converted   *
+*                                      string.                        *
+*                                                                     *
+*                          Reg.15, RC= 0000 - Successfully converted  *
+*                                  RC= 0004 - Invalid string          *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+HEXCONV  DS    0H
+         ST    R14,SAVE14HX            Save register 14
+         STM   R3,R6,HEXREGS           Save work registers
+         LA    R3,4(,R1)               Point after F X'
+         LR    R6,R3                   Save for later use
+         LA    R4,42                   Search max 42 times
+         XR    R5,R5                   Count the length
+HEX001   DS    0H
+         CLI   0(R3),C' '              Blank found?
+         BE    HEX005                  Yes: Hex string without end '
+         CLI   0(R3),C''''             Quote found?
+         BE    HEX005                  Yes: Hex string finished
+         TRT   0(1,R3),TRTHEX          Test on valid HEX characters
+         BNZ   HEX091
+         LA    R5,1(,R5)               Count the byte in the string
+         LA    R3,1(,R3)               Next byte in string
+         BCT   R4,HEX001               Loop
+HEX005   DS    0H
+         LTR   R5,R5                   No length?
+         BZ    HEX091                  Yes: invalid string
+         LR    R15,R5                  Duplicate length in R15
+         SRL   R15,1                   1 byte to the right
+         SLL   R15,1                   and back to the left
+         CR    R5,R15                  Do we have a even number?
+         BNE   HEX091                  No: invalid string
+         MVI   HEXSTR,C' '             Blank the
+         MVC   HEXSTR+1(L'HEXSTR-1),HEXSTR      output first
+         BCTR  R15,0                   Discount with 1 for TR and move
+         EX    R15,HEXMOVE             Move the string
+         TR    HEXSTR,TRHEX            Translate (eg: C1 -> 0A)
+         LA    R3,7                    Loop 7 times
+         LA    R2,HEXSTR               Input string
+         LA    R4,HEXSTR2              Output string
+HEX010   DS    0H
+         PACK  0(4,R4),0(7,R2)         Pack 6 bytes +1 non significant
+         LA    R2,6(,R2)               Next 6 bytes input
+         LA    R4,3(,R4)               Next 3 bytes output
+         BCT   R3,HEX010               Loop
+         SRL   R5,1                    Length = length/2
+         LR    R0,R5                   Load the
+         LA    R1,HEXSTR2                       answer
+         XR    R15,R15                 Rc = 0, string converted
+         B     HEX999                  Return
+HEX091   DS    0H
+         LA    R15,4                   Errornous return code
+HEX999   DS    0H
+         LM    R3,R6,HEXREGS           Restore work registers
+         L     R14,SAVE14HX            Restore register 14
+         BR    R14                     Return
+HEXMOVE  MVC   HEXSTR(0),0(R6)         << executed >>
+TRHEX    DC    256AL1(*-TRHEX)         Translate table A-F and 0-9
+         ORG   TRHEX+X'40'
+         DC    X'00'                   Blank
+         ORG   TRHEX+X'81'
+         DC    X'0A0B0C0D0E0F'         Lower case A-F
+         ORG   TRHEX+C'A'
+         DC    X'0A0B0C0D0E0F'         Upper case A-F
+         ORG   TRHEX+C'0'
+         DC    X'00010203040506070809' 0-9
+         ORG   ,
+TRTHEX   DC    256X'FF'                Translate test table
+         ORG   TRTHEX+X'81'
+         DC    X'000000000000'         Lower case A-F
+         ORG   TRTHEX+C'A'
+         DC    X'000000000000'         Upper case A-F
+         ORG   TRTHEX+C'0'
+         DC    X'00000000000000000000' 0-9
+         ORG   ,
+*
+ERRETXT  DC    CL25'------ Boundary too small'
+ERRVTXT  DC    CL25'-- Bottom of data reached'
+ERRWTXT  DC    CL25' Invalid character string'
+TXT1TXT  DC    CL25'-- Characters X''xx'' found'  +16
+C0000    DC    C'00000000'
+         LTORG
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area of RPFFIND
+DWB      DS    D
+HEXREGS  DS    4F
+FNDBNDS  DS    F                       Boundary start offset
+FNDBNDSL DS    F                       Boundary length
+HEXSTR   DS    CL48                    To contain string
+HEXSTR2  DS    CL24                    Converted string
+FIRSTLNE DS    F                       First line to search
+LASTLNE  DS    F                       Last line to search
+LENSTR   DS    H                       Length of string
+STRING   DS    CL48
+SAVE14HX DS    F                       Save register 14 HEXCONV rout.
+SAVER2   DS    F
+SAVER8   DS    F
+INVCHAR  DS    C                       Invalid character of F P'.'
+DLMCHAR  DS    C                       Text delimiter if any
+MSG1TXT  DS    CL25
+CONVWRK  DS    CL8                     Workfield convert to HEX
+SW       DC    X'00'
+$RFIND   EQU   128                     Repeat find set
+$INVCH   EQU   64                      F P'.' primary command
+$HEXCH   EQU   32                      F X'hh..' primary command
+UCREC    DS    CL255                   Record of workspace upper case
+         DS    CL10
+WORKL    EQU   *-WORKAREA              Length of working storage area
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END

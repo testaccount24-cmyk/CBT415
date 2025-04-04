@@ -1,0 +1,48 @@
+)ATTR
+/* Panel: RPFEDHZ0. Panel for OS/390 and z/OS systems.      */
+ + TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(GREEN)
+ % TYPE(TEXT)   INTENS(HIGH) SKIP(ON)    COLOR(WHITE)
+ ¬ TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(YELLOW)
+ _ TYPE(INPUT)  INTENS(LOW)  JUST(LEFT)  COLOR(TURQ)
+ # TYPE(INPUT)  INTENS(LOW)  JUST(ASIS)
+ ~ TYPE(INPUT)  INTENS(HIGH) JUST(LEFT)
+ ! TYPE(INPUT)  INTENS(HIGH) JUST(RIGHT)
+ { TYPE(OUTPUT) INTENS(LOW)  JUST(LEFT)
+ } TYPE(OUTPUT) INTENS(LOW)  JUST(RIGHT)
+ Ý TYPE(OUTPUT) INTENS(HIGH) JUST(LEFT)
+ ¨ TYPE(OUTPUT) INTENS(HIGH) JUST(RIGHT)
+ ¢ TYPE(TEXT)  INTENS(HIGH) COLOR(YELLOW)
+)BODY EXPAND(//)
+%TUTORIAL -----------------  RPFED - HELP PANEL  ----------/-/------ TUTORIAL
+%OPTION  ===>_ZCMD
+%
+%                         RPFED command processor
++
++ ¢RPFED+let you EDIT, Browse, library management or RESET ISPF statistics,
++        depending of the¢RPF CP name+in the RPFED panel.
++
++ ¢RPFED+executes the RPF EDIT function of a partitioned or sequential
++        data set. EDIT of data sets with a RECFM of F(B) and V(B)
++        with a record length up to 255 is possible.
++ ¢RPFBR+executes the RPF BROWSE function of a partitioned or sequential
++        data set. The RECFM can be F(B), V(B) or U.
++ ¢RPFPD+executes the RPF Library management function of a partitioned
++        data set. Press F1 in library management for more information.
++ ¢RPFST+executes the RPF RESET ISPF stats function of a partitioned
++        data set. You can RESET or DELETE ISPF stats of members.
++        Specify a New USERID, VERSION and Mod lvl for the RESET function.
++        The default New USERID is the userid of the TSO session.
++        The default VERSION = '01'. The default Mod lvl = '00'.
++
++Select%1+for an explanation of some EDIT commands.
++
++Enter%END+command to return.
+)INIT
+ &ZCMD = ' '
+ &ZHTOP = RPFEDHZ0
+ .HELP = RPFEDH01
+)PROC
+ &ZSEL = TRANS(&ZCMD,
+               1,RPFEDH01
+               *,'?')
+)END

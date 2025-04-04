@@ -1,0 +1,363 @@
+RPFSTAT  TITLE 'Display RPF status panel'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFSTAT                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFDEF and RPFTEST                            *
+*                                                                     *
+*        Subroutine:    RPFCNVDT convert Julian date                  *
+*                                                                     *
+*        Function:      Display the RPF status like workspace size,   *
+*                       Workspace lines in use, Session time, current *
+*                       allocations, default options, current options,*
+*                       User ID and PREFIX.                           *
+*                                                                     *
+*        Registers:     Register 12 is the base register              *
+*                       Register 11 always points to RPFCOMM          *
+*                       Register 13 points to the working storage     *
+*                       Register 10 points to the output screen area. *
+*                                                                     *
+*        Change log:                                                  *
+*        Dec 18,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Jan 03,2019 RPr: Add 7 color support                      @rp1
+*        Jan 31,2019 RPr: Optimize for 3270 model 3 and 4          @rp2
+*        Mar 31,2019 RPr: Support added for all kinds of 3270 screens *
+*                         up to 16384 bytes                           *
+*        Sep 29,2020 RPr: Remove option Upper Case                    *
+*        Nov 30,2020 RPr: Default Numbered removed                    *
+*        Aug 13,2021 RPr: RPFSTAT made re-entrant and re-usable and   *
+*                         DATE routine replaced by call to RPFCNVDT.  *
+*        May 22,2024 RPr: Weird number of in-use lines fixed if the   *
+*                         EDIT workspace is empty and PREFIX added.   *
+*        Dec 07,2024 RPr: Use standard TSO naming conventions for     *
+*                         data set names.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFSTAT  CSECT  ,                      RPF status panel
+RPFSTAT  AMODE  31                     *                         @rpa01
+RPFSTAT  RMODE  24                     *                         @rpa01
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFSTAT,R12             Provide addressability
+         L     R11,0(,R1)
+         USING COMMAREA,R11            Address RPFCOMM Dsect
+         GETMAIN R,LV=WORKL            Allocate working storage
+         ST    R13,4(,R1)
+         ST    R1,8(0,R13)
+         LR    R13,R1
+         USING WORKAREA,R13            Make working storage addressable
+         B     START
+         DS    0F
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         LA    R0,SCRWORK              Output Data Entry panel
+         LA    R1,SCR5LENF             Length of screen
+         L     R2,=V(SCR5)             Input Data Entry panel
+         LR    R3,R1                   Has the same length
+         MVCL  R0,R2                   Copy to dynamic area
+         LA    R10,SCRWORK             Output Data Entry panel
+         USING SCR5,R10                Provide addressability
+         MVC   LINES,=CL7'FFFFFFF'
+         LA    R1,JULDATE              Parm 1 RPFCNVDT
+         ST    R1,PRMCNVD1             Save
+         LA    R1,OUTPUT               Parm 2 RPFCNVDT
+         ST    R1,PRMCNVD2             Save
+         MVC   SCR5TXT(1),COMMCMD      Move EW/EWA in data stream
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         LM    R4,R5,COMMSIZE          Pickup lines
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5TXT+3
+*
+         LA    R0,2                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R2C1+1
+*
+         LA    R3,R5C2                 Point to 1st status entry
+         LA    R4,5                    First data line is line5
+         LA    R5,5                    Last data (Status) line10
+SCR01    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,2                    Parameter column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+         LR    R0,R4                   Parameter line
+         LA    R1,39                   Parameter column 39+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         LA    R6,R5C2L1(,R3)          Point to 2nd part Status line
+         STCM  R0,3,1(R6)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,R5C2L2(,R3)          Next line in screen
+         BCT   R5,SCR01                And do complete screen
+*
+         LA    R0,14                   Row 14
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R14C2+1
+*
+         LA    R0,16                   Row 16
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R16C2+1
+*
+         LA    R0,17                   Row 17
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R17C2+1
+*
+         LA    R0,18                   Row 18
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R18C2+1
+*
+         L     R0,COMMSIZE             Row last
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC1+1
+START3   DS    0H                                                  @rp2
+         MVC   SCR5UID+28(8),COMMUSER  User id into screen
+         MVC   FLDUID,COMMUSER         TSO user id in screen
+         MVC   TIMEWORK,COMSTIME       Get RPF start time
+         BAL   R14,TIME                Convert to display format
+         MVC   FLDSTIME,TIMEDISP+2     Start time RPF in screen
+         TIME  DEC                     Get time of day
+         SRL   R0,4                    Shift out thousands of seconds
+         ST    R0,TIMEWORK             Store into workfield
+         BAL   R14,TIME                Convert to display
+         MVC   FLDCTIME,TIMEDISP+2     and move current time in screen
+         MVC   ADDR1,COMWSTRT          Start of workspace
+         MVC   ADDR2,COMWRKND          End of workspace
+         BAL   R14,LINE                Calculate maximum # lines
+         MVC   FLDLINES,LINES          Move # workspace lines in screen
+         MVC   ADDR1,COMWSTRT          First record in workspace
+         MVC   ADDR2,COMMLAST          Last record in workspace
+         BAL   R14,LINE                Calculate # lines in workspace
+         MVC   FLDINUSE,LINES          Move # lines into screen
+         MVC   FLDCLASS,COMOUTCL       Default output SYSOUT class
+         MVC   FLDLOG,COMMLOG          Logging YES or NO
+         MVC   FLDNUM,COMMNUM          Numbered YES or NO
+         MVC   FLDPFX,COMMPFX          Data set prefix for opt 3.4
+         MVC   FLDMBR,COMMBR           Current member in RPFCOMM
+         MVC   FLDDSN,COMMDSN          Current data set name in RPFCOMM
+         MVC   FLDVOL,COMMVOL          Current volume in RPFCOMM
+         XC    JULDATE,JULDATE         Use current date
+         MVI   OUTPUT,X'FF'            Parm 1 is 4 bytes
+         L     R15,EPCNVDT             RPFCNVDT routine
+         LA    R1,PRMCNVD1             Parm
+         BALR  R14,R15                 Invoke RPFCNVDT
+         MVC   FLDCDATE(4),YY          Insert
+         MVI   FLDCDATE+4,C'/'
+         MVC   FLDCDATE+5(2),MM              date
+         MVI   FLDCDATE+7,C'/'
+         MVC   FLDCDATE+8(2),DD                  after string
+PUT5     DS    0H
+         LA    R1,SCR5TXT              Point to panel after escape char
+         LA    R0,SCR5LEN              Length
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write STATS screen
+         LA    R1,BUFFER               Area address
+         LA    R0,L'BUFFER             Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read and wait
+RETURN   LR    R3,R13                  A(working storage)
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)
+         RETURN (14,12),RC=0           Return to caller
+*---------------------------------------------------------------------*
+*                                                                     *
+*        LINE - Calculate number of lines between two addresses.      *
+*                                                                     *
+*               Input:  ADDR1 - Start address,                        *
+*                       ADDR2 - End address.                          *
+*                                                                     *
+*               OUTPUT: LINES - Number of lines with length=88        *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+LINE     DS    0H
+         MVC   LINES,=C'0000000'       Default zero in lines
+         ICM   R4,B'1111',ADDR1        Start address in R4
+         BZR   R14                     Exit if zero
+         ICM   R5,B'1111',ADDR2        End address in register 5
+         BZR   R14                     Exit if zero
+         LA    R5,NEXTENT(,R5)         Reg5 = reg5 + entry length
+         SR    R5,R4                   # of workspace bytes
+         XR    R4,R4                   Clear even register
+         LA    R6,NEXTENT              Length 1 entry in reg. 6
+         DR    R4,R6                   Calculate number of lines
+         CVD   R5,DBW                  Unpack
+         UNPK  LINES(7),DBW            Set in screen
+         OI    LINES+6,X'F0'           And remove sign
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        TIME - Convert time of day to display format                 *
+*                                                                     *
+*               Input:  TIMEWORK - Time of day                        *
+*               Output: TIMEDISP - Time of day, hh:mm:ss              *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+TIME     DS    0H
+         OI    TIMEWORK+3,X'0F'        Inset sign
+         MVC   TIMEDISP,PATT1          Move EDIT pattrn
+         ED    TIMEDISP(10),TIMEWORK   Edit
+         BR    R14                     Return
+         TITLE 'Constants'
+PATT1    DC    X'F02021207A20207A2020'
+         LTORG ,
+         DROP
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+         TITLE 'SCREEN FORMATS'
+SCR5     CSECT
+SCR5TXTF DC    X'27'                 Escape character TPUT FULLSCR
+SCR5TXT  DC    X'00C21100001DF8'     EW or EWA r1,c1
+SCR5UID  DC    CL78'RPF Status panel: User ID =         ---------------C
+               ---------------------------'
+*
+R2C1     DC    X'110000',X'1DF8',C'Cmd =>',X'1D4013'
+REP5     DC    CL24' ',X'1DF0'
+R5C2     DC    X'110000',AL3(TURQ)     r05,c02+                    @rp1
+         DC    C'User ID     = ',AL3(GREEN)                        @rp1
+FLDUID   DC    CL8' ',CL9' '           Make lines equal in length
+R5C2L1   EQU   *-R5C2
+         DC    X'110000',AL3(TURQ)     r05,c39+                    @rp1
+         DC    C'Date        = ',AL3(GREEN)                        @rp1
+FLDCDATE DC    CL10' ',CL7' '          Sum should be 17
+R5C2L2   EQU   *-R5C2
+*
+         DC    X'110000',AL3(TURQ)     r06,c02+                    @rp1
+         DC    C'RPF start   = ',AL3(GREEN)                        @rp1
+FLDSTIME DC    CL8' ',CL9' '           Sum should be 17
+         DC    X'110000',AL3(TURQ)     r06,c39+                    @rp1
+         DC    C'Time of day = ',AL3(GREEN)                        @rp1
+FLDCTIME DC    CL8' ',CL9' '           Sum should be 17
+*
+         DC    X'110000',AL3(TURQ)     r07,c02+                    @rp1
+         DC    C'WS-size     = ',AL3(GREEN)                        @rp1
+FLDLINES DC    CL7' ',CL10' '          Sum should be 17
+         DC    X'110000',AL3(TURQ)     r07,c39+                    @rp1
+         DC    C'In use      = ',AL3(GREEN)                        @rp1
+FLDINUSE DC    CL7' ',CL10' '          Sum should be 17
+*
+         DC    X'110000',AL3(TURQ)     r08,c02+                    @rp1
+         DC    C'Out class   = ',AL3(GREEN)                        @rp1
+FLDCLASS DC    C' ',CL16' '            Sum should be 17
+         DC    X'110000',AL3(TURQ)     r08,c39+                    @rp1
+         DC    C'Logging     = ',AL3(GREEN)                        @rp1
+FLDLOG   DC    CL3' ',CL14' '          Sum should be 17
+*
+         DC    X'110000',AL3(TURQ)     r09,c02+                    @rp1
+         DC    C'Line numbers= ',AL3(GREEN)                        @rp1
+FLDNUM   DC    CL3' ',CL14' '          Sum should be 17
+         DC    X'110000',AL3(TURQ)     r09,c39+
+         DC    C'Prefix      = ',AL3(GREEN)                        @rp1
+FLDPFX   DC    CL17' '
+*
+R14C2    DC    X'110000'               r14,c02+
+         DC    AL3(YELLOW),C'Current allocations:'                 @rp1
+R16C2    DC    X'110000'               r16,c02+
+         DC    AL3(TURQ)
+         DC    CL16'Member name   = ',AL3(GREEN)
+FLDMBR   DC    CL8' ',AL3(TURQ)  member                            @rp1
+R17C2    DC    X'110000'               r17,c02+
+         DC    CL16'Data set name = ',AL3(GREEN)
+FLDDSN   DC    CL46' ',X'1DF0'         Data set name
+R18C2    DC    X'110000'               r18,c02+
+         DC    AL3(TURQ)
+         DC    CL16'Volume serial = ',X'1DF8',AL3(GREEN)
+FLDVOL   DC    CL6' '                  Volume                      @rp1
+RLASTC1  DC    X'110000',AL3(TURQ),C'Hit '
+         DC    AL3(WHITE),C'ENTER ',AL3(TURQ),C'to return'
+SCR5LEN  EQU   *-SCR5TXT
+SCR5LENF EQU   *-SCR5TXTF
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area should be first entry
+DBW      DS    D
+SBAR0R1  DS    D                       Used in RCTOSBA
+BUFFER   DS    CL80
+PRMCNVD1 DS    F                       \____ Parm 1 RPFCNVDT ________/
+PRMCNVD2 DS    F                       /     Parm 2 RPFCNVDT         \
+ADDR1    DS    F
+ADDR2    DS    F
+TIMEWORK DS    F
+TIMEDISP DS    CL10
+LINES    DC    CL7'FFFFFFF'
+*
+JULDATE  DS    PL4                     Date packed signed (YY)YYDDD
+OUTPUT   DS    0CL49                   Date to be given back
+DAYNUM   DS    CL2                     01 is Sunday 07 is Saturday
+DAYNAME1 DS    CL09                    Dayname in English
+DAYNAME2 DS    CL09                    Dayname in Dutch
+         DS    CL1
+DD       DS    CL2                     Date (e.g. 28 for e.g. 28 Dec)
+         DS    CL1
+MM       DS    CL2                     01 is January 12 is December
+M#NAME1  DS    CL09                    Monthname in English
+M#NAME2  DS    CL09                    Monthname in Dutch
+         DS    CL1
+YY       DS    CL4                     4 digit Year
+*
+SCRWORK  DS    CL(SCR5LENF)            Copy from SCR5 CSECT
+WORKL    EQU   *-WORKAREA
+*
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END

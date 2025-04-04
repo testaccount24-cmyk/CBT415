@@ -1,0 +1,347 @@
+RPFEND   TITLE 'END OF RPF PROCESSOR'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFEND                                        *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFMAIN                                       *
+*                                                                     *
+*        Subroutine:    RPFDAIR                                       *
+*                                                                     *
+*        Function:      Write the member selection list of RPFDATAL   *
+*                       in the ISPPROF partitioned data set with      *
+*                       member name @RPFPROF.                         *
+*                       Write the EDIT RETRIEVE buffer on the profile *
+*                       with member name @RPFRTRV.                    *
+*                       Write the saved TSO command to the profile    *
+*                       with member name @RPFTSO.                     *
+*                       Unallocate the temporary datasets with        *
+*                       DD-names: RPFVTC1, RPFEDT1 and RPFCTPST.      *
+*                       Unallocate RPFWORK and RPFWORK2 with RPFDAIR. *
+*                       Free the EDIT workspace and other areas.      *
+*                       Un-allocate all the data sets with IKJDAIR.   *
+*                                                                     *
+*        Change log:                                                  *
+*        Aug 26,2002 RPr: Free RPFVTC1 data set                    @rp1
+*        Sep 29,2002 Rpr: Free the retrieve buffer                 @rp2
+*        Oct 04,2002 RPr: Write retrieve records back              @rp4
+*        May 11,2003 RPr: Free RPFCTPST temporary data set         @rp5
+*        Dec 15,2018 Rpr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Jul 05,2019 Rpr: Write TSO commands to Profile.              *
+*        May 19,2021 Rpr: Invoke IKJDAIR for allocation/unallocation. *
+*        May 23,2021 Rpr: Allocation of Profile deleted. //RPFPROF    *
+*                         should be in the TSO logon procedure.       *
+*        May 06,2023 Rpr: RPFEND made re-entrant and reusable.        *
+*        Dec 23,2024 Rpr: Replace RPF profile cluster by a profile    *
+*                         partitioned data set with DD-name ISPPROF.  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFEND   CSECT
+RPFEND   AMODE 31                                                @rpa01
+RPFEND   RMODE 24                                                @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFEND,R12              Profile addressability
+         L     R11,0(,R1)              Pick-up RPFCOMM
+         USING COMMAREA,R11
+         GETMAIN R,LV=WORKL            Aquire working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1
+         USING WORKAREA,R13            Provide addressability
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         XC    DECBR(DECBLENR),DECBR
+         XC    READBUF,READBUF
+         MVC   RPFPROF,MDLPROF         DCB to working storage
+         MVC   BLDLLIST(4),=X'0001000E' Obtain 1 member
+         MVC   CLEAR,=X'2700C21140401D4013' Clear screen string
+         MVC   MSG3TXT,MODELTXT        Move text constants
+         ST    R11,PARM                Save address of RPFCOMM
+         L     R2,COMMCPPL             Our CPPL
+         LA    R1,RPFDAPL              DAPL for IKJDAIR
+         USING CPPL,R2
+         USING DAPL,R1
+         MVC   DAPLUPT(4),CPPLUPT      Populate DAIR Parameter list
+         MVC   DAPLECT(4),CPPLECT
+         LA    R0,ECB
+         ST    R0,DAPLECB              Set A(ECB) in DAPL
+         MVC   DAPLPSCB(4),CPPLPSCB
+         LA    R15,RPFD18              Unalloc.   parameter block
+         ST    R15,DAPLDAPB
+         DROP  R1,R2                   DAPL and CPPL
+         TM    COMMFLG1,$COMNODB       No profiles read?
+         BNZ   RETURN                  Yes: cleanup other stuff
+         MVI   COMOPN,128              The first and last DCB
+         OPEN  RPFPROF,MF=(E,COMOPN)
+         TM    RPFPROF+DCBOFLGS-IHADCB,DCBOFOPN  Does the OPEN succeed?
+         BO    OPENOK                  Yes: carry on:
+         B     ERR6                    No: exit
+OPENOK   DS    0H
+         LH    R0,RPFPROF+DCBBLKSI-IHADCB Obtain block size
+         ST    R0,BLKSIZE              And save for later use
+         L     R0,=A(12000)            About 2X largest profile member
+         ST    R0,BUFLV                Save
+         CLC   BLKSIZE,BUFLV           Is BLKSIZE larger?
+         BL    *+10                    No:
+         MVC   BUFLV,BLKSIZE
+         L     R0,BUFLV                Pickup the length
+         GETMAIN R,LV=(0)              Room for @RPFPROF buffer
+         LR    R8,R1                   Base for buffer
+         ST    R8,READBUF              Save for FREEMAIN
+         USING DBAREA,R8               Provide addressability
+         MVC   BLDLNAME,=CL8'@RPFPROF' Member name
+         BLDL  RPFPROF,BLDLLIST        Try to find the member
+         LTR   R15,R15                 Member found?
+         BNZ   PROF003                 No: close and ignore
+         RPFSA24                       Enter addressing mode 24
+         FIND  RPFPROF,TTR,C           Position at beginning of member
+         LR    R2,R8                   I/O buffer
+         XR    R3,R3
+PROF002  DS    0H
+         READ  DECBR,SF,RPFPROF,(2),'S',MF=E read a block
+         CHECK DECBR                   and wait for completion
+         L     R14,BLKSIZE             BLKSIZE at time of read
+         L     R1,DECBR+16             Status area address
+         SH    R14,14(R1)              Subtract residual count
+         LA    R3,0(R14,R3)            Add number of read bytes
+         C     R3,=A(DBLEN)            All records read?
+         BNL   PROF003                 Yes: done
+         LA    R2,0(R14,R2)            Next portion
+         B     PROF002                 Read next part
+PROF003  DS    0H
+         RPFSA31                       Restore addressing mode
+         MVI   COMCLS,128              The first and last DCB
+         CLOSE RPFPROF,MF=(E,COMCLS)
+         MVC   DBDSNLI(250),COMMEDS1   Move the
+         MVC   DBDSNLI+250(166),COMMEDS1+250    data set list
+         MVC   DBPFX,COMMPFX           Save default PREFIX
+         LR    R1,R8                   I/O buffer
+         L     R0,=A(DBLEN)            Length
+         MVC   BLDLNAME,=CL8'@RPFPROF' Member name
+         BAL   R14,PROFUPD             Update profile member @RPFPROF
+*
+*        Write the EDIT history command buffer on the Profile PDS
+*        with member name @RPFRTRV.
+*        The command buffer is 4880 bytes.
+*
+         L     R1,CRETRIEV             Point to RETRIEVE buffer
+         L     R0,=A(4880)             Length
+         MVC   BLDLNAME,=CL8'@RPFRTRV' Member name
+         BAL   R14,PROFUPD             Update profile member @RPFRTRV
+*
+*        Write the TSO commands buffer to ISPPROF member @RPFTSO.
+*
+         L     R1,COMTSOCM             Point to TSO commands buffer
+         LA    R0,1600                 Length of command buffer
+         MVC   BLDLNAME,=CL8'@RPFTSO'  Member name
+         BAL   R14,PROFUPD             Update profile member @RPFTSO
+         B     RETURN                  Return to TSO TMP
+ERR4     MVC   MSG3,ERR4TXT            Msg: Workspace not freed
+         B     RETURN
+ERR6     MVC   MSG3,ERR6TXT            Msg: open error profile
+RETURN   DS    0H
+         TM    COMMFLG2,$COMENQD       Any ENQ's outstanding?
+         BNO   RETURN1                 No: allright
+         LA    R3,COMMQN
+         LA    R4,COMMRN
+         DEQ   ((3),(4),52,SYSTEMS),RET=HAVE
+         NI    COMMFLG2,255-$COMENQD   Turn off flag
+RETURN1  DS    0H
+         MVC   USERID3(7),COMMUSER     TSO userid from RPFCOMM
+         OI    COMSTIME+3,X'0F'        Clear sign
+         MVC   STIME3(10),PATT1
+         ED    STIME3(10),COMSTIME     Start time in screen
+         OI    COMTTIME+3,X'0F'        Clear sign
+         MVC   TTIME3(10),PATT1        Stop time in screen
+         ED    TTIME3(10),COMTTIME     Clear sign
+         MVC   CLEAR+1(1),COMMCMD        Move EW or EWA
+         LA    R1,CLEAR                Area address
+         LA    R0,L'CLEAR              Length
+         ICM   R1,8,=B'00000011'       Indicate TPUT FULLSCR
+         TPUT  (1),(0),R               Clear screen
+         AIF   (&SVS).SVS1
+         STLINENO LINE=1,MODE=OFF      Cursor at line 1 and FULLSCR off
+.SVS1    ANOP
+*
+*        Unallocate the temporary data sets RPFEDT1, RPFVTC1,
+*        RPFCTPST with IKJDAIR.
+*
+         XC    RPFD18,RPFD18           Clear parameter block
+         LA    R3,RPFD18               Point to unallocation parm blk
+         USING DAPB18,R3               Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'RPFEDT1'   DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         BAL   R5,CALLTS               Unallocate
+         MVC   DA18DDN,=CL8'RPFCTPST'  DDNAME to unallocate
+         BAL   R5,CALLTS               Unallocate
+         MVC   DA18DDN,=CL8'RPFVTC1'   DDNAME to unallocate
+         BAL   R5,CALLTS               Unallocate
+         DROP  R3                      DAPB18
+         NI    COMMFLG1,255-$COMMALC   Tell RPFDAIR to unallocate
+         L     R15,EPDAIR              Entry point RPFDAIR
+         LA    R1,PARM                 Parm address of RPFCOMM
+         CALL  (15)                    Execute
+         TM    COMMFLG2,$COMNOGO       No workspace GETMAINed?
+         BNZ   ERR4                    Yes: tell programmer
+         L     R1,COMWSTRT             Start addess work space
+         L     R2,COMWRKLN             Length of work space
+         AIF   (&SVS).SVS2
+         FREEMAIN RC,LV=(2),A=(1)      Get rid of it
+         AGO   .NOSVS2
+.SVS2    ANOP
+         FREEMAIN R,LV=(2),A=(1)       Get rid of it
+.NOSVS2  ANOP
+         LTR   R15,R15
+         BZ    RETURN2
+RETURN2  DS    0H
+         ICM   R2,15,READBUF           Is the I/O buffer getmained?
+         BZ    RETURN3                 No.
+         L     R0,BUFLV                Pickup the length
+         FREEMAIN R,LV=(0),A=(2)       Get rid of I/O buffer
+RETURN3  DS    0H
+         L     R2,COMMSCR              Load screen address
+         L     R3,COMMSCLN             Length of screen buffer
+         FREEMAIN R,LV=(3),A=(2)       Release storage for TGET screens
+         L     R2,CRETRIEV             Load EDIT retrieve buffer   @rp2
+         FREEMAIN R,LV=4880,A=(2)      Get rid of this area        @rp2
+         L     R2,COMTSOCM             Load TSO commands buffer
+         FREEMAIN R,LV=1600,A=(2)      Get rid of this area
+         LA    R1,MSG3TXT              Message address
+         LA    R0,L'MSG3TXT            Length
+         TPUT  (1),(0),R               Msg: RPF start xxx, END yyy
+RETURN4  LR    R2,R13                  Working storage pointer
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(2)     Release working storage
+         RETURN (14,12),RC=0           Return to RPFMAIN
+         TITLE 'Invoke IKJDAIR'
+CALLTS   DS    0H
+         XC    ECB,ECB                 Clear ECB
+         CALLTSSR EP=IKJDAIR,MF=(E,RPFDAPL)
+         BR    R5
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:   PROFUPD                                           *
+*        Function:  Write a member on the Profile partitioned         *
+*                   data set with DD-name = ISPPROF                   *
+*                                                                     *
+*        Input:     R1, address of I/O area to read                   *
+*                   R0, length of I/O area.                           *
+*                   BLDLNAME, member name @RPFPROF, @RPFRTRV, @RPFTSO *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+PROFUPD  DS    0H
+         ST    R14,R14PROFU            Save return register
+         LR    R2,R1                   Area address
+         LR    R3,R0                   Area length
+         L     R4,BLKSIZE              Max blocksize
+         MVI   COMOPN,128
+         OPEN  (RPFPROF,(UPDAT)),MF=(E,COMCLS)  Re-open
+         L     R0,BLKSIZE              Current BLKSIZE
+         GETMAIN R,LV=(0)
+         LR    R5,R1                   Save address temporary buffer
+         RPFSA24                       Enter AMODE24
+         BLDL  RPFPROF,BLDLLIST        Try to find the member
+         LTR   R15,R15                 Member found?
+         BNZ   WRITE3                  Exit if not found
+         FIND  RPFPROF,TTR,C           Point to member to write
+WRITE1   DS    0H
+         READ  DECBR,SF,RPFPROF,(5),'S',MF=E Read a block
+         CHECK DECBR                   and wait for completion
+         WRITE DECBR,SF,RPFPROF,(2),'S',MF=E write the block
+         CHECK DECBR                   and wait for completion
+         SR    R3,R4                   Subtract BLKSIZE
+         AR    R2,R4                   Next in profile
+         LTR   R3,R3                   More to read?
+         BP    WRITE1                  Yes.
+WRITE3   RPFSA31                       Restore addressing mode
+         MVI   COMOPN,128              The first and last DCB
+         CLOSE RPFPROF,MF=(E,COMOPN)
+         FREEMAIN R,LV=(4),A=(5)       Get rid of temporary buffer
+         L     R14,R14PROFU            Restore return register
+         BR    R14                     Return
+*
+         TITLE 'Static fields'
+ERR4TXT  DC    CL25'      Workspace not freed'
+ERR6TXT  DC    CL25'   Open error RPF profile'
+PATT1    DC    X'402021207A20207A2020'
+MODELTXT DS    0CL79
+         DC    CL7'Userid='
+         DC    CL7' '
+         DC    CL11',RPF Start:'
+         DC    CL10' '
+         DC    CL9',RPF End:'
+         DC    CL10' '
+         DC    CL25' '
+MDLPROF  DCB   DDNAME=ISPPROF,LRECL=80,MACRF=(R,W),DSORG=PO
+MDLPROFL EQU   *-MDLPROF
+         LTORG ,
+         DROP
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Our save area
+PARM     DS    F                       Contains address of RPFCOMM
+ECB      DS    F                       IKJDAIR ECB
+R14PROFU DS    F                       Save register 14, PROFUPD
+RPFDAPL  DS    5F                      DAIR parameter list
+RPFPROF  DS    CL(MDLPROFL)            RPF profile DCB
+READBUF  DS    F                       Contains address of I/O buffer
+BUFLV    DS    F                       Length I/O buffer
+BLKSIZE  DS    F                       Blksize of RPFPROF
+DECBR    READ  DECB2,SF,0,0,'S',MF=L
+DECBLENR EQU   *-DECBR
+*
+BLDLLIST DS    0F                      Align on fullword (BLDL)
+         DC    AL2(1)                  One entry
+         DC    AL2(14)                 Length of data
+BLDLNAME DS    CL8                     Name of profile member
+TTR      DC    XL3'00'                 TTR
+KZC      DC    XL3'00'                 KZC
+*
+RPFD18   DS    CL40                    DAIR unallocation parm block
+CLEAR    DS    XL9                     Clear screen string
+*
+MSG3TXT  DS    0CL79                   RPF END message.
+         DS    CL7
+USERID3  DS    CL7
+         DS    CL11
+STIME3   DS    CL10
+         DS    CL9
+TTIME3   DS    CL10
+MSG3     DS    CL25
+*
+WORKL    EQU   *-WORKAREA              Length of working storage
+         PRINT NOGEN
+         CVT   DSECT=YES,LIST=NO
+         DCBD  DSORG=PO,DEVD=DA
+         IKJCPPL
+         IKJDAPL                       DAIR parameter list
+         IKJDAP08                      DAIR allocation parm block
+         IKJDAP18                      DAIR unallocation parm block
+         PRINT GEN
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+         TITLE 'RPFPROF DSECT'
+DBAREA   RPFPROF
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12                      Base register
+R13      EQU   13                      Address of working storage
+R14      EQU   14
+R15      EQU   15
+         END

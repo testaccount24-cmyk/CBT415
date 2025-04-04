@@ -1,0 +1,56 @@
+)F   FUNCTION -
+   The RPFED command executes the RPF editor from the TSO
+   command line, executes the RPF Browse function,
+   execute the RPF member list (PDS maintenance) function,
+   or executes the RESET ISPF stats function from the
+   TSO command line depending of the command verb name.
+   RPFED executes the EDIT function;
+   RPFBR executes the Browse function;
+   RPFPD executes the PDS maintenance function.
+   RPFST executes the RESET ISPF stats function.
+)X  SYNTAX -
+    RPFED     'data set name'
+              VOLUME('volume serial')
+              LINES('number of lines')
+    RPFBR     'data set name'
+              VOLUME('volume serial')
+              LINES('number of lines')
+    RPFPD     'data set name'
+              VOLUME('volume serial')
+              LINES('number of lines')
+    RPFST     'data set name'
+              VOLUME('volume serial')
+              LINES('number of lines')
+              NEWUSER('new userid')
+              VERSION(nnnn)
+    DEFAULTS - LINES(7000)
+               NEWUSER(our TSO userid)
+               VERSION(0100)
+)O  OPERANDS -
+))'data set name'
+             - Specifies the DSNAME to be edited, browsed or
+               member list. This operand is required.
+               'data set name' also can be 'dataset(member)'
+               The normal TSO rules are in effect. Non-quoted
+               data set names will be prefixed with &PREFIX.
+))VOLUME('volser')   )
+              - Specifies the volume serial if the data set
+                is not cataloged or to proces a data set from
+                a specific volume.
+))LINES('number')
+              - Specifies a number of lines to be edited or
+                maximum members to display.
+                LINES is a value between 200 and 50,000 lines.
+                If the command processor runs in 31 bit mode,
+                the number of lines will be multiplied by 10.
+))NEWUSER('new userid')
+              - Specifies the character string to be placed
+                in the member directory entry in the RPF/ISPF
+                library. If omitted, the TSO userid will be used.
+))VERSION('number')
+              - Specifies the version and modification number
+                to be placed in the member directory entry in
+                the RPF/ISPF library. Bytes 0 and 1 are the ISPF
+                version number and bytes 2 and 3 are the ISPF
+                modification level. If the keyword VERSION is
+                omitted, value 0100 will be used.

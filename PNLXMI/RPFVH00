@@ -1,0 +1,42 @@
+)ATTR
+/* Panel: RPFEDH0V. Panel for MVS38J systems              */
+ + TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(GREEN)
+ % TYPE(TEXT)   INTENS(HIGH) SKIP(ON)    COLOR(WHITE)
+ ¬ TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(YELLOW)
+ _ TYPE(INPUT)  INTENS(LOW)  JUST(LEFT)  COLOR(TURQ)
+ # TYPE(INPUT)  INTENS(LOW)  JUST(ASIS)
+ ~ TYPE(INPUT)  INTENS(HIGH) JUST(LEFT)
+ ! TYPE(INPUT)  INTENS(HIGH) JUST(RIGHT)
+ { TYPE(OUTPUT) INTENS(LOW)  JUST(LEFT)
+ } TYPE(OUTPUT) INTENS(LOW)  JUST(RIGHT)
+ Ý TYPE(OUTPUT) INTENS(HIGH) JUST(LEFT)
+ ¨ TYPE(OUTPUT) INTENS(HIGH) JUST(RIGHT)
+ ¢ TYPE(TEXT)  INTENS(HIGH) COLOR(YELLOW)
+)BODY EXPAND(//)
+%TUTORIAL -----------------  RPFV - DSLIST HELP PANEL  ----/-/------ TUTORIAL
+%OPTION  ===>_ZCMD
+%
+%                         RPFV command processor
++
++ ¢RPFV +Presents an RPF data set list on your screen.
++        You can select th following options.
++
++        %PREFIX+Specify a data set prefix of max. 17 characters
++                E.g. SYS1, SYS1.ISP or e.g. SYS1.L
++                PREFIX is initially set to your TSO userid if
++                not specified.
++                If you erase PREFIX, VOLUME should be specified
++
++        %VOLUME+Specify a DASD volume or leave blank.
++                If both PREFIX and VOLUME are specified,
++                RPFV selects the data sets on the specified
++                volume.
++                If PREFIX is blank and VOLUME specified, all
++                data sets on the specified volume are selected.
++
++Enter%END+command to return.
+)INIT
+ &ZCMD = ' '
+ &ZHTOP = RPFVH00
+)PROC
+)END

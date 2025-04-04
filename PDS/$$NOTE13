@@ -1,0 +1,65 @@
+    RPF 1.9.4
+Subject:  RPF 1.9.4
+From:     <robprins2@kpnmail.nl>
+Date:     3/14/2023, 10:44 AM
+To:       "Sam Golob" <sbgolob@cbttape.org>
+
+Dear Sam,
+
+Finally, the new release of RPF.
+
+RPF 1.9.4. has a lot of modifications and some fixes.
+
+See the release notes below:
+
+RPFED and RPFV Maximum LINES fixed from 5,000 to 50,000
+RPFTEST Module made re-entrant and reusable.
+RPFSAVE Fix crash after ABENDx37 during CLOSE. Process ISPF stats
+     extended section if number  of lines, number of initial lines
+     and/or  number of modified lines exceeds 64k lines.
+RPFVTOC1 Use full length dataset names in the DSLIST screen, if
+     the screen width is 98 or more. Line command 'S' (Info-S) added
+     in DSLIST.   ABEND001 fixed with 'A' or 'I' line command in
+     DSLIST if an I/O error was detected.
+RPFVTOC Fixed issue if entering '3.4' and an error occurs, the
+     message was not displayed.
+RPFARCH Increase space ARCHDSN to avoid x37 abend.
+     EDIT/BROWSE/DELETE error fixed if GROUP, SUBGROUP and/or TYPE are
+     omitted.
+RPFARSVE Add extra comma's in Archiver UNLOAD statements if
+     GROUP, SUBGROUP and/or TYPE are omitted.
+RPFTSO Do not reset APF authorization if running authorized and
+     TSO command has been link edited with AC=1.
+RPFBRO Process standard and extended ISPF stats and increase
+     length counters in print headers.
+RPFPDS Primary- and line command 'S' added in PDS maintenance to
+     browse member (option 3.1). Process ISPF stats extended section
+     if number  of lines, number of initial lines and/or  number of
+     modified lines exceeds 64k lines.
+RPFMVCPY Process ISPF stats extended section if number  of lines,
+     number of initial lines and/or  number of modified lines exceeds
+     64k lines.
+RPFHCPY Some issues fixed, allow non card image data and module
+     made re-entrant and re-usable
+RPFOUT Try to run output processor in MVS38J if not APF
+     authorized.
+RPFMAIN Terminal name in main menu.
+RPFVTOC Indexed VTOC's are now supported in MVS/XA and MVS/ESA
+     with DF/DS or DFP installed.
+RPFOPER Supports now MVS38J, MVS/XA and MVS/ESA and up.
+
+Would you like to post this new release?
+
+Thank you very much in advance,
+
+All the best of everything to you and your family.
+
+Met vriendelijke groet/With kind regards
+Rob Prins
+
+Haremakers 54, 1531 LC Wormer
+Ploegdijk 2 H633, 7241 SC Lochem
+T 06-46312299
+E robprins2@kpnmail.nl
+www.prince-webdesign.nl
+

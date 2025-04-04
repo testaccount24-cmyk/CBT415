@@ -1,0 +1,111 @@
+         TITLE 'Parse data set names'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  DSNPARS                                            *
+*                  This routine is a CSECT in RPFMAIN and in          *
+*                  the command processors RPFED and RPFV.             *
+*                  In the ISPF processor RPFASM00, DSNPARS is also    *
+*                  present.                                           *
+*                  This code is added with a COPY DSNPARS statement.  *
+*                                                                     *
+*        Function: Get the TSO prefix and the prefix length from      *
+*                  the User Profile Table (IKJUPT).                   *
+*                  Check if a dataset name is quoted or not.          *
+*                  If the data set is quoted, remove the quotes in    *
+*                  the output and add an end quote in the input       *
+*                  if not present.                                    *
+*                  If the data is not quoted, add the TSO prefix      *
+*                  in the data set name and append with the data set  *
+*                  name from the input. That results in a fully       *
+*                  qualified name.                                    *
+*                                                                     *
+*        Input:    Register 1: an address of 3 fullwords.             *
+*                  word 1 = address of RPFCOMM                        *
+*                  word 2 = address of a 46 byte area containing the  *
+*                           unparsed data set name.                   *
+*                  word 3 = address of a 44 byte area to receive      *
+*                           the parsed fully qualified data set       *
+*                           name without quotes                       *
+*                                                                     *
+*        Output:   see above                                          *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+DSNPARS  CSECT
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING DSNPARS,R12             Provide addressability
+         L     R11,0(,R1)              Pickup RPFCOMM area
+         LM    R8,R9,4(R1)             Data set name to parse
+         USING COMMAREA,R11            Provide addressability
+         GETMAIN R,LV=72               Getmain some working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1
+*
+         AIF   (&SVS).DSNPS
+         L     R1,COMMCPPL             Our CPPL address
+         L     R1,4(,R1)               Point to (IKJ)UPT
+         USING UPT,R1                  Make it addressable
+         MVC   COMMPREF(7),UPTPREFX    Move TSO prefix
+         MVI   COMMPREF+7,X'40'
+         MVC   COMMPRFL,UPTPREFL       and actual length
+         AIF   (NOT &OS390).NO8CH
+         CLC   =C'>7BYTES',COMMPREF    Do we have a >7 bytes prefix?
+         BNE   STARTDS1                No: we have a good prefix
+         MVC   COMMPREF,UPTPREF8       8 bytes prefix
+         MVC   COMMPRFL,UPTPRF8L       8 bytes length
+STARTDS1 DS    0H
+.NO8CH   ANOP
+         DROP  R1                      IKJUPT
+         AGO   .NDSNPS
+.DSNPS   ANOP
+         MVC   COMMPREF,COMMUSER       TSO prefix = Userid in SVS
+         MVC   COMMPRFL,COMMUSRL       Length of prefix
+.NDSNPS  ANOP
+         MVI   0(R9),C' '              Blank ....
+         MVC   1(43,R9),0(R9)                result field
+         CLI   0(R8),X'7D'             Quote at the start?
+         BE    DSNQUOT                 No prefix with TSO prefix
+         CLI   0(R8),X'40'             Blank at the start?
+         BE    DSNDONE                 Yes: Nothing to parse
+         XR    R1,R1                   Clear register
+         ICM   R1,1,COMMPRFL           Length of prefix
+         BNZ   DSNCONT                 Specified: carry on
+         MVC   0(44,R9),0(R8)          Copy DSN from input
+         B     DSNDONE                 Exit
+DSNCONT  LR    R14,R1                  Copy to register 14
+         BCTR  R1,0                    Minus 1 for EX
+         EX    R1,DSNEX1               Move prefix
+         LA    R1,44                   Max length of data set name
+         SR    R1,R14                  Minus length of TSO prefix
+         BCTR  R1,0                    Minus 1 for for the '.'
+         BCTR  R1,0                    Minus 1 for EX
+         LR    R15,R9                  Point to 44 byte area
+         LA    R15,0(R14,R15)          Point after prefix
+         MVI   0(R15),C'.'             Period
+         LA    R15,1(,R15)             Point after period
+         EX    R1,DSNEX2               Move reset of data set name
+         B     DSNDONE
+DSNEX1   MVC   0(0,R9),COMMPREF        << executed >>
+DSNEX2   MVC   0(0,R15),0(R8)          << executed >>
+DSNQUOT  DS    0H
+         MVC   0(43,R9),1(R8)          Data set name without start quot
+         TR    0(44,R9),UNQUOTE        Remove end quote if present
+         TRT   0(46,R8),COMSKPNS       Investigate if end quote present
+         BCTR  R1,0                    Test if quote already present
+         CLI   0(R1),X'7D'             is it there?
+         BE    DSNDONE                 Yes: ready
+         MVI   1(R1),X'7D'             Else set ending quote
+DSNDONE  DS    0H
+         LR    R3,R13                  Pick our savearea
+         L     R13,4(,R13)             Callers save area
+         FREEMAIN R,LV=72,A=(3)
+         RETURN (14,12),RC=0           Return
+*
+UNQUOTE  DC    256AL1(*-UNQUOTE)       Translate table to remove quote
+         ORG   UNQUOTE+X'7D'           Will replace the ...
+         DC    X'40'                   quote into a space
+         ORG   ,
+         LTORG  ,
+         DROP
+*

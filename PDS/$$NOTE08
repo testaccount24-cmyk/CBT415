@@ -1,0 +1,118 @@
+Subject:  RPF189
+From:     "Rob Prins" <robprins2@kpnmail.nl>
+Date:     7/1/2021, 1:41 PM
+To:       "Sam Golob" <sbgolob@cbttape.org>
+
+Dear Sam,
+
+RPF189 is ready. This version contains lots of logic changes.
+
+There are 15 modules reentrant now.
+
+The release notes:
+
+2021-05-03 RPFEDIT  Warning message issued if CANCEL primary command
+                    is given with outstanding changes.
+
+2021-05-05 RPFED    ISPF panel library added to invoke RPF functions
+                    in ISPF.
+
+2021-05-06 RPFOUT   Option 0,1,2,3,4 changed into options L,D,P,R,'blank'
+                    to equalize with ISPF.
+
+2021-05-13 RPFEDIT  Prohibit 'COBOL ON' primary command if RECFM=V(B).
+                    AUTOSAVE ON/OFF primary command added and
+                    add AUTOSAVE in the PROFILE line.
+                    FORCE operand of SAVE deleted.
+
+2021-05-14 RPFBRO   F x'hhhh...' or FIND x'hhhh..' supported.
+                    Fix not found matches of 'string' in HEX mode
+                    with 'F' primary command.
+
+2021-05-16 RPFDAIR  Do not fill in the volume in the panel in EDIT,
+                    BROWSE, Library (PDS), RESET, SEARCH and MOVE/COPY
+                    if a cataloged dataset is used.
+
+           RPFVTOC1 If only LEVEL is specified do not fill in volume
+                    in EDIT, BROWSE and member list function (opt 3.4)
+
+2021-05-21 RPFBRO   SUBMIT function moved to RPFSUB
+
+           RPF      Dynamic allocation of files for the RPF basic
+                    functions replaced by IKJDAIR calls.
+
+2021-05-22 RPFASM00 Treat this ISPF foreground assembler monitor as
+                    a 'real' TSO command processor.
+
+           RPFHELP  The HELP function read the members RPFHELP1-5
+                    from the //SYSHELP concatenation.
+
+2021-05-23 RPFINIT  Use of SYS1.PARMLIB(RPFKEY00) deleted.
+                    Dynamic allocation of profile cluster deleted.
+                    Default EDIT workspace size increased to 7,000 lines.
+
+           RPFDEF   Dynamic allocation of profile cluster deleted.
+
+           RPFEND   Dynamic allocation of profile cluster deleted.
+                    The profile cluster is now in //RPFPROF DD statement.
+
+2021-05-24 RPFLISTC Dynamic allocation of utility datasets replaced by
+                    IKJDAIR calls.
+
+2021-05-25 RPFSRCH  Dynamic allocation of PRINT output replaced by
+                    IKJDAIR call.
+
+2021-05-26 RPFMVCPY All dynamic allocations replaced by IKJDAIR calls.
+
+           RPFVTOC  After change dataset prefix, do not reset to default
+                    if calling afterwards during the RPF session.
+
+2021-05-28 RPFED    Minimum LINES = 200, Maximum = 50,000 lines.
+                    If running AMODE 31, min = 2,000 max = 500,000
+
+2021-05-29 RPFDEF   SUBMIT=TSO/RPF default removed. SUBMIT is allways
+                    TSO (TSO command processor SUBMIT is invoked).
+
+2021-05-30 RPFMAIN  Options possible during startup (e.g. RPF 3.4)
+
+2021-06-02 RPFASM00 Fix ABEND0C1 if entering a TSO command in browse.
+                    Clear the TSO buffers upon exit.
+
+2021-06-03 RPF      Use ISO date and time in the RPF build and use
+                    ISO dates in the HELP release notes.
+                    Use ISO dates in PDS, MOVE/COPY and Archiver.
+                    All recovery routines examined and updated.
+
+2021-06-10 RPFOUT   Test if output processor is APF authorized.
+
+2021-06-11 RPFEDIT  ABEND0C4 fixed if first the CUT command given and
+                    afterwards the CC line commands.
+
+2021-06-21 RPFDAIR  Give RC=40 if BLDL fails with RC=8 (I/O error)
+
+2021-06-22 RPFSAVE  Fix abend B14-10 after error in EDIT APPEND
+                    primary command, like an I/O error.
+
+2021-06-27 RPF      RPFMAIN, RPFC3270, RPFCHNG, RPFCNVDT, RPFDAIR,
+                    RPFDATAL, RPFED, RPFEDIT, RPFEDITL, RPFFILL,
+                    RPFLISTC, RPFPFK, RPFSAVE, RPFSUB
+                    and RPFUTIL made reentrant.
+                    2 storage constraints fixed by adding FREEPOOL's.
+
+2021-07-01 Release  Version 1, release 8.9 available.
+
+Would you like to post the enclosed file?
+
+Thanks in advance,
+
+All the best of everything to you and your family,
+
+Met vriendelijke groet/With kind regards
+Rob Prins
+
+Haremakers 54, 1531 LC Wormer
+Ploegdijk 2 H633, 7241 SC Lochem
+T 06-46312299
+E robprins2@kpnmail.nl
+www.prince-webdesign.nl
+

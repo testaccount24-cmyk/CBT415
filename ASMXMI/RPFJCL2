@@ -1,0 +1,1322 @@
+         TITLE 'JCL syntax checker, subroutines'
+         AMODE 31
+         RMODE 24
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:   RPFJCL2                                            *
+*                                                                     *
+*        Function: Sub routines to check the syntax of a              *
+*                  JCL-stream.                                        *
+*                  RPFJCL2 should be linked with RPFJCL1              *
+*                                                                     *
+*        Called by: RPFJCL (RPFJCL1)                                  *
+*                                                                     *
+*        Note:     Register 12 always points to the characters        *
+*                  in the EDIT workspace, which should be tested.     *
+*                  Register 11 points to the RPFCOMM control block.   *
+*                  Register 9 is the base register of the CSECT's.    *
+*                                                                     *
+*        By      : A.J.A.LEEMREIZE / Rob Prins                        *
+*        Date    : 19830422 / 20230129                                *
+*                                                                     *
+*-------------------------------------------(C)-2025 Skybird Systems -*
+*
+*        Register equates
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3                       Address of JCLCOMM
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9                       Base register of CSECT's
+R10      EQU   10                      Address of EDIT workspace entry
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12
+R13      EQU   13                      Address of save area
+R14      EQU   14
+R15      EQU   15
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Test balance of parenthesis (brackets) and apostrophes       *
+*                                                                     *
+*---------------------------------------------------------------------*
+BALANCE  CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING BALANCE,R9              Provide addressability
+         LA    R14,BALANSAV            Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new save area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VBALAN
+         USING COMMON,R3               RPFJCL commom area (JCLCOMM)
+BAL020   DS    0H
+         CLI   0(R12),C'('             ( present?
+         BNE   BAL030                  No: branch
+         AP    BRFLAG,ONE              Add presence of '('
+         B     BAL080
+BAL030   DS    0H
+         CLI   0(R12),C')'             ) present?
+         BNE   BAL040                  No: branch
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+         B     BAL080
+BAL040   DS    0H
+         CLI   0(R12),C''''            ' present?
+         BNE   BAL070                  No: branch
+BAL050   DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    BAL100                  Yes: branch
+         CLC   0(2,R12),=C''''''       '' present?
+         BNE   BAL060                  No: branch
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    BAL100                  Yes: Unbalanced apostrophe
+         B     BAL050
+BAL060   DS    0H
+         CLI   0(R12),C''''            ' (quote) present?
+         BNE   BAL050                  No: branch
+         B     BAL080                  Yes: branch
+BAL070   DS    0H
+         CLI   0(R12),C' '             End of statement?
+         BE    BAL090                  Yes: branch
+         CLI   0(R12),C','             Delimiter?
+         BNE   BAL080                  No: branch
+         CALL  DELIMIT                 Process delimiter
+         B     *+4(R15)                Initiate branchlist
+         B     BAL020                  OK
+         B     BAL090                  End of BALANCE routine
+BAL080   DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line
+         BNE   BAL020                  No: branch
+BAL090   DS    0H
+         CP    BRFLAG,ZERO             Are the brackets balanced?
+         BE    BALOK                   Yes: good
+         LA    R6,ERRPAREN             Else error
+         CALL  ERRMESS
+         B     BALERR
+BAL100   DS    0H
+         LA    R6,ERRAPOS              Error message
+         CALL  ERRMESS
+         B     BALERR
+BALOK    DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R12,12(R13)
+         XR    R15,R15                 Rc = 0
+         BR    R14
+BALERR   DS    0H
+         ZAP   BRFLAG,ZERO             Reset flag
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R9,12(R13)
+         L     R11,64(,R13)
+         LA    R15,4                   Error
+         BR    R14
+BALANSAV DC    18F'0'                  Save area
+VBALAN   DC    V(COMMON)
+         LTORG ,
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Test all the DCB attributes.                                 *
+*                                                                     *
+*        Return codes: 00 - all parameters checked and good.          *
+*                           register 11 points after the DCB parm.    *
+*                      04 - errors detected, register 11 unchanged.   *
+*                                                                     *
+*---------------------------------------------------------------------*
+DCBATTR  CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING DCBATTR,R9              Provide addressability
+         LA    R14,DCBATSAV            Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VDCBA
+         USING COMMON,R3               JCLCOMM area
+DCBA000  DS    0H
+         CLC   0(6,R12),=C'BFALN='     BFALN= ?
+         BNE   DCBA010                 No: branch
+         MVI   DCBBFALN,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after BFALN=
+         B     DCBANXT                 Next attribute
+DCBA010  DS    0H
+         CLC   0(6,R12),=C'BFTEK='     BFTEK= ?
+         BNE   DCBA020                 No: branch
+         MVI   DCBBFTEK,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after BFTEK=
+         B     DCBANXT                 Next attribute
+DCBA020  DS    0H
+         CLC   0(8,R12),=C'BLKSIZE='   BLKSIZE= ?
+         BNE   DCBA030                 No: branch
+         MVI   DCBBLKSZ,X'FF'          Set flag
+         LA    R12,8(,R12)             Point after BLKSIZE=
+         B     DCBANXT                 Next attribute
+DCBA030  DS    0H
+         CLC   0(6,R12),=C'BUFIN='     BUFIN= ?
+         BNE   DCBA040                 No: branch
+         MVI   DCBBUFIN,X'FF'          Set flag
+         LA    R12,6(,R12)             Increase pointer
+         B     DCBANXT                 Next attribute
+DCBA040  DS    0H
+         CLC   0(5,R12),=C'BUFL='      BUFL= ?
+         BNE   DCBA050                 No: branch
+         MVI   DCBBUFL,X'FF'           Set flag
+         LA    R12,5(,R12)             Point after BUFL=
+         B     DCBANXT                 Next attribute
+DCBA050  DS    0H
+         CLC   0(7,R12),=C'BUFMAX='    BUFMAX= ?
+         BNE   DCBA060                 No: branch
+         MVI   DCBBUFMX,X'FF'          Set flag
+         LA    R12,7(,R12)             Point affter BUFMAX=
+         B     DCBANXT                 Next attribute
+DCBA060  DS    0H
+         CLC   0(6,R12),=C'BUFNO='     BUFNO= ?
+         BNE   DCBA070                 No: branch
+         MVI   DCBBUFNO,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after BUFNO=
+         B     DCBANXT                 Next attribute
+DCBA070  DS    0H
+         CLC   0(7,R12),=C'BUFOFF='    BUFOFF= ?
+         BNE   DCBA080                 No: branch
+         MVI   DCBBUFOF,X'FF'          Set flag
+         LA    R12,7(,R12)             Increase pointer
+         B     DCBANXT                 Next attribute
+DCBA080  DS    0H
+         CLC   0(7,R12),=C'BUFOUT='    BUFOUT= ?
+         BNE   DCBA090                 No: branch
+         MVI   DCBBUFUT,X'FF'          Set flag
+         LA    R12,7(,R12)             Point after BUFOUT=
+         B     DCBANXT                 Next attribute
+DCBA090  DS    0H
+         CLC   0(8,R12),=C'BUFSIZE='   BUFSIZE= ?
+         BNE   DCBA100                 No: branch
+         MVI   DCBBUFSZ,X'FF'          Set flag
+         LA    R12,8(,R12)             Point after BUFSIZE=
+         B     DCBANXT                 Next attribute
+DCBA100  DS    0H
+         CLC   0(5,R12),=C'CODE='      CODE= ?
+         BNE   DCBA110                 No: branch
+         MVI   DCBCODE,X'FF'           Set flag
+         LA    R12,5(,R12)             Point after CODE=
+         B     DCBANXT                 Next attribute
+DCBA110  DS    0H
+         CLC   0(5,R12),=C'CPRI='      CPRI= ?
+         BNE   DCBA120                 No: branch
+         MVI   DCBCPRI,X'FF'           Set flag
+         LA    R12,5(,R12)             Point after CPRI=
+         B     DCBANXT                 Test next attribute
+DCBA120  DS    0H
+         CLC   0(7,R12),=C'CYLOFL='    CYLOFL= ?
+         BNE   DCBA130                 No: branch
+         MVI   DCBCYLOF,X'FF'          Set flag
+         LA    R12,7(,R12)             Point after CYLOFL=
+         B     DCBANXT                 Next attribute
+DCBA130  DS    0H
+         CLC   0(4,R12),=C'DEN='       DEN= ?
+         BNE   DCBA140                 No: branch
+         MVI   DCBDEN,X'FF'            Set flag
+         LA    R12,4(,R12)             Point after DEN=
+         B     DCBANXT                 Next attribute
+DCBA140  DS    0H
+         CLC   0(7,R12),=C'DIAGNS='    DIAGNS= ?
+         BNE   DCBA150                 No: branch
+         MVI   DCBDIAGN,X'FF'          Set flag
+         LA    R12,7(,R12)             Increase pointer
+         B     DCBANXT                 Next attribute
+DCBA150  DS    0H
+         CLC   0(6,R12),=C'DSORG='     DSORG= ?
+         BNE   DCBA160                 No: branch
+         MVI   DCBDSORG,X'FF'          Set flag
+         LA    R12,6(,R12)             Increase pointer
+         B     DCBANXT                 Next attribute
+DCBA160  DS    0H
+         CLC   0(6,R12),=C'EROPT='     EROPT= ?
+         BNE   DCBA170                 No: branch
+         MVI   DCBEROPT,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after EROPT=
+         B     DCBANXT                 Next attribute
+DCBA170  DS    0H
+         CLC   0(5,R12),=C'FRID='      FRID= ?
+         BNE   DCBA180                 No: branch
+         MVI   DCBFRID,X'FF'           Set flag
+         LA    R12,5(,R12)             Point after FRID=
+         B     DCBANXT                 Next attribute
+DCBA180  DS    0H
+         CLC   0(5,R12),=C'FUNC='      FUNC= ?
+         BNE   DCBA190                 No: branch
+         MVI   DCBFUNC,X'FF'           Set flag
+         LA    R12,5(,R12)             Point after FUNC=
+         B     DCBANXT                 Next attribute
+DCBA190  DS    0H
+         CLC   0(5,R12),=C'GNCP='      GNCP= ?
+         BNE   DCBA200                 No: branch
+         MVI   DCBGNCP,X'FF'           Set flag
+         LA    R12,5(,R12)             Point after GNCP=
+         B     DCBANXT                 Next attribute
+DCBA200  DS    0H
+         CLC   0(6,R12),=C'INTVL='     INTVL= ?
+         BNE   DCBA210                 No: branch
+         MVI   DCBINTVL,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after INTVL=
+         B     DCBANXT                 Next attribute
+DCBA210  DS    0H
+         CLC   0(7,R12),=C'KEYLEN='    KEYLEN= ?
+         BNE   DCBA220                 No: branch
+         MVI   DCBKEYLN,X'FF'          Set flag
+         LA    R12,7(,R12)             Point after KEYLEN=
+         B     DCBANXT                 Next attribute
+DCBA220  DS    0H
+         CLC   0(6,R12),=C'LIMCT='     LIMCT= ?
+         BNE   DCBA230                 No: branch
+         MVI   DCBLIMCT,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after LIMCT=
+         B     DCBANXT                 Next attribute
+DCBA230  DS    0H
+         CLC   0(6,R12),=C'LRECL='     LRECL= ?
+         BNE   DCBA240                 No: branch
+         MVI   DCBLRECL,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after LRECL=
+         B     DCBANXT                 Next attribute
+DCBA240  DS    0H
+         CLC   0(5,R12),=C'MODE='      MODE= ?
+         BNE   DCBA250                 No: branch
+         MVI   DCBMODE,X'FF'           Set flag
+         LA    R12,5(,R12)             Point after MODE=
+         B     DCBANXT                 Next attribute
+DCBA250  DS    0H
+         CLC   0(4,R12),=C'NCP='       NCP= ?
+         BNE   DCBA260                 No: branch
+         MVI   DCBNCP,X'FF'            Set flag
+         LA    R12,4(,R12)             Point after NCP=
+         B     DCBANXT                 Next attribute
+DCBA260  DS    0H
+         CLC   0(4,R12),=C'NTM='       NTM= ?
+         BNE   DCBA270                 No: branch
+         MVI   DCBNTM,X'FF'            Set flag
+         LA    R12,4(,R12)             Point after NTM=
+         B     DCBANXT                 Next attribute
+DCBA270  DS    0H
+         CLC   0(6,R12),=C'OPTCD='     OPTCD= ?
+         BNE   DCBA280                 No: branch
+         MVI   DCBOPTCD,X'FF'          Set flag
+         LA    R12,6(,R12)             Pont after OPTCD=
+         B     DCBANXT                 Next attribute
+DCBA280  DS    0H
+         CLC   0(4,R12),=C'PCI='       PCI= ?
+         BNE   DCBA290                 No: branch
+         MVI   DCBPCI,X'FF'            Set flag
+         LA    R12,4(,R12)             Point after PCI=
+         B     DCBANXT                 Next attribute
+DCBA290  DS    0H
+         CLC   0(6,R12),=C'PRTSP='     PRTSP= ?
+         BNE   DCBA300                 No: branch
+         MVI   DCBPRTSP,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after PRTSP=
+         B     DCBANXT                 Next attribute
+DCBA300  DS    0H
+         CLC   0(6,R12),=C'RECFM='     RECFM= ?
+         BNE   DCBA310                 No: branch
+         MVI   DCBRECFM,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after RECFM=
+         B     DCBANXT                 Next attribute
+DCBA310  DS    0H
+         CLC   0(8,R12),=C'RESERVE='   RESERVE= ?
+         BNE   DCBA320                 No: branch
+         MVI   DCBRESER,X'FF'          Set flag
+         LA    R12,8(,R12)             Point after RESERVE=
+         B     DCBANXT                 Next attribute
+DCBA320  DS    0H
+         CLC   0(4,R12),=C'RKP='       RKP= (relative key position)?
+         BNE   DCBA330                 No: branch
+         MVI   DCBRKP,X'FF'            Set flag
+         LA    R12,4(,R12)             Point after RKP=
+         B     DCBANXT                 Next attribute
+DCBA330  DS    0H
+         CLC   0(6,R12),=C'STACK='     STACK= ?
+         BNE   DCBA340                 No: branch
+         MVI   DCBSTACK,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after STACK=
+         B     DCBANXT                 Next attribute
+DCBA340  DS    0H
+         CLC   0(7,R12),=C'THRESH='    THRESH= ?
+         BNE   DCBA350                 No: branch
+         MVI   DCBTHRES,X'FF'          Set flag
+         LA    R12,7(,R12)             Point after THRESH=
+         B     DCBANXT                 Next attribute
+DCBA350  DS    0H
+         CLC   0(6,R12),=C'TRTCH='     TRTCH= ?
+         BNE   DCBAERR                 No: branch
+         MVI   DCBTRTCH,X'FF'          Set flag
+         LA    R12,6(,R12)             Point after TRTCH=
+         B     DCBANXT                 Next attribute
+DCBANXT  DS    0H
+         CP    BRFLAG,ZERO             ( present?
+         BE    DCBANXT2                No: branch
+         CLI   0(R12),C')'             End of attributes?
+         BE    DCBAOK                  Yes: branch
+         CLI   0(R12),C','             Delimiter attributes
+         BNE   DCBANXT1                No: branch
+         SUBR  DELIMIT                 Process delimiter
+         B     *+4(R15)                Initiate branchlist
+         B     DCBA000                 Next attribute
+         B     DCBAERR                 Error
+DCBANXT1 DS    0H
+         CLI   0(R12),C' '             End of line?
+         BE    DCBAERR                 Yes: branch
+         LA    R12,1(,R12)             Increase pointer
+         B     DCBANXT
+DCBANXT2 DS    0H
+         CLI   0(R12),C' '             End attribute?
+         BE    DCBAOK                  Yes: branch
+         CLI   0(R12),C','             End attribute?
+         BE    DCBAOK                  Yes: branch
+         LA    R12,1(,R12)             Increase pointer
+         B     DCBANXT
+DCBAERR  DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R12,12(R13)
+         LA    R15,4                   Error
+         BR    R14                     Return
+DCBAOK   DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R9,12(R13)          Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 Rc = 0
+         BR    R14
+DCBATSAV DC    18F'0'                  Save area
+VDCBA    DC    V(COMMON)
+         LTORG ,
+*--------------------------------------------------------------------*
+*                                                                    *
+*        Process delimiter                                           *
+*                                                                    *
+*--------------------------------------------------------------------*
+DELIMIT  CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING DELIMIT,R9              Provide addressability
+         LA    R14,DELISAV             Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VDEL
+         USING COMMON,R3               JCLCOMM area
+         CLI   0(R12),C','             , present?
+         BNE   DELERR08                Program error
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    DEL020                  Yes: branch
+         CLI   0(R12),C' '             End of line
+         BNE   DELOK                   No: branch
+DEL020   DS    0H
+         USING COMMAREA,R11
+         LA    R10,NEXTENT(,R10)       Next record
+         C     R10,COMMLAST            End of workspace?
+         BH    DELERR04                YES.
+         LR    R12,R10                 Current pointer in workspace
+         USING WORKSPCE,R10            Address DSECT of workspace ent.
+         LA    R12,WORKDATA            Point to data portion
+         DROP  R10
+         ST    R12,STARTLNE            And save start of line
+         LA    R6,71                   Maximum length = 71
+         AR    R6,R12                  Pointer to column 72
+         ST    R6,ENDLINE              Save pointer
+         CLC   0(3,R12),=C'//*'        Comment statement?
+         BE    DEL020                  Yes: select next record
+         CLC   0(2,R12),=C'//'         Start with //?
+         BNE   DELERR04                No: error
+         LA    R12,2(,R12)             Increase pointer
+         SUBR  SKIPSPC                 Skip blanks
+         B     *+4(R15)                Initiate branchlist
+         B     DEL030                  OK.
+         B     DELERR04                No blanks, error
+         B     DELERR04                No continuation
+         DROP  R11
+DEL030   DS    0H
+         C     R1,=F'13'               Max 13 blanks?
+         BH    DELERR04                If high: error
+         CLC   0(3,R12),=C'JOB'        JOB statement?
+         BE    DELERR04                Yes: branch
+         CLC   0(4,R12),=C'EXEC'       EXEC statement?
+         BE    DELERR04                Yes: branch
+         CLC   0(2,R12),=C'DD'         DD statement?
+         BE    DELERR04                Yes: branch
+         CLC   0(4,R12),=C'PROC'       PROC statement?
+         BE    DELERR04                Yes: branch
+         CLC   0(4,R12),=C'PEND'       PEND statement?
+         BE    DELERR04                Yes: branch
+DELOK    DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R9,12(R13)          Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 Return code = 0
+         BR    R14                     Return
+DELERR04 DS    0H
+         LA    R6,ERRNOCON             No continuation received!
+         SUBR  ERRMESS                 Error message
+         LA    R15,4                   Rc = 4
+         B     DELERRND
+DELERR08 DS    0H
+         LA    R6,ERR999               Program error !
+         SUBR  ERRMESS                 Error message
+         LA    R15,4                   Rc = 4 too
+DELERRND DS    0H
+         L     R13,4(,R13)             Load callers save area
+         RETURN (14,12),RC=(15)        Return
+DELISAV  DC    18F'0'                  Save area
+VDEL     DC    V(COMMON)
+         LTORG ,
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Test presence of a DSNAME,                                   *
+*        The DSNAME can be:                                           *
+*        - A maximum of 44 byte normal DSname;                        *
+*        - a temporary DSname (&&ccccccc or &ccccccc);                *
+*        - a maximum of 44 byte DSname suffixed with a member         *
+*          between parantheses;                                       *
+*        - a maximum of 44 byte DSname suffixed with INDEX, PRIME     *
+*          or OVFLOW between parantheses;                             *
+*        - a maximum of 44 byte DSname suffixed with +n or -n         *
+*          between parentheses (GDG + or - n);                        *
+*        - a reference to a DDname (*.dddddddd).                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+DSNTEST  CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING DSNTEST,R9              Provide addressability
+         LA    R14,DSNTSAV             Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VDSNT
+         USING COMMON,R3               JCLCOMM area
+         LR    R1,R12                  Save pointer in EDIT workspace
+         CLI   0(R12),C''''            Start with '?
+         BE    DSNT160                 Yes: branch
+         XR    R7,R7                   Length DSN := 0
+DSNT012  DS    0H
+         CLI   0(R12),C','             End of DSname?
+         BE    DSNT014                 Yes: branch
+         CLI   0(R12),C' '             End of DSname?
+         BE    DSNT014                 Yes: branch
+         LA    R12,1(,R12)             Point to next byte
+         LA    R7,1(,R7)               Increase length
+         B     DSNT012                 Next character
+DSNT014  DS    0H
+         C     R7,=F'44'               Maximum length = 44
+         BH    DSNTERR                 Error
+         LR    R12,R1                  Pointer to beginning
+         CLC   0(2,R12),=C'&&&&'       Temporary data set?
+         BNE   DSNT014A                No: branch
+         LA    R12,2(,R12)             Pointer after '&&'
+         B     DSNT070                 Branch
+DSNT014A DS    0H
+         CLI   0(R12),C'&&'            Temporary data set?
+         BNE   DSNT014B                No: test reference
+         LA    R12,1(,R12)             Point after '&'
+         B     DSNT070
+DSNT014B DS    0H
+         CLC   0(2,R12),=C'*.'         Reference to DDNAME?
+         BE    DSNT130                 Yes: branch
+DSNT015  DS    0H
+         SUBR  NAMES                   Test on name
+         B     *+4(R15)                Initiate branchlist
+         B     DSNT020                 Good
+         B     DSNTERR                 Error
+DSNT020  DS    0H
+         CLI   0(R12),C'.'             Next qualifier of DSN?
+         BNE   DSNT022                 No: branch
+         LA    R12,1(,R12)             Increase pointer
+         B     DSNT015
+DSNT022  DS    0H
+         CLI   0(R12),C'('             Member or +n or -n (GDG)?
+         BNE   DSNTOK                  No: test completed without error
+         LA    R12,1(,R12)             Increase pointer
+         SUBR  NAMES                   Test member name
+         B     *+4(R15)                Initiate branchlist
+         B     DSNT060                 TEST )
+         CLI   0(R12),C'-'             Generation?
+         BE    DSNT025                 Yes: branch
+         CLI   0(R12),C'+'             Generation?
+         BE    DSNT025                 Yes: branch
+         CLI   0(R12),C'0'             Generation?
+         BNE   DSNT030                 Test on area
+         LA    R12,1(,R12)             Increase pointer
+         B     DSNT060                 Test right paranthese
+DSNT025  DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         SUBR  NUMBER                  Test number
+         B     *+4(R15)                Initiate branchlist
+         B     DSNT060                 Test right paranthese
+         B     DSNTERR
+DSNT030  DS    0H
+         CLC   0(5,R12),=C'INDEX'      INDEX AREA
+         BNE   DSNT040                 No: branch
+         LA    R12,5(,R12)             Point after INDEX
+         B     DSNT060                 Test on ')'
+DSNT040  DS    0H
+         CLC   0(5,R12),=C'PRIME'      PRIME AREA
+         BNE   DSNT050                 No: branch
+         LA    R12,5(,R12)             Point after PRIME
+         B     DSNT060                 Test on ')'
+DSNT050  DS    0H
+         CLC   0(6,R12),=C'OVFLOW'     Overflow area
+         BNE   DSNTERR                 No: branch
+         LA    R12,6(,R12)             Point after OVFLOW
+DSNT060  DS    0H
+         CLI   0(R12),C')'             ')' present?
+         BNE   DSNTERR                 Error
+         LA    R12,1(,R12)             Increase pointer
+         B     DSNTOK                  OK
+DSNT070  DS    0H
+         SUBR  NAMES                   Test name of temporary DSN
+         B     *+4(R15)                Initiate branchlist
+         B     DSNT080                 Good
+         B     DSNTERR                 Error
+DSNT080  DS    0H
+         CLI   0(R12),C'('             Test member and area
+         BNE   DSNTOK
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+         SUBR  NAMES                   Test on member name
+         B     *+4(R15)                Initiate branchlist
+         B     DSNT120                 TEST )
+DSNT090  DS    0H
+         CLC   0(5,R12),=C'INDEX'      INDEX AREA
+         BNE   DSNT100                 No: branch
+         LA    R12,5(,R12)             Increase pointer
+         B     DSNT120                 Test on ')'
+DSNT100  DS    0H
+         CLC   0(5,R12),=C'PRIME'      PRIME AREA
+         BNE   DSNT110                 No: branch
+         LA    R12,5(,R12)             Increase pointer
+         B     DSNT120                 Test on ')'
+DSNT110  DS    0H
+         CLC   0(6,R12),=C'OVFLOW'     INDEX AREA
+         BNE   DSNTERR                 No: branch
+         LA    R12,6(,R12)             Increase pointer
+DSNT120  DS    0H
+         CLI   0(R12),C')'             ) present?
+         BNE   DSNTERR                 Error
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+         B     DSNTOK                  OK
+DSNT130  DS    0H
+         LA    R12,2(,R12)             Increase pointer
+         SUBR  NAMES                   Test DSNAME
+         B     *+4(R15)                Initiate branchlist
+         B     DSNT140                 Good
+         B     DSNTERR                 No name
+DSNT140  DS    0H
+         CLI   0(R12),C'.'             Separation character
+         BNE   DSNTOK                  OK.
+         LA    R12,1(,R12)             Increase pointer
+         SUBR  NAMES                   Check DSNAME
+         B     *+4(R15)                Initiate branchlist
+         B     DSNT150                 Good
+         B     DSNTERR                 No name: error
+DSNT150  DS    0H
+         CLI   0(R12),C'.'             Separation character
+         BNE   DSNTOK                  No: good, DSN = ok
+         LA    R12,1(,R12)             Increase pointer
+         SUBR  NAMES                   Test name
+         B     *+4(R15)                Initiate branchlist
+         B     DSNTOK                  Good
+         B     DSNTERR                 Error
+DSNT160  DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    DSNTERR                 Error
+         CLC   0(2,R12),=C''''''       '' present?
+         BNE   DSNT170
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    DSNTERR                 Error
+         B     DSNT160
+DSNT170  DS    0H
+         CLI   0(R12),C''''            ' (quote) present?
+         BNE   DSNT160                 No: branch
+         LA    R12,1(,R12)             Increase pointer
+         B     DSNTOK                  OK
+DSNTOK   DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R0,12(R13)
+         LM    R2,R9,28(R13)           Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 Return code = 0
+         BR    R14                     Return
+DSNTERR  DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R12,12(R13)
+         LA    R15,4                   Error
+         BR    R14
+DSNTSAV  DC    18F'0'                  Save area
+VDSNT    DC    V(COMMON)
+         LTORG ,
+*--------------------------------------------------------------------*
+*                                                                    *
+*        Test condition code in EXEC statement                       *
+*                                                                    *
+*--------------------------------------------------------------------*
+ECONDCDE CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING ECONDCDE,R9             Provide addressability
+         LA    R14,ECONSAV             Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VCOND
+         USING COMMON,R3               JCLCOMM area
+         CLI   0(R12),C'('             Start with ( ?
+         BNE   ECON090                 EVEN or ONLY ?
+         AP    BRFLAG,ONE              Add presence of '('
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C'('             More sub parameters?
+         BNE   ECON020                 No: branch
+         AP    BRFLAG,ONE              Minus 1, because ')' found
+         LA    R12,1(,R12)             Increase pointer
+ECON020  DS    0H
+         CALL  NUMBER                  Test if numeric
+         B     *+4(R15)                Initiate branchlist
+         B     ECON030                 OK.
+         B     ECON090                 COND=EVEN or COND=ONLY
+ECON030  DS    0H
+         C     R1,=F'0'                < 0?
+         BL    ECONERR                 Yes: error
+         C     R1,=F'4095'             > 4095?
+         BH    ECONERR                 Yes: error
+         CLI   0(R12),C','             , present?
+         BNE   ECONERR                 No: error
+         SUBR  DELIMIT                 Process delimiter
+         B     *+4(R15)                Initiate branchlist
+         B     ECON040                 OK
+         B     ECONERR                 ERROR.
+ECON040  DS    0H
+         CLC   0(2,R12),=C'GT'         GT ?
+         BE    ECON050                 Yes: branch
+         CLC   0(2,R12),=C'GE'         GE ?
+         BE    ECON050                 Yes: branch
+         CLC   0(2,R12),=C'EQ'         EQ ?
+         BE    ECON050                 Yes: branch
+         CLC   0(2,R12),=C'NE'         NE ?
+         BE    ECON050                 Yes: branch
+         CLC   0(2,R12),=C'LT'         LT ?
+         BE    ECON050                 Yes: branch
+         CLC   0(2,R12),=C'LE'         LE ?
+         BNE   ECONERR                 No: branch
+ECON050  DS    0H
+         LA    R12,2(,R12)             Increase pointer
+         CLI   0(R12),C','             Delimiter?
+         BNE   ECON080                 No: no step name
+         SUBR  DELIMIT                 Process delimiter
+         B     *+4(R15)                Initiate branchlist
+         B     ECON060                 OK
+         B     ECONERR                 Not possible
+ECON060  DS    0H
+         CALL  NAMES                   Test step name
+         B     *+4(R15)                Initiate branchlist
+         B     ECON070                 OK
+         B     ECONERR                 Error
+ECON070  DS    0H
+         CLI   0(R12),C'.'             Proc step name ?
+         BNE   ECON080                 No: branch
+         CLI   EPROCFLG,X'FF'          EXEC PROC ?
+         BNE   ECONERR                 No: error
+         LA    R12,1(,R12)             Increase pointer
+         CALL  NAMES                   TEST Proc step name
+         B     *+4(R15)                Initiate branchlist
+         B     ECON080                 OK
+         B     ECONERR                 Error
+ECON080  DS    0H
+         CLI   0(R12),C')'             ) present?
+         BNE   ECONERR                 Error
+         LA    R12,1(,R12)             Increase pointer
+         XR    R6,R6                   Clear register 6
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+         CP    BRFLAG,ZERO             End of parameter?
+         BE    ECONOK                  OK
+         B     ECON110                 End of parm?
+ECON090  DS    0H
+         CLC   0(4,R12),=C'EVEN'       EVEN ?
+         BE    ECON100                 Yes: branch
+         CLC   0(4,R12),=C'ONLY'       ONLY ?
+         BNE   ECONERR                 Error
+ECON100  DS    0H
+         LA    R12,4(,R12)             Increase pointer
+         CP    BRFLAG,ZERO             '(' present?
+         BE    ECONOK                  Yes: we are in balance
+ECON110  DS    0H
+         CLI   0(R12),C')'             End of parameter?
+         BNE   ECON120                 No: branch
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+         LA    R12,1(,R12)             Increase pointer
+         B     ECONOK                  OK.
+ECON120  DS    0H
+         CLI   0(R12),C','             DELIMITER present?
+         BNE   ECONERR                 Error
+         CALL  DELIMIT                 Process delimiter
+         B     *+4(R15)                Initiate branchlist
+         B     ECON130                 OK
+         B     ECONERR                 Error
+ECON130  DS    0H
+         CLI   0(R12),C'('             ( present?
+         BNE   ECON090                 COND=EVEN or COND=ONLY?
+         AP    BRFLAG,ONE              Add presence of '('
+         LA    R12,1(,R12)             Increase pointer
+         B     ECON020                 Next sub parameter
+ECONOK   DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R9,12(R13)          Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 Return code = 0
+         BR    R14                     Return
+ECONERR  DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R12,12(R13)
+         LA    R15,4                   Return code = 0
+         BR    R14                     Return
+ECONSAV  DC    18F'0'                  Save area
+VCOND    DC    V(COMMON)
+         LTORG ,
+*--------------------------------------------------------------------*
+*                                                                    *
+*        Generate Error messages                                     *
+*        Register 6 contains the message number. This number will    *
+*        be placed in the message table.                             *
+*                                                                    *
+*--------------------------------------------------------------------*
+ERRMESS  CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING ERRMESS,R9              Provide addressability
+         LA    R14,ERRMSAV             Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VERRM
+         USING COMMON,R3               JCLCOMM area
+         LA    R7,ERR999               Msg: error in program
+         CR    R6,R7
+         BE    ERRM015                 Yes: branch
+         L     R5,ERRNBR               Number of errors +1
+         LA    R7,MAXERR               Max number of errors
+         CR    R5,R7                   Maximum reached
+         BNE   ERRM020
+ERRM015  DS    0H
+         L     R8,STARTERR             Start message area
+         LA    R5,1                    1 MESSAGE
+         ST    R5,ERRNBR               Number of message
+         LA    R6,ERR999               Program error
+         MVC   0(6,R8),LINENBR         Line number
+         STH   R6,6(,R8)               Message number
+         LA    R8,8(,R8)               Increase pointer
+         ST    R8,CURRERR              Current pointer
+         USING COMMAREA,R11
+         L     R10,COMMLAST            End of check
+         DROP  R11
+         B     ERRM030
+ERRM020  DS    0H
+         L     R8,CURRERR              Current pointer
+         LA    R5,1(,R5)
+         ST    R5,ERRNBR
+         MVC   0(6,R8),LINENBR         Line number
+         STH   R6,6(,R8)               Message number
+         LA    R8,8(,R8)               Increase pointer
+         ST    R8,CURRERR              Save pointer
+ERRM030  DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R9,12(R13)          Do not restore register 10
+         L     R11,64(,R13)
+         BR    R14
+ERRMSAV  DC    18F'0'                  Save area
+VERRM    DC    V(COMMON)
+         LTORG ,
+*--------------------------------------------------------------------*
+*                                                                    *
+*        Test COND code in JOB statement                             *
+*                                                                    *
+*--------------------------------------------------------------------*
+JCONDCDE CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING JCONDCDE,R9             Provide addressability
+         LA    R14,JCONDSAV            Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VJCOND
+         USING COMMON,R3               JCLCOMM area
+         CLI   0(R12),C'('             Start with ( ?
+         BNE   JCONERR                 Error
+         AP    BRFLAG,ONE              Add presence of '('
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C'('             More sub parameters?
+         BNE   JCON020                 No: branch
+         AP    BRFLAG,ONE              Add presence of '('
+         LA    R12,1(,R12)             Increase pointer
+JCON020  DS    0H
+         CALL  NUMBER                  Test on number
+         B     *+4(R15)                Initiate branchlist
+         B     JCON030                 Good
+         B     JCONERR                 Error
+JCON030  DS    0H
+         C     R1,=F'0'                < 0?
+         BL    JCONERR                 Yes: error
+         C     R1,=F'4095'             > 4095?
+         BH    JCONERR                 Yes: error
+         CLI   0(R12),C','             , present?
+         BNE   JCONERR                 No: branch
+         SUBR  DELIMIT                 Process delimiter
+         B     *+4(R15)                Initiate branchlist
+         B     JCON040                 Good
+         B     JCONERR                 Error
+JCON040  DS    0H
+         CLC   0(2,R12),=C'GT'         GT ?
+         BE    JCON050                 Yes: branch
+         CLC   0(2,R12),=C'GE'         GE ?
+         BE    JCON050                 Yes: branch
+         CLC   0(2,R12),=C'EQ'         EQ ?
+         BE    JCON050                 Yes: branch
+         CLC   0(2,R12),=C'NE'         NE ?
+         BE    JCON050                 Yes: branch
+         CLC   0(2,R12),=C'LT'         LT ?
+         BE    JCON050                 Yes: branch
+         CLC   0(2,R12),=C'LE'         LE ?
+         BNE   JCONERR                 No: branch
+JCON050  DS    0H
+         LA    R12,2(,R12)             Increase pointer
+         CLI   0(R12),C')'             ) present?
+         BNE   JCONERR                 No: branch
+         LA    R12,1(,R12)             Increase pointer
+         XR    R6,R6                   CLEAR R6
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+         CP    BRFLAG,ZERO             End of parameter?
+         BE    JCONOK
+         CLI   0(R12),C')'             End of parameter?
+         BNE   JCON060                 No: branch
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+         LA    R12,1(,R12)             Increase pointer
+         B     JCONOK                  OK.
+JCON060  DS    0H
+         CLI   0(R12),C','             Delimiter present?
+         BNE   JCONERR                 Error
+         CALL  DELIMIT                 Process delimiter
+         B     *+4(R15)                Initiate branchlist
+         B     JCON070                 OK
+         B     JCONERR                 Error
+JCON070  DS    0H
+         CLI   0(R12),C'('             ( present?
+         BNE   JCONERR                 No: branch
+         AP    BRFLAG,ONE              Add presence of '('
+         LA    R12,1(,R12)             Increase pointer
+         B     JCON020                 Next sub parameter
+JCONOK   DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R9,12(R13)          Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 Return code = 0
+         BR    R14                     Return
+JCONERR  DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R12,12(R13)
+         LA    R15,4                   Return code = 0
+         BR    R14                     Return
+JCONDSAV DC    18F'0'                  Save area
+VJCOND   DC    V(COMMON)
+         LTORG ,
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Test a name like a stepname, jobname, proc name, DD-name     *
+*                                                                     *
+*        Register 12 points to the to be tested name. The name is     *
+*        at least 1 character and at most 8 characters.               *
+*                                                                     *
+*        Returncodes: 00, name is good, register 11 points after the  *
+*                         name field                                  *
+*                     04, name contains invalid characters. Register  *
+*                         11 remains unchanged.                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+NAMES    CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING NAMES,R9                Provide addressability
+         LA    R14,NAMESAV             Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VNAMES
+         USING COMMON,R3               JCLCOMM area
+         MVC   NAME,=C'        '       CLEAR NAME
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$ '
+*                                      Test first character of the name
+         SUBR  TESTCHAR                Only Alpha and national chars
+         B     *+4(R15)                Initiate branchlist
+         B     NAME030                 Yes: branch
+         B     NAME060
+NAME030  DS    0H
+         LA    R8,NAME                 Pointer to name
+         MVC   0(1,R8),0(R1)           Save character
+         LA    R5,8                    Rest name (max 7 chars long)
+NAME035  DS    0H
+         LA    R8,1(,R8)               Increase pointer
+NAME040  DS    0H
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$ '
+         SUBR  TESTCHAR                Alpha numeric?
+         B     *+4(R15)                Initiate branchlist
+         B     NAME050                 Yes: branch
+         B     NAME070                 No: branch
+NAME050  DS    0H
+         MVC   0(1,R8),0(R1)           Save character
+         BCT   R5,NAME035              Loop until all done
+NAME060  DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R12,12(R13)
+         LA    R15,4                   Return code = 4
+         BR    R14
+NAME070  DS    0H
+         LA    R1,NAME                 Pointer to name
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R0,12(R13)
+         LM    R2,R9,28(R13)           Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 Return code = 0
+         BR    R14                     Return
+NAMESAV  DC    18F'0'                  Save area
+VNAMES   DC    V(COMMON)
+NAME     DS    CL8
+         DS    C
+         LTORG ,
+*--------------------------------------------------------------------*
+*                                                                    *
+*        Test on a number                                            *
+*        The input is pointed to by register 12.                     *
+*        If the number is valid, the binary version of the number    *
+*        will be returned in register 1 and register 12 points       *
+*        after the number.                                           *
+*                                                                    *
+*--------------------------------------------------------------------*
+NUMBER   CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING NUMBER,R9               Provide addressability
+         LA    R14,NUMBSAV             Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VNUMBER
+         USING COMMON,R3               JCLCOMM area
+         TM    0(R12),X'F0'            Test on figure
+         BNO   NUMB040                 No: branch, rc = 4
+         LA    R5,10                   Set number to 10
+         XR    R6,R6                   Clean registers
+         XR    R7,R7
+         XR    R8,R8
+NUMB020  DS    0H
+         IC    R8,0(R12)               Get figure
+         N     R8,=F'15'               Only last 4 bits
+         AR    R7,R8                   Combine
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    NUMB030                 Yes: finished
+         TM    0(R12),X'F0'            Figure?
+         BNO   NUMB030                 No: branch
+         MR    R6,R5                   Multiply by 10
+         B     NUMB020                 Next figure
+NUMB030  DS    0H
+         LR    R1,R7                   Number to register 1
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R0,12(R13)
+         LM    R2,R9,28(R13)           Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 Return code = 0
+         BR    R14                     Return
+NUMB040  DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R12,12(R13)
+         LA    R15,4                   Return code = 4, no number
+         BR    R14                     Return
+NUMBSAV  DC    18F'0'                  Save area
+VNUMBER  DC    V(COMMON)
+         LTORG ,
+*--------------------------------------------------------------------*
+*                                                                    *
+*        Test PARM in EXEC statement                                 *
+*        Register 7 points to the string with the valid characters   *
+*        ended with a blank                                          *
+*                                                                    *
+*--------------------------------------------------------------------*
+PARMTEST CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING PARMTEST,R9             Provide addressability
+         LA    R14,PARMTSAV            Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VPARMT
+         USING COMMON,R3               JCLCOMM area
+         CLI   0(R12),C''''            Start with ' ?
+         BE    PARMT030                Yes: branch
+PARMT020 DS    0H
+         CALL  TESTCHAR                Test validity char, addr in R7
+         B     *+4(R15)                Initiate branchlist
+         B     PARMT020
+         CLI   0(R12),C','             PARM ended with a ','?
+         BE    PARMTOK                 Yes: branch
+         CLI   0(R12),C' '             PARM ended with a blank?
+         BE    PARMTOK                 Yes: branch
+         CLI   0(R12),C')'             End of parameter?
+         BE    PARMTOK                 Yes: branch
+         B     PARMTERR                No: branch ERROR.
+PARMT030 DS    0H
+         MVI   QTFLAG,X'01'            Set flag
+PARMT040 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    PARMTERR                Yes: branch
+         CLC   0(2,R12),=C''''''       Double quotes?
+         BNE   PARMT050                No: branch
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    PARMTERR                Yes: branch
+         B     PARMT040
+PARMT050 DS    0H
+         CLI   0(R12),C''''            End of parameter?
+         BNE   PARMT040                No: branch
+         XC    QTFLAG,QTFLAG           Reset flag
+         LA    R12,1(,R12)             Increase pointer
+PARMTOK  DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R9,12(R13)          Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 Return code = 0
+         BR    R14                     Return
+PARMTERR DS    0H
+         ZAP   BRFLAG,ZERO             RESET BRACKET-FLAG
+         XC    QTFLAG,QTFLAG           RESET QUOTE-FLAG
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R12,12(R13)
+         LA    R15,4                   Return code = 4
+         BR    R14                     Return
+PARMTSAV DC    18F'0'                  Save area
+VPARMT   DC    V(COMMON)
+         LTORG ,
+*--------------------------------------------------------------------*
+*                                                                    *
+*        Skip current parameter                                      *
+*                                                                    *
+*--------------------------------------------------------------------*
+SKIPPARM CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING SKIPPARM,R9             Provide addressability
+         LA    R14,SKIPPSAV            Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VSKIPP
+         USING COMMON,R3               JCLCOMM area
+SKIPP020 DS    0H
+         CP    BRFLAG,ZERO             No brackets?
+         BNE   SKIPP080                No: branch
+         CLI   0(R12),C','             End of paremeter?
+         BE    SKIPP100                Yes: branch
+         CLI   0(R12),C' '             End of parameter?
+         BE    SKIPP100                Yes: branch
+SKIPP030 DS    0H
+         CLI   0(R12),C'('             ( present?
+         BNE   SKIPP040                No: branch
+         AP    BRFLAG,ONE              Add presence of '('
+         B     SKIPP070
+SKIPP040 DS    0H
+         CLI   0(R12),C''''            ' present?
+         BNE   SKIPP070                No: branch
+SKIPP050 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         CLC   0(2,R12),=C''''''       '' Double quote present?
+         BNE   SKIPP060                No: branch
+         LA    R12,1(,R12)             Increase pointer
+         B     SKIPP050
+SKIPP060 DS    0H
+         CLI   0(R12),C''''            ' present?
+         BNE   SKIPP050                No: branch
+SKIPP070 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         B     SKIPP020
+SKIPP080 DS    0H
+         CLI   0(R12),C','             Delimiter?
+         BNE   SKIPP090                No: branch
+         CALL  DELIMIT                 Process delimiter
+         B     *+4(R15)                Initiate branchlist
+         B     SKIPP020                OK
+         B     SKIPP100                No: branch
+SKIPP090 DS    0H
+         CLI   0(R12),C')'             ) present?
+         BNE   SKIPP030                No: branch
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+         B     SKIPP070
+SKIPP100 DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R9,12(R13)          Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 Return code = 0
+         BR    R14                     Return
+SKIPPSAV DC    18F'0'                  Save area
+VSKIPP   DC    V(COMMON)
+         LTORG ,
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Skip blanks in the input pointed to by register 12.          *
+*        Return codes: 00 - all blanks skipped, register 12 points    *
+*                           to the first non blank character after    *
+*                           the skipped blanks.                       *
+*                      04 - no blanks detected.                       *
+*                      08 - end of workspace entry reached.           *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SKIPSPC  CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING SKIPSPC,R9              Provide addressability
+         LA    R14,SKIPSAVE            Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VSKIPS
+         USING COMMON,R3               JCLCOMM area
+         XR    R1,R1                   Number of blanks <> 0
+         CLI   0(R12),C' '             Blank?
+         BNE   SKIPS030                No: branch
+SKIPS020 DS    0H
+         LA    R1,1(,R1)               Increase number of blanks
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    SKIPS040                Yes: branch
+         CLI   0(R12),C' '             Blank?
+         BE    SKIPS020                Yes: branch
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R0,12(R13)
+         LM    R2,R9,28(R13)           Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 RC = 00
+         BR    R14                     Return
+SKIPS030 DS    0H
+         L     R13,4(,R13)             Load callers save area
+         RETURN (14,12),RC=4
+SKIPS040 DS    0H
+         L     R13,4(,R13)             Load callers save area
+         RETURN (14,12),RC=8
+SKIPSAVE DC    18F'0'                  Save area
+VSKIPS   DC    V(COMMON)
+         LTORG ,
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Test 1 character in the EDIT workspace (pointed to by R12)   *
+*        against a character string pointed to by register 7.         *
+*                                                                     *
+*        If the character is present in the character string set      *
+*        returncode 0 ,increase register 12 with 1 and the address    *
+*        of the character will be returned in register 1.             *
+*        The character string ends always with a blank.               *
+*                                                                     *
+*        E.g. C'ABCDEFGHIJKLMNOPQRSTUWVXYZ0123456789 ' to test on     *
+*        alphanumeric.                                                *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+TESTCHAR CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING TESTCHAR,R9             Provide addressability
+         LA    R14,TESTCSAV            Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VTESTC
+         USING COMMON,R3               JCLCOMM area
+         LR    R1,R12                  Pointer to character
+TESTC020 DS    0H
+         CLI   0(R7),C' '              End of string?
+         BE    TESTCERR                Yes: error
+         CLC   0(1,R12),0(R7)          Does character appear in str?
+         BE    TESTCOK                 Yes: branch
+         LA    R7,1(,R7)               Increase pointer
+         B     TESTC020                Next character
+TESTCOK  DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R0,12(R13)
+         LM    R2,R9,28(R13)           Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 RC = 00
+         BR    R14                     Return
+TESTCERR DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R12,12(R13)
+         LA    R15,4                   RC = 04
+         BR    R14                     Return
+TESTCSAV DC    18F'0'                  Save area
+VTESTC   DC    V(COMMON)
+         LTORG ,
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Test the validity of a volume serial number.                 *
+*        If the volume serial is good, return the address of the      *
+*        volume serial in register 1 and set the pointer in           *
+*        register 12 after the volume serial number>                  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+VOLSER   CSECT
+         STM   R14,R12,12(R13)         Save registers
+         LR    R9,R15                  Setup base register
+         USING VOLSER,R9               Provide addressability
+         LA    R14,VOLSAVE             Pointer to new save area
+         ST    R13,4(,R14)             Save pointer to old save area
+         ST    R14,8(,R13)             Save pointer to new area
+         LR    R13,R14                 Pointer to current save area
+         L     R3,VVOLS
+         USING COMMON,R3               JCLCOMM area
+         LA    R8,VOLNAME              Pointer to Volume name
+         LA    R5,7                    Maximum length = 6
+VOLS020  DS    0H
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$- '
+         SUBR  TESTCHAR                Alpha numeric?
+         B     *+4(R15)                Initiate branchlist
+         B     VOLS030                 Yes:
+         B     VOLS050                 No:
+VOLS030  DS    0H
+         MVC   0(1,R8),0(R1)           Save CHARACTER
+         LA    R8,1(,R8)               Increase pointer
+         BCT   R5,VOLS020              Next character
+VOLS040  DS    0H
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R12,12(R13)
+         LA    R15,4                   Return code = 4
+         BR    R14                     Return
+VOLS050  DS    0H
+         C     R5,=F'7'                At least 1 character
+         BE    VOLS040                 Error
+         LA    R1,VOLNAME              Pointer to volume serial
+         L     R13,4(,R13)             Load callers save area
+         LM    R14,R0,12(R13)
+         LM    R2,R9,28(R13)           Do not restore register 10
+         L     R11,64(,R13)
+         XR    R15,R15                 Return code = 0
+         BR    R14                     Return
+VOLSAVE  DC    18F'0'                  Save area
+VVOLS    DC    V(COMMON)
+VOLNAME  DS    CL6
+         DS    C
+         LTORG
+*                                                                    *
+         TITLE 'JCLCOMM and RPFCOMM DSECT''s'
+COMMON   JCLCOMM
+COMMAREA RPFCOMM
+         END

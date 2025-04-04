@@ -1,0 +1,1843 @@
+RPFLIB   TITLE 'Read a LIBRARIAN index into the EDIT workspace'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFLIB                                        *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFUTIL (option 3.5)                          *
+*                                                                     *
+*        Function:      Present a menu for allocation a LIBRARIAN     *
+*                       master file. If the masterfile is allocated   *
+*                       an LIBRARIAN index will be read.              *
+*                       The output of the Index will be placed into   *
+*                       the EDIT workspace and will be set on the     *
+*                       screen.                                       *
+*                                                                     *
+*                       The following line commands are available:    *
+*                       B - Browse the LIBRARIAN module.              *
+*                       D - Delete the LIBRARIAN module.              *
+*                       E - EDIT the LIBRARIAN module.                *
+*                       P - Print the LIBRARIAN module.               *
+*                                                                     *
+*                       The index in the EDIT workspace can be        *
+*                       manipulated with the following primary commands
+*                                                                     *
+*                       =n/=n.n  - Go to main menu and execute option *
+*                                  n or option n.n                    *
+*                       ?        - refresh screen.                    *
+*                       BOTTOM   - scroll to last screen (alias B).   *
+*                       END      - terminate and go to previous menu. *
+*                       DOWN     - scroll 1 page forward.             *
+*                       INDEX    - EDIT the LIBRARIAN index.          *
+*                       L xxxxxx - Position screen on module xxxxxx.  *
+*                       TOP      - scroll to first screen (alias T).  *
+*                       PFK      - invoke RPFPFK to alter program     *
+*                                  function keys.                     *
+*                       RETURN   - terminate and go to main menu.     *
+*                       UP       - scroll 1 page backward.            *
+*                                                                     *
+*                       If you enter M with the UP or DOWN PFK,       *
+*                       the screen will be scrolled to the bottom or  *
+*                       top.                                          *
+*                                                                     *
+*        Subroutines:   RPFLIB01  Librarian Update routine            *
+*                       RPFPFK    To define/alter the PFK's           *
+*                       RPFEDIT   Edit the LIBRARIAN modules          *
+*                       FAIROPN   LIBRARIAN open     (REL 3.3A)       *
+*                       FAIRCLS   LIBRARIAN close                     *
+*                       FAIRMOD   LIBRARIAN Modules (index)           *
+*                       FAIRREC   LIBRARIAN Module read               *
+*                                                                     *
+*        Registers:     Register 12 and 10 are the base registers.    *
+*                       Register 11 points like all RPF modules to    *
+*                       the RPFCOMM control block                     *
+*                       Register 13 points to the dynamic working     *
+*                       storage. The first 72 bytes are the save area.*
+*                       Register 9 points to the screens, mapped by   *
+*                       the DSECT SCREENS.                            *
+*                       Register 8 always points to a LIBRARIAN       *
+*                       module entry in the EDIT workspace.           *
+*                                                                     *
+*        Change log:                                                  *
+*        Mar 07,2003 RPr: 7 color support, date/time updated in       *
+*                         screen, scroll 'm' added and =n/=n.n cmd    *
+*                         added                                    @rp1
+*        Dec 18,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Apr 15,2019 RPr: Set EDIT LRECL to 80                        *
+*        May 16,2019 RPr: Support large screens up to 62x160          *
+*                         And invoke RPFSAVE after E line command     *
+*                         if LIBRARIAN is not installed               *
+*        Oct 23,2019 RPr: Allow EOF and/or DEL key in command field   *
+*                         and parse the primary command field         *
+*        Nov 17,2019 RPr: Reject EDIT workspace to small condition    *
+*                         and mark that in the comments of the module.*
+*        Jan 25,2020 RPr: Support terminals up to 9920 bytes.         *
+*                         (like 62x160 or 99x100)                     *
+*        Jan 29,2020 RPr: Remove unnecesary module field.             *
+*        Feb 09,2020 RPr: APPEND attribute deleted                    *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Jun 08,2020 RPr: Msg 'Alloc error 1708 on DS' changed into   *
+*                         'Data set not in catalog'                   *
+*        Oct 24,2020 RPr: Remove option X, use PF3/PF15 instead       *
+*        Feb 01,2021 RPr: Add primary command INDEX to edit the       *
+*                         LIBRARIAN index in RPFEDIT.                 *
+*        Mar 22,2021 RPr: Test return code of RPFSAVE after executing *
+*                         'C' linecommand.                            *
+*        Sep 30,2021 RPr: DYNALLOC's replaced by IKJDAIR calls.       *
+*        Nov 16,2021 RPr: RPFLIB made re-entrant and re-usable.       *
+*        Jul 18,2022 RPr: Line command 'C' (copy) deleted.            *
+*        Apr 04,2024 RPr: **END** + number of modules added after     *
+*                         last module and msg 'scroll had no effect'  *
+*                         deleted.                                    *
+*        Dec 07,2024 RPr: Use standard TSO naming conventions for     *
+*                         data set names.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFLIB   CSECT
+RPFLIB   AMODE 31                      *                         @rpa01
+RPFLIB   RMODE 24                      *                         @rpa01
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFLIB,R12,R10          Provide addressability
+         L     R11,0(,R1)              Pick up RPFCOMM
+         GETMAIN R,LV=WORKL            Obtain our working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(0,R13)             Forward pointer
+         LR    R13,R1
+         LA    R10,2048(,R12)          3rd base
+         LA    R10,2048(,R10)                  register
+         USING MEMAREA,R8              Address workspace entry
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE'
+         DC    CL2' '
+         DC    CL8'&SYSTIME'
+START    DS    0H
+         USING WORKAREA,R13            Make working storage addressable
+         USING COMMAREA,R11            Address it
+         XC    COMMPRM,COMMPRM         Clear COMMPRM initially
+         ST    R11,ADDRCOMM            Save for later use
+         MVI   OPTIONS,C'0'            Set FAIR options ...
+         MVC   OPTIONS+1(L'OPTIONS-1),OPTIONS          to EBCDIC zeroes
+         MVI   SC@BUFF,C' '            Set Parse buffer ...
+         MVC   SC@BUFF+1(47),SC@BUFF                   to blanks
+         MVI   OPENRES,X'FF'           Set OPENRES t0 ...
+         MVC   OPENRES+1(119),OPENRES                  to high values
+         XC    CLOSERES,CLOSERES
+         MVC   EDITDCB(MDLLEN),MDLEDIT Move DCB to dynamic area
+         LA    R14,SCREENSL            Length of entry and index screen
+         LA    R1,SCRENT               Length of module screen entry
+         L     R0,COMMSIZE             Number of lines on screen
+         SL    R0,=F'3'                Minus 3 header lines
+         MR    R0,R0                   Calculate module area
+         AR    R1,R14                  + SCR2TXT + SCR5TXT
+         ST    R1,L#SCRNS              Save this length
+         GETMAIN R,LV=(1)              Aquire storage for screens
+         ST    R1,A#SCRNS              Save its address
+         LR    R9,R1                   Base register for screens
+         LR    R0,R1                   Output to even register
+         LA    R1,SCREENSL             Length
+         L     R2,=V(SCREENS)          Input of the screens
+         LR    R3,R1                   Same length input and output
+         MVCL  R0,R2                   Copy
+         USING SCREENS,R9              Make screen area addressable
+         LOAD  EP=FAIROPN              Librarian OPEN
+         ST    R0,FAIROPN              Save entry point
+         LOAD  EP=FAIRCLS              Librarian CLOSE
+         ST    R0,FAIRCLS              Save entry point
+         LOAD  EP=FAIRMOD              Librarian Module routine
+         ST    R0,FAIRMOD              Save entry point
+         LOAD  EP=FAIRREC              Librarian READ routine
+         ST    R0,FAIRREC              Save entry point
+         MVI   MSG2,C'-'               Init
+         MVC   MSG2+1(L'MSG2-1),MSG2       message area in
+         MVC   MSG5,MSG2                            both screens
+         MVI   SW,0                    Clear switch upon entry
+         MVI   SCR5HYPH,C' '           Move ' ' to
+         MVC   SCR5HYPH+1(L'SCR5HYPH-1),SCR5HYPH  ... header
+         MVI   SCR5HYPH,C'-'           Move 1 hyphen
+         L     R1,COMMCOLS             Current width of screen
+         S     R1,=F'82'               Minus minimum width + 2
+         BM    INIT2                   Do not move if width = 81
+         EX    R1,HYPH                 with hyphens
+         B     INIT2                   Branch
+HYPH     MVC   SCR5HYPH+1(0),SCR5HYPH  << executed >>
+INIT2    DS    0H
+         MVC   SCR2TXT(1),COMMCMD      Move EW or EWA in menu
+         MVC   SCR5TXT(1),COMMCMD      Move EW or EWA in screen
+         L     R0,COMMSIZE             Pickup Screen lines
+         LA    R1,SCRENT               Columns + colors + attr
+*                                      See DSECT SCRENTRY
+         BCTR  R0,0
+         BCTR  R0,0
+         BCTR  R0,0                    Discount top 3 lines
+         MR    R0,R0                   Screen size minus 3 lines
+         LA    R3,SCR5LEN(,R1)         Length of TPUT
+         ST    R3,TPUTLEN              Save the TPUT length
+         LM    R0,R1,COMMSIZE          Restore lines and columns
+         LA    R3,3
+         SR    R0,R3                   Get data display line count
+         STH   R0,#LINES               Save it
+         LA    R3,NEXTENT              Lenght of entry in workspace
+         MH    R3,#LINES               * number of lines (21 -> 96)
+         ST    R3,NEXTSCR              And save for later use
+         LA    R3,SCRENT               Width of screen
+         ST    R3,DATALINE             Save entry length
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+         LA    R0,1                    Parameter line (1)
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5TXT+3          And Save
+*
+         L     R1,COMMCOLS             Screen width
+         LA    R0,24                   Get adjustment size
+         SR    R1,R0                   Get the right column
+         LA    R0,1                    Row 1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5SBA1+1         And Save (r1,c56+)
+         MVI   SCR5SBA1,COMMSBA        Move SBA order
+*
+         LA    R1,1                    Column 1
+         LA    R0,2                    Row 2
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5SBA2+1         And Save (r2,c1)
+*
+         L     R1,COMMCOLS             Screen width
+         LA    R0,2                    Row 2
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5SBA3+1         And Save (r2,c last)
+*
+         LH    R2,#LINES               # data lines
+         LA    R3,LNE5                 Point to data area in screen
+         USING SCRENTRY,R3             Use DSECT
+         LA    R4,4                    First data line is line4
+SCR01    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         MVI   SCRESBA,COMMSBA         Move SBA order
+         STCM  R0,3,SCRESBA+1          And Save
+*
+         MVC   SCREATT1,=X'1DC9'       SF + hilite unprot MDT on
+         MVC   SCREATT2,=X'1DF1'       SF + no hilite MDT on
+         MVC   SCREATT3,=X'1DF0'       SF + no hilite MDT off
+         MVC   SCRECOL1,=AL3(TURQ)
+         MVC   SCRECOL2,=AL3(GREEN)    Paint module green
+         MVC   SCRECOL3,=AL3(TURQ)     and paint the rest purple
+         MVI   SCREFIL1,C' '           Blank
+         MVI   SCREFIL2,C' '                the
+         MVI   SCREFIL3,C' '                   fillers
+         LA    R4,1(,R4)               Increase line number
+         L     R1,DATALINE             Length data entry on screen
+         LA    R3,0(R1,R3)             Next line in screen
+         BCT   R2,SCR01                And do complete screen
+         DROP  R3                      Kill addr. of SCR5LINE
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         XR    R2,R2                   Default no centering
+         L     R5,COMMCOLS             Width of screen
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR2TXT+3
+*
+         LA    R0,1                    Row 1
+         LA    R1,56                   Column 56
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R1C56+1
+*
+         LA    R0,2                    Row 2
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R2C1+1
+*
+         LA    R0,4                    Row 4
+         LA    R1,4                    Column 4
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R4C4+1
+*
+         LA    R0,5                    Row 5
+         LA    R1,4                    Column 4
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R5C4+1
+*
+         LA    R0,13                   Row 13
+         LA    R1,2                    Column 2
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R13C2+1
+*
+         LA    R0,16                   Row 16
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R16C1+1
+*
+         LA    R0,17                   Row 17
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC2R17C1+1
+*
+         L     R0,COMMSIZE             Row last
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR2LAST+1
+*
+*        end of screen setup           ------------------------------*
+*
+         MVC   SCR2UID,COMMUSER        TSO Userid into screen
+         L     R2,COMWSTRT             First record in EDIT workspace
+         ST    R2,COMMFSCR             And set in COMMFSCR
+         SL    R2,=A(NEXTENT)          Minus length 1 entry
+         ST    R2,COMMLAST             Save as Last record
+         MVC   SCR2VOL,COMMSVOL        Master File volume
+         MVI   SCR2CMD,C'1'            Option '1' is default
+         MVC   SCR2DSN,COMMSTR         LIBRARIAN Master file
+RESTART  DS    0H
+         LA    R1,SCR2TXT              Parm TPUTS (address screen)
+         LA    R0,SCR2LEN              Parm TPUTS (length  screen)
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Display master file info
+         LA    R5,BUFFER               Set BUFFER address and
+         L     R3,COMMSCR              Input screen
+         LR    R1,R3                   Duplicate area address
+         LA    R0,2000                 Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         MVC   AIDBYTE,0(R3)           Save AID byte
+         XR    R6,R6                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   SCAN00Z                 Branch if zero or less
+         LA    R3,3(,R3)
+SCAN00A  CLI   0(3),COMMSBA            SBA order found?
+         BE    SCAN00B                 Yes: skip 3 bytes SBA
+         MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R6,1(,R6)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,SCAN00A              Loop
+         B     SCAN00Z                 Conversion finished
+SCAN00B  DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes input (SBA)
+         BCTR  R4,0                    Minus 1 bct
+         BCTR  R4,0                    Minus 1 bct
+         BCT   R4,SCAN00A              Test next byte
+SCAN00Z  DS    0H
+         LTR   R6,R6                   Nothing received?
+         BZ    RESTART                 Yes: reshow screen
+         CLI   AIDBYTE,X'F3'           PFK3 pressed?
+         BE    RETURN                  Yes: exit RPFLIB
+         CLI   AIDBYTE,X'C3'           PFK15 pressed?
+         BE    RETURN                  Yes: exit RPFLIB
+SCAN01   DS    0H
+         MVI   BUFMSTR,C' '            Clear DSName ...
+         MVC   BUFMSTR+1(L'BUFMSTR-1),BUFMSTR        .. of Master file
+         MVC   MSTRVOL,BUFMSTR         Clear volume of Master file
+         MVC   MODULE,BUFMSTR          Clear LIBRARIAN module
+         LA    R5,BUFFER               Poin to start of Buffer
+         LA    R4,COMMAND              Point to command
+SCAN07   DS    0H
+         CLC   S2MSTR,0(R5)            Search for MASTER file      @rp1
+         BE    SCANR9                  Found: process DSN Master file
+         MVC   0(1,R4),0(R5)           Move 1 byte LIB module
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN07               Examine next bytes
+         B     RESTART                 No data anymore: display screen
+SCANR9   LA    R5,L'S2MSTR(,R5)        Point after 'MASTER file ='
+         SH    R6,=AL2(L'S2MSTR)       Decrease BCT register
+         LA    R4,BUFMSTR              Point to Master File DSName
+SCAN11   DS    0H
+         CLC   S2VOL,0(R5)             Search for volume           @rp1
+         BE    SCANR13                 Found: process volume
+         MVC   0(1,R4),0(R5)           Move 1 character Master file
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN11               Examine next bytes
+         B     RESTART                 No data anymore: displau screen
+SCANR13  LA    R5,L'S2VOL(,R5)         Point after 'Volume      ='
+         SH    R6,=AL2(L'S2VOL)        Decrease BCT register
+         BNP   SCAN17                  No data anymore
+         LA    R4,MSTRVOL              Point to Master file Volume
+SCAN15   DS    0H
+         MVC   0(1,R4),0(R5)           Move 1 character MSTR volume
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN15               Examine next bytes
+SCAN17   DS    0H
+         MVC   SCR2VOL,MSTRVOL         Move volume of Master file
+         MVC   SCR2DSN,BUFMSTR         and DSN of Master in screen
+         MVC   FAIRDDN,=CL8'MASTER'    Default is DDNAME disk master
+         MVC   FAIROOPS(4),=CL4'2002'  Mark Disk Master in FAIR options
+         MVC   HEADUPD(7),=C'Updated'  Default last update in hdr  @rp1
+         MVC   HEADMSTR(10),=C'masterfile' Type of master in hdr   @rp1
+         CLI   COMMAND,C'1'            Allocate?
+         BE    FUNC01                  Yes: go
+         CLI   COMMAND,C'2'            Allocate Tape Master?
+         BE    FUNC00                  Yes: go
+         MVC   MSG2,ERR2TXT            Msg: Invalid option
+         B     RESTART
+FUNC00   DS    0H
+         MVC   HEADUPD(7),=C'Added  '  Date added in hdr if tape   @rp1
+         MVC   HEADMSTR(10),=C'tapemaster' Type of master in hdr   @rp1
+         MVC   FAIRDDN,=CL8'MASTIN'    DDNAME Tape Master file
+         MVC   FAIROOPS(4),=CL4'3002'  Mark Tape master in FAIR options
+FUNC01   DS    0H
+         CLI   BUFMSTR,C' '            Master file specified?
+         BNE   ALCMSTR                 Yes: allocate
+         MVC   MSG2,ERRBTXT            Msg: Specify Masterfile
+         B     RESTART
+ALCMSTR  DS    0H
+*
+         MVC   COMMSTR,BUFMSTR
+         MVI   MODULE,C' '             Blank module ...
+         MVC   MODULE+1(L'MODULE-1),MODULE
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,FAIRDDN         DDNAME to allocate
+*
+         ST    R11,PARMFLD             Parameter for DSNPARS
+         LA    R1,BUFMSTR              2nd parameter, unparsed Master
+         ST    R1,PARMFLD+4
+         LA    R1,MSTRFILE             3rd parameter, parsed Master
+         ST    R1,PARMFLD+8
+         L     R15,EPDSNPA             Routine address
+         LA    R1,PARMFLD              Parameter
+         BALR  R14,R15                 Execute
+         LA    R1,MSTRFILE+44          Calculate ...
+         TRT   MSTRFILE,COMSKPNS       Register -> first blank
+         LA    R0,MSTRFILE             Point to beginning of dsn
+         SLR   R1,R0                   ... length
+         STCM  R1,3,MSTRL              And save real length
+         LA    R1,RPFD08               Reload allocation parm block
+         LA    R0,MSTRL                Length + DSN master
+         ST    R0,DA08PDSN
+         MVI   DA08DSP1,DA08SHR        DISP=SHR,
+         MVI   DA08DPS2,DA08KEEP                KEEP
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08PSWD,DA08MNM        No password
+         MVC   DA08UNIT,DA08MNM        No unit name
+         MVC   DA08SER(8),DA08MNM      Clear volume serial
+         MVC   DA08SER+6(2),=CL2' '
+         CLI   MSTRVOL,C' '            Volume specified?
+         BE    ALLOC01                 No: skip allocation with VOLUME
+         MVC   DA08UNIT,COMMUNIT       Move unit name =default SYSALLDA
+         MVC   DA08SER(6),MSTRVOL      and volume serial
+ALLOC01  DS    0H
+         L     R15,=V(CALLTS)          Allocate (tape) Master
+         CALL  (15)
+         LTR   R15,R15                 Alloc ok ?
+         BNZ   ALLOCERR
+         CLI   MSTRVOL,C' '            Volume specified?
+         BNE   OBTAIN                  Yes: volume is known
+         XC    CAMLST,CAMLST           Clear LOCATE parameter list
+         MVI   CAMLST,X'44'            CAMLST NAME
+         LA    R0,MSTRFILE
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,LOCAREA
+         ST    R0,CAMLST+12            Option 4
+         LOCATE CAMLST                 Search data set om catalog
+         LTR   R15,R15                 RC = 0 Locate?
+         BNZ   LOCERR                  No: error
+         MVC   MSTRVOL,LOCVOL          Move Volume of master
+         MVC   SCR2VOL,LOCVOL          Also in menu
+         B     OBTAIN                  Obtain master file
+LOCERR   MVC   MSG2,ERR7TXT            Msg: data set not in catalog
+         BAL   R14,UNALLOC             Free the Librarian Master file
+         B     RESTART                 Go to error routine
+OBTAIN   DS    0H
+         XC    CAMLST,CAMLST           Clear OBTAIN parameter list
+         MVI   CAMLST,X'C1'            CAMLST SEARCH
+         LA    R0,MSTRFILE             Data set name
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,MSTRVOL              Volume on which MSTRFILE resides
+         ST    R0,CAMLST+8             Option 3
+         LA    R0,DSCB1                Format 1 DSCB
+         ST    R0,CAMLST+12            Option 4
+         OBTAIN CAMLST                 Test if data set is on volume
+         LTR   R15,R15                 Master found on volume?
+         BZ    OPNMST                  Yes: allocate Master file
+         MVC   MSG2,ERR8TXT            Msg: Data set not on volume
+         BAL   R14,UNALLOC             Free the Librarian Master file
+         B     RESTART                 Go to error routine
+OPNMST   DS    0H
+         MVC   COMMRECL,=F'80'         Set LRECL to 80 for RPFEDIT
+         LA    R15,LIBOPEN             Entry Point LIBOPEN
+         CALL  (15)                    Branch to LIBOPEN routine
+         CLI   OPENRES,C'0'            Open ok?
+         BE    RDINDEX                 Yes: good, continue
+         TITLE 'ERROR ROUTINE FOR OPEN MASTERFILE'
+OPENERR  DS    0H
+         LA    R15,LIBCLOSE            Address routine (Close file)
+         CALL  (15)                    Execute this routine
+         MVC   MSG2,ERR4TXT            Msg: Open error, code=x
+         MVC   MSG2+23(2),OPENRES      Move error code into message
+         BAL   R14,UNALLOC             Free the Librarian Master file
+         B     RESTART
+         TITLE 'ERROR ROUTINE FOR ALLOCATION OF MASTER FILE'
+ALLOCERR DS    0H
+         LA    R1,RPFD08               Allocation parm block
+         MVC   MSG2,ERR3TXT            Msg: Alloc error xxxx on DS
+         UNPK  DBW(5),DA08DARC(3)      Expand each byte
+         NC    DBW(4),=X'0F0F0F0F'     Reset hi-order digits
+         TR    DBW(4),=C'0123456789ABCDEF' Make HEX digits EBCDIC
+         MVC   MSG2+15(4),DBW          Move to message
+         CLC   =X'1708',DA08DARC       Allocation 1708?
+         BNE   ALCERR2                 No: display error code
+         DROP  R1                      RPFD08
+         MVC   MSG2,ERR7TXT            Msg: Data set not in catalog
+         B     RESTART
+ALCERR2  DS    0H
+         B     RESTART
+         TITLE 'CALL THE READ INDEX ROUTINE AND CHECK ERRORS'
+RDINDEX  DS    0H
+         MVC   SCR5DSN,MSTRFILE        Master file DSN in screen
+         LA    R3,SCR5DSN+29           Last position of DSN master
+         LA    R4,28                   Loop max. 28 times
+DSN1     DS    0H                      Replace trailing blanks by '-'
+         CLI   0(R3),C' '              Trailing blank found?
+         BNE   DSN9                    No: end of scan
+         MVI   0(R3),C'-'              Replace by '-'
+         BCTR  R3,0                    Prevous position in DSN
+         BCT   R4,DSN1                 Loop until all spaces replaced
+DSN9     DS    0H
+         BAL   R14,FINDMEM             Read in the LIBRARIAN index
+         LTR   R15,R15                 and check completion
+         BZ    RPFREAD                 Good
+         C     R15,=F'4'               Workspace too small?
+         BE    RPFREAD                 Yes: accept truncation
+         BAL   R14,UNALLOC             Free the Librarian Master file
+         B     RESTART                 Notify error to user
+         TITLE 'Investigate the primary commands in the command area'
+*---------------------------------------------------------------------*
+*
+*        Possible Primary commands:
+*
+*        DOWN  Scroll forward
+*        UP    Scroll backward
+*        END   End of RPFLIB
+*        RETURN same as END, but always return to MAIN
+*        TOP   Goto top of module list       (Alias = T)
+*        BOTTOM Goto bottom of module list   (Alias = B)
+*        L xxx Locate display on module xxx
+*        PFK   Alter/display Program function keys
+*        INDEX Invoke the editor (RPFEDIT) to edit the LIBRARIAN index.
+*        =n.n  Return, goto main and execute option n.n.
+*        ?     Refresh screen.
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFREAD  DS    0H                      Write the LIBRARIAN index on scr
+         BAL   R14,RPFTPUT             Write the screen
+RPF021   DS    0H                      Process the output
+         MVI   MSG5,C'-'               Clear message area
+         MVC   MSG5+1(L'MSG5-1),MSG5    ,,     ,,     ,,
+         LA    R2,AIDBYTE              Address AID byte
+         LA    R5,SCREEN               Pickup output area screen
+         BAL   R14,CONVIN              Populate the screen
+         MVI   REP5,C' '               Clear ...
+         MVC   REP5+1(L'REP5-1),REP5         input command area
+         LTR   R15,R15                 Conversion OK?
+         BNZ   NEWSCR                  New screen if yes
+         MVC   SC@BUFF,SCREEN          Copy command buffer
+         TRT   SC@BUFF,COMSKPSP        Search for first non-blank
+         BZ    ENDSCAN                 All blanks, nothing to parse
+         MVC   SCREEN(24),0(R1)        Shift command to start of BUFFER
+ENDSCAN  DS    0H
+         CLI   AIDBYTE,X'7D'           Enter key pressed?
+         BE    RPF0219                 Yes: good
+         LA    R2,SCREEN               1st 24 byte receives the command
+         LA    R1,AIDBYTE              Address AID byte
+         BAL   R14,PFK                 Get PFK definitions
+         B     RPF021L(R15)            Branchlist
+RPF021L  B     RPF0219                 Rc = 0, no errors
+         B     RPF0217                 Rc = 4, CON=Y specified
+         B     RPF0215                 Rc = 8, PFK not defined
+         B     RPF0213                 RC = 12, PFK definition invalid
+RPF0213  DS    0H
+         MVC   MSG5,ERRATXT            Msg: PFK definition invalid
+         MVI   REP5,C' '               Blank ...
+         MVC   REP5+1(L'REP5-1),REP5        command area
+         BAL   R14,RPFTPUT             Write screen
+         B     RPF021                  Review screen
+RPF0215  MVC   MSG5,ERR9TXT            Msg: PFK not defined
+         BAL   R14,RPFTPUT             Write screen
+         MVI   REP5,C' '               Blank ...
+         MVC   REP5+1(L'REP5-1),REP5        command area
+         B     RPF021                  Review screen
+RPF0217  DS    0H
+         MVI   MSG5,C'-'               Clear message area
+         MVC   MSG5+1(L'MSG5-1),MSG5    ,,     ,,     ,,
+         MVC   REP5,SCREEN             Repeat command
+         BAL   R14,RPFTPUT             Write screen
+         B     RPF021                  Review screen
+RPF0219  DS    0H
+         CLI   SCREEN,C'?'             Refresh screen?
+         BNE   RPF022                  Proceed if not
+NEWSCR   DS    0H
+         MVI   REP5,C' '               Blank ...
+         MVC   REP5+1(L'REP5-1),REP5        command area
+         MVI   MSG5,C'-'               Clear message area
+         MVC   MSG5+1(L'MSG5-1),MSG5    ,,     ,,     ,,
+         B     RPFREAD                 Write and process the screen
+RPF022   DS    0H
+         CLI   SCREEN,C'='             =n or =n.n command?         @rp1
+         BNE   RPF023                  No: branch                  @rp1
+         MVC   CMAINOPT,SCREEN+1       Move options                @rp1
+         OI    COMMFLG2,$COMRTRN       Set return indicator        @rp1
+         B     RETURN                  And terminate (to main)     @rp1
+RPF023   DS    0H                      Process the commands
+         BAL   R14,RPFSCRN             Process the line commands
+         TM    SW,$CHANGE              Something changed ?
+         BNO   RPF024                  Process cmds if not changed
+         NI    SW,255-$CHANGE
+         CLI   SCREEN,C' '             No command entered?
+         BE    RPF023A                 Do not write pause msg
+         CLI   REP5,C' '               No command in command area
+         BNE   RPF023A                 No: proceed
+         MVC   REP5(24),SCREEN         Else repeat command
+RPF023A  B     RPFREAD                 Write and process the screen
+RPF024   DS    0H
+         CLC   SCREEN(4),=C'DOWN'      Scroll forward?
+         BNE   RPF028                  No: test other commands
+         L     R8,COMMFSCR             Point to first line on screen
+         AL    R8,NEXTSCR              Next screen
+         CL    R8,COMMLAST             Compare with COMMLASTpointer
+         BH    RPFREAD                 If beyond: ignore scroll
+         ST    R8,COMMFSCR             New first line on screen
+         B     RPFREAD                 Write and process the screen
+RPF028   CLC   SCREEN(3),=C'PFK'       Command 'PFK' entered?
+         BNE   RPF031                  No: test other commands
+         L     R15,EPPFK               Entry point RPFPFK        @rpa01
+         LA    R1,ADDRCOMM             Address of RPFCOMM
+         CALL  (15)                    Link to module            @rpa01
+         B     NEWSCR                  Write new screen
+RPF031   DS    0H                      Test if SCB/UP command
+         CLC   SCREEN(2),=C'UP'        Scroll backward?
+         BNE   RPF035                  No: test other commands
+         L     R8,COMMFSCR             Pick 1st line on screen
+         CL    R8,COMWSTRT             Compare with start workspace
+         BNH   RPFREAD                 Before: ignore scroll
+         SL    R8,NEXTSCR              Decrease with #LINES * NEXTENT
+         CL    R8,COMWSTRT             And compare with start workspace
+         BNL   *+8                     High: good
+         L     R8,COMWSTRT             Not high: reset to begin
+         ST    R8,COMMFSCR             New 1st line on screen
+         B     RPFREAD                 Write and process the screen
+RPF035   CLI   SCREEN,C'B'             Command 'B' or 'BOTTOM'?
+         BNE   RPF036                  No: test other commands
+         L     R8,COMMLAST             Last record pointer
+         SL    R8,NEXTSCR              Subtract length of screen
+         LA    R8,NEXTENT(,R8)         Add length one entry
+         CL    R8,COMWSTRT             Before the beginning workspace?
+         BNL   RPF035A                 No: good
+         L     R8,COMWSTRT             Reset to top
+         B     RPFREAD                 Write and process the screen
+RPF035A  ST    R8,COMMFSCR             And store the result
+         B     RPFREAD                 Write and process the screen
+RPF036   CLC   SCREEN(2),=C'L '        'Locate on module' command?
+         BNE   RPF038                  No: search for other commands
+         LA    R3,SCREEN+2             Load locate character string
+         LA    R4,8                    Max 8 chars = module name
+         XR    R5,R5                   Count length in register 5
+RPF037   CLI   0(R3),C' '              End of Locate string?
+         BE    RPF0371                 Yes: stop search
+         LA    R5,1(,R5)               Count non blank byte
+         LA    R3,1(,R3)               Next byte in 'SCREEN'
+         BCT   R4,RPF037               Loop
+RPF0371  LTR   R5,R5                   No bytes found ?
+         BE    RPF0375                 Yes: issue message
+         BCTR  R5,0                    Minus 1 for EX
+         L     R8,COMWSTRT             Load start address    (BXLE)
+         L     R7,COMMLAST             Last record pointer   (BXLE)
+         LA    R7,79(,R7)              Adjust offset         (BXLE)
+         LA    R6,NEXTENT              Length of entry       (BXLE)
+         LA    R3,SCREEN+2             Address char string
+RPF0372  EX    R5,LCOMPARE             Compare if match found
+         BNL   RPF0376                 Low or equal: found
+         BXLE  R8,6,RPF0372            Loop                  (BXLE)
+RPF0375  MVC   MSG5,ERRCTXT            Msg: Enter locate string
+         MVC   REP5(24),SCREEN         Repaat command
+         B     RPFREAD                 Write and process the screen
+LCOMPARE CLC   LMEMBR(0),0(R3)         << executed >>
+RPF0376  DS    0H                      Locate the found module
+         ST    R8,COMMFSCR             New first line in screen
+         B     RPFREAD                 Write and process the screen
+RPF038   DS    0H
+         CLC   SCREEN(3),=C'TOP'       Command 'TOP'?
+         BE    RPFTOP                  Yes: process command
+         CLC   SCREEN(2),=C'T '        'TOP' command (alias 'T')?
+         BNE   RPF039                  No: search for other commands
+RPFTOP   MVC   COMMFSCR,COMWSTRT       First line is 1st member
+         B     RPFREAD                 Write and process the screen
+RPF039   DS    0H
+         CLC   SCREEN(6),=C'RETURN'    RETURN command entered?
+         BNE   RPF041                  No: test other commands
+         OI    COMMFLG2,$COMRTRN       Set return indicator in RPFCOMM
+         B     RETURN                  And terminate RPFLIB
+RPF041   DS    0H
+         CLC   SCREEN(5),=C'INDEX'     LIBRARIAN index requested?
+         BNE   RPF043                  No: test other commands
+         OI    COMMFLG1,$COMCURR       Bypass the loader (RPFEDITL)
+         MVC   COMMBR,=CL8' '          Blank member name in RPFCOMM
+         L     R15,EPEDIT              Entry point RPFEDIT
+         XC    COMMVM,COMMVM           No ISPF stats (Librarian module)
+         LA    R1,ADDRCOMM             Address of RPFCOMM
+         CALL  (15)                    Invoke RPFEDIT
+         CLI   CMAINOPT,C' '           =n(.n) command given in RPFEDIT?
+         BNE   RETURN                  Yes: return at once
+         LA    R15,LIBOPEN             Entry point FAIROPN
+         CALL  (15)                    Execute this routine
+         MVC   MODULE,=CL8' '          Blank module
+         L     R2,COMWSTRT             First record in EDIT workspace
+         ST    R2,COMMFSCR             And set in COMMFSCR
+         SL    R2,=A(NEXTENT)          Minus length 1 entry
+         ST    R2,COMMLAST             Save as Last recod
+         BAL   R14,FINDMEM             Read index again
+         NI    SW,255-$CHANGE
+         B     RPFREAD                 Write and process the screen
+RPF043   DS    0H
+         CLC   SCREEN(3),=C'END'       Command 'END'?
+         BE    RETURN                  Yes: return
+         CLI   SCREEN,C' '             Nothing entered?
+         BE    RPF045                  Proceed
+         MVC   MSG5,ERRDTXT            Msg: Invalid command
+         MVC   REP5,SCREEN             Repeat command in error
+         B     RPFREAD                 Write and process the screen
+RPF045   DS    0H
+         MVI   MSG5,C'-'               Clear message area
+         MVC   MSG5+1(L'MSG5-1),MSG5    ,,     ,,     ,,
+         B     RPFREAD                 Write and process the screen
+         TITLE 'END OF ROUTINE'
+RETURN   DS    0H
+         BAL   R14,UNALLOC             Free the master file
+         DELETE EP=FAIROPN             Delete
+         DELETE EP=FAIRCLS                   Librarian
+         DELETE EP=FAIRMOD                            FAIR
+         DELETE EP=FAIRREC                                routines
+         L     R1,L#SCRNS              Length of dynamic screen area
+         L     R2,A#SCRNS              Address of dynamic screen area
+         FREEMAIN R,LV=(1),A=(2)       Release screens storage
+         LR    R3,R13                  Area to free
+         L     R13,4(,R13)             Load caller's save area
+         FREEMAIN R,LV=WORKL,A=(3)     Free the working storage
+         RETURN (14,12),RC=0           Return to caller
+         TITLE 'Locate the module or index'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:   FINDMEM                                           *
+*                                                                     *
+*        Function:  Locate the LIBRARIAN module or the LIBRARIAN      *
+*                   index and read the module or index into the       *
+*                   EDIT workspace                                    *
+*                                                                     *
+*        Return codes (in register 15)                                *
+*                   0, no errors. Index or module read in workspace   *
+*                   4, EDIT workspace too small                       *
+*                   8, READ error or module not found                 *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+FINDMEM  DS    0H
+         ST    R14,R14FMEM             Save register 14
+         CLC   MODULE(8),=CL8' '       Librarian INDEX requested?
+         BE    INDEX00
+         MVC   FAIRMOPS(7),=C'0000000'
+         MVC   FAIRROPS(3),=C'000'     Move read options
+         LA    R15,LIBMOD              FAIRMOD routine
+         CALL  (15)                    Locate LIB module
+         CLI   MODRES,C'0'
+         BE    MEMFOUND
+         MVC   MSG5,ERR5TXT            Msg: Module not in Master
+         LA    R2,8                    Rc = 8, module not in master
+         B     CLOSE                   Close and return
+         TITLE 'Read the module into the EDIT workspace'
+MEMFOUND DS    0H
+         MVC   COMMBR,MODULE           Move LIB module name in RPFCOMM
+         MVC   COMMMOD,MODULE          Move LIB module name in RPFCOMM
+READCARD DS    0H
+         LA    R15,LIBREC              LIBRARIAN read routine
+         CALL  (15)                    Exec READ routine
+         CLI   RECRES,C'0'
+         BE    MEMPUT
+         CLI   RECRES,C'1'             EOF module (= code 1)?
+         BE    READEOF                 Finished
+         MVC   MSG5,ERR6TXT            Msg: Error in READ code=x
+         MVC   MSG5+23(1),RECRES       Move READ error code
+         LA    R2,8                    Rc = 8, read error
+         B     CLOSE                   Close and return
+         USING WORKSPCE,R2             Address workspace entry
+MEMPUT   L     R2,COMMLAST             Last record in workspace
+         LA    R2,NEXTENT(,R2)         + 1 entry
+         CL    R2,COMWRKND             End of workspace reached?
+         BH    WSFULL                  Yes: branch, workspace full
+         MVC   WORKDATA,RECRES+X'78'   Move LIB record in workspace
+         XC    WORKSLIN,WORKSLIN       Clear line number on screen
+         XC    WORKFLGS,WORKFLGS       Clear flags
+         ST    R2,COMMLAST             New last record pointer
+         B     READCARD                Read next record
+READEOF  DS    0H
+         XR    R2,R2                   Rc = 0, no errors
+         B     CLOSE
+WSFULL   DS    0H
+         LA    R2,4                    Rc = 4, workspace too small
+         B     CLOSE
+         DROP  R2
+*
+         TITLE 'Read the LIBRARIAN index into the EDIT workspace'
+INDEX00  DS    0H
+         MVI   COMMBR,C' '             Set default to all members
+         MVC   COMMBR+1(7),COMMBR                 ,,
+         ZAP   #MODULES,=P'0'          Clear module counter
+INDEX00A DS    0H
+         MVC   FAIRMOPS(8),=C'10000000'   See LIBFAIR manual
+         LA    R15,LIBMOD              FAIRMOD routine
+         CALL  (15)                    Execute this routine
+         CLI   MODRES,C'0'             Read of INDEX record OK?
+         BE    INDEX01                 Good
+         CLI   MODRES,C'1'             End of file?
+         BE    INDEXEOF
+         MVC   MSG2,ERR6TXT            Msg: Error in READ, code=x
+         MVC   MSG2+23(1),MODRES       FAIRMOD error code
+         LA    R15,LIBCLOSE            Load CLOSE routine address
+         CALL  (15)                    Close Master file
+         LA    R2,8                    Rc = 8, module not in master
+         B     CLOSE                   Close and return
+INDEX01  L     R8,COMMLAST             Last record in workspace
+         LA    R8,NEXTENT(,R8)         + 1 entry
+         L     R1,COMWRKND             End of EDIT workspace
+         SL    R1,=A(NEXTENT)          - 1 line (room for **END**)
+         CR    R8,R1                   End of workspace reached?
+         BH    INDEX02                 Yes: Rc=4, workspace full
+         MVI   0(R8),C' '              Clear
+         MVC   1(NEXTENT-1,R8),0(R8)        workspace line
+         XC    LPREFIX,LPREFIX         Clear prefix
+         MVC   LMEMBR,MODRES+X'C'      Move module name
+         MVC   MODULE,MODRES+X'C'      Setup field module for next mod
+         MVC   LPGMR,MODRES+X'10C'     Programmer name
+         MVC   LDESCR,MODRES+X'BC'     Description field
+         MVC   LINPUT,MODRES+X'123'    Unpack number of cards
+         AP    #MODULES,=P'1'          Increase module counter
+         CLI   COMMAND,C'2'            Tape master file ?          @rp1
+         BE    DATEUPD                 Y: date upd = date added    @rp1
+         CLI   MODRES+3,C'0'           Updated?
+         BNE   DATEUPD                 Yes: move date and time
+         MVC   LDATE(14),=CL14'Not updated' Tell it to the user    @rp1
+         B     NODATE                  Branch
+DATEUPD  MVC   LDAY,MODRES+X'20'       Move
+         MVI   LDAY+2,C'/'                 date
+         MVC   LMND,MODRES+X'22'               last
+         MVI   LMND+2,C'/'                         update
+         MVC   LYEAR,MODRES+X'24'                    in workspace
+         MVC   LHOUR,MODRES+X'26'      Move time
+         MVI   LHOUR+2,C':'                  last update
+         MVC   LMIN,MODRES+X'28'                     in workspace
+NODATE   ST    R8,COMMLAST             New last record pointer
+         B     INDEX00A                Read next card
+INDEXEOF DS    0H
+         XR    R2,R2                   Rc = 0, no errors
+         B     INDEX99                 Index finished
+INDEX02  DS    0H
+         LA    R2,4                    Rc = 4, workspace too small
+*
+INDEX99  DS    0H
+         L     R8,COMMLAST             Last module in workspace
+         LA    R8,NEXTENT(,R8)         + 1 line for **END**
+         MVI   0(R8),C' '              Clear
+         MVC   1(NEXTENT-1,R8),0(R8)        workspace line
+         MVC   LMEMBR,=CL8'**END**'    Last line is the END line
+         MVC   END2(8),=C'Modules:'
+         MVC   END2+8(7),=X'4020206B202120' Move edit pattern
+         ED    END2+8(7),#MODULES      Make counter readable
+         MVC   LDESCR(L'END2),END2     Move the totals too.
+         ST    R8,COMMLAST             New last record pointer
+*
+CLOSE    DS    0H
+         LA    R15,LIBCLOSE            Entry point FAIRCLS
+         CALL  (15)                    Execute this routine
+         LR    R15,R2                  Rc into register 15
+FIND099  DS    0H
+         L     R14,R14FMEM             Load return address
+         BR    R14                     Return to caller
+*
+         TITLE 'OPEN MASTER FILE, THIS ROUTINE IS 24 BIT MODE'
+LIBOPEN  DS    0H
+         ST    R14,R14LBOPN            Save register 14
+         RPFSA24                       Switch to amode 24        @rpa01
+         L     R15,FAIROPN
+         LA    R1,FAIRWKAR             Parameter 1
+         ST    R1,FAIRPRM
+         LA    R1,OPENRES              Parameter 2
+         ST    R1,FAIRPRM+4
+         LA    R1,FAIROCMD             Parameter 3
+         ST    R1,FAIRPRM+8
+         LA    R1,FAIROOPS             Parameter 4
+         ICM   R1,8,=X'80'             Last parameter
+         ST    R1,FAIRPRM+12
+         LA    R1,FAIRPRM              Parameter
+         CALL  (15)                    Open MASTER file
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R14,R14LBOPN            Restore register 14
+         BR    R14                     Return
+         TITLE 'CLOSE MASTER FILE, THIS ROUTINE IS 24 BIT MODE'
+LIBCLOSE DS    0H
+         ST    R14,R14LBCLS            Save register 14
+         RPFSA24                       Switch to amode 24        @rpa01
+         L     R15,FAIRCLS
+         LA    R1,FAIRWKAR             Parameter 1
+         ST    R1,FAIRPRM
+         LA    R1,CLOSERES             Parameter 2
+         ICM   R1,8,=X'80'             Last parameter
+         ST    R1,FAIRPRM+4
+         LA    R1,FAIRPRM              Parameter
+         CALL  (15)                    Close MASTER file
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R14,R14LBCLS            Restore register 14
+         BR    R14                     Return
+         TITLE 'READ LIBRARIAN INDEX. THIS ROUTINE IS 24 BIT MODE'
+LIBMOD   DS    0H
+         ST    R14,R14LBMOD            Save register 14
+         RPFSA24                       Switch to amode 24        @rpa01
+         L     R15,FAIRMOD
+         LA    R1,FAIRWKAR             Parameter 1
+         ST    R1,FAIRPRM
+         LA    R1,MODRES               Parameter 2
+         ST    R1,FAIRPRM+4
+         LA    R1,MODULE               Parameter 3
+         ST    R1,FAIRPRM+8
+         LA    R1,FAIRMOPS             Parameter 4
+         ICM   R1,8,=X'80'             Last parameter
+         ST    R1,FAIRPRM+12
+         LA    R1,FAIRPRM              Parameter
+         CALL  (15)                    Read INDEX record
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R14,R14LBMOD            Restore register 14
+         BR    R14                     Return
+         TITLE 'READ LIBRARIAN RECORDS. THIS ROUTINE IS 24 BIT MODE'
+LIBREC   DS    0H
+         ST    R14,R14LBREC            Save register 14
+         RPFSA24                       Switch to amode 24        @rpa01
+         L     R15,FAIRREC
+         LA    R1,FAIRWKAR             Parameter 1
+         ST    R1,FAIRPRM
+         LA    R1,RECRES               Parameter 2
+         ST    R1,FAIRPRM+4
+         LA    R1,FAIRROPS             Parameter 3
+         ICM   R1,8,=X'80'             Last parameter
+         ST    R1,FAIRPRM+8
+         LA    R1,FAIRPRM              Parameter
+         CALL  (15)                    Read record of LIBRARIAN module
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R14,R14LBREC            Restore register 14
+         BR    R14                     Return
+         TITLE 'Write a record to RPFEDT1'
+PUTIT    DS    0H
+         ST    R14,R14PUTIT            Save register 14
+         RPFSA24                       Switch to amode 24        @rpa01
+         PUT   EDITDCB,RECORD          Write record on RPFEDT1
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R14,R14PUTIT            Restore register 14
+         BR    R14                     Return
+         TITLE 'READ A RECORD FROM RPFEDT1. ROUTINE IS IN 24 BIT MODE'
+GETIT    DS    0H
+         ST    R14,R14GETIT            Save return register
+         GET   EDITDCB                 Read record (addr. in register1)
+         LA    R1,0(,R1)               Make a clean address
+         XR    R15,R15                 Rc= 0: record succesfully read
+         B     GET099                  End of routine
+GET003   DS    0H
+         LA    R15,4                   Rc = 4: end of file
+GET099   DS    0H
+         L     R14,R14GETIT            Restore register 14
+         BR    R14                     Return
+         TITLE 'TPUT MODIFIED SCREEN'
+RPFTPUT  DS    0H                      Routine to write screen
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Function: Populate the LIBRARIAN index selection screen      *
+*                  from the EDIT workspace and write the screen.      *
+*                                                                     *
+*        Register usage:                                              *
+*        R3    Number of lines on the screen (21 --> 96)              *
+*        R4    Address of screen to be TPUT'ed.                       *
+*        R8    Current address of memberlist in workspace.            *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+         ST    R14,R14TPUT             Save return register
+         LA    R4,LNE5                 1st data line on SCR5
+         USING SCRENTRY,R4             Use DSECT
+         L     R8,COMMFSCR             First line on screen
+         LH    R3,#LINES               Number of lines (21-->96)
+RPF101   DS    0H                      *Start Loop*
+         MVC   SCRECOL2,=AL3(GREEN)    Paint module green
+         MVC   SCRECOL3,=AL3(TURQ)     and paint the rest purple
+         MVC   SCREATT1,=X'1DF9'       SF order Hilite, prot MDT on
+         MVI   SCREOPER,C' '           Blank
+         MVI   SCREDESC,C' '                 the
+         MVC   SCREDESC+1(L'SCREDESC-1),SCREDESC  fields
+         MVC   SCREMOD,SCREDESC                         in
+         MVC   SCRELUPD,SCREDESC                            the
+         MVC   SCRELPGM,SCREDESC                               screen
+         MVC   SCRELINP,SCREDESC
+         CL    R8,COMMLAST             Beyond last record pointer?
+         BNH   RPF108                  No: continue population
+         B     RPF110
+RPF108   DS    0H
+         MVC   SCREMOD,LMEMBR          Module name
+         CLC   SCREMOD,=CL8'**END**'   Is this the **END** line?
+         BNE   RPF109                  No: continue populating
+         MVC   SCRECOL2,=AL3(YELLOW)   Paint **END** yellow
+         MVC   SCRECOL3,=AL3(YELLOW)   and paint totals yellow too
+         MVC   SCREDESC(L'END2),END2   Total modules
+         B     RPF109A                 Next line
+RPF109   MVC   SCREATT1,=X'1DC9'       SF order Hilite, unprot MDT on
+         MVI   SCREOPER,C'.'           Period
+         MVC   SCREDESC,LDESCR         Description                 @rp1
+         MVC   SCRELUPD,LDATE          Last updated                @rp1
+         MVC   SCRELINP,LINPUT         Input records               @rp1
+         MVC   SCRECOL4,=AL3(TURQ)     Default turquoise           @rp1
+         CLI   LPGMR,C'*'              Is it a message ?           @rp1
+         BNE   *+10                    No: do not change color     @rp1
+         MVC   SCRECOL4,=AL3(WHITE)    Else change it into white   @rp1
+*+10                                                               @rp1
+         MVC   SCRELPGM,LPGMR          Programmers name            @rp1
+RPF109A  LA    R8,NEXTENT(,R8)         Next entry in workspace
+RPF110   DS    0H
+         L     R1,DATALINE             Length data entry on screen
+         LA    R4,0(R1,R4)             Next line on screen
+         BCT   R3,RPF101               *End Loop* until all done
+         L     R0,TPUTLEN              Parm TPUTS (length of screen)
+         LA    R1,SCR5TXT              Parm TPUTS (address screen)
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Display master file info
+         L     R14,R14TPUT             Restore register 14
+         BR    R14
+         DROP  R4
+         TITLE 'Process the line commands'
+RPFSCRN  DS    0H
+         L     R8,COMMFSCR
+         ST    R14,R14SCRN             Save register 14
+         LA    R3,SCREEN               Load gotten screen
+         LA    R3,24(,R3)              Skip command area
+         LH    R4,#LINES               Max 21->96 lines
+RPF201   DS    0H
+         CLI   1(R3),C' '              Blank in member (last screen)
+         BE    RPF299                  Yes ignore operation
+         CLI   0(R3),C' '              No operation?
+         BE    RPF299                  Yes ignore operation
+         CLI   0(R3),C'.'              No operation?
+         BE    RPF299                  Yes ignore operation
+         CLI   0(R3),C'D'              Delete entered?
+         BNE   RPF205                  No: test other commands
+         MVC   MODULE,1(R3)            Set module name
+         MVC   COMMMOD,1(R3)
+         OI    SW,$CHANGE
+         MVC   EPLOC,=CL8'RPFLIB01'    Module to link to
+         BAL   R14,LINKMOD             LINK to module            @rpa01
+         LTR   R15,R15                 Delete ok?
+         BZ    RPF202                  Yes branch
+         MVC   LPGMR(15),=CL15'*Not-del'    mark not deleted
+         B     RPF299
+RPF202   MVC   LPGMR(15),=CL15'*Deleted'
+         B     RPF299
+RPF205   DS    0H                      RENAME Module
+         CLI   0(R3),C'R'              Rename line command?
+         BNE   RPF206                  Test other funcs if not
+         OI    SW,$CHANGE
+         B     RPF299                  Bypass Rename
+RPF206   DS    0H
+         CLI   0(R3),C'P'              Print?
+         BNE   RPF209                  No test other functions
+         OI    SW,$CHANGE              Set flag
+         TM    COMMFLG1,$COMNTMP       No temporary ds under RPFEDT1?
+         BNO   RPF206A                 Present: branch
+         MVC   LPGMR(15),=CL15'*Print N/A' move message
+         B     RPF299                  Next entry
+RPF206A  DS    0H
+         LA    R15,LIBOPEN             Entry point FAIROPN
+         CALL  (15)                    Open master file
+         CLI   OPENRES,C'0'
+         BE    RPF207
+         MVC   MSG5,ERR4TXT            Msg: Error in open, code=xx
+         MVC   MSG5+22(2),OPENRES      Error code into message
+RPF206B  MVC   LPGMR(15),=CL15'*Print-err'                         @rp1
+         B     RPF299                  Test next line on screen
+RPF207   DS    0H
+         MVC   MODULE,LMEMBR           Move module name
+         MVC   FAIRMOPS(7),=C'0000000'
+         MVC   FAIRROPS(3),=C'000'     FAIR Read options
+         LA    R15,LIBMOD              FAIRMOD routine
+         CALL  (15)                    Execute
+         CLI   MODRES,C'0'
+         BE    RPF208
+         LA    R15,LIBCLOSE            Entry point FAIRCLS routine
+         CALL  (15)                    Execute
+         MVC   MSG5,ERR5TXT            Msg: Module not in Master
+         B     RPF206B
+RPF208   DS    0H
+         BAL   R14,RPFPRT
+         LTR   R15,R15                 Print ok ?
+         BNZ   RPF206B                 No: issue error
+         MVC   LPGMR(15),=CL15'*Printed'                           @rp1
+         B     RPF299                  Next entry if possible
+RPF209   DS    0H
+         CLI   0(R3),C'B'              Browse?
+         BNE   RPF213                  Invalid line command
+         OI    SW,$CHANGE              Mark changes on
+         TM    COMMFLG1,$COMNTMP      No temporary data set available?
+         BNO   RPF209A                 Branch if RPFEDT1 present
+         MVC   LPGMR(15),=CL15'*Browse N/A'                        @rp1
+         B     RPF299                  Next entry if possible
+RPF209A  DS    0H
+         BAL   R14,BROWSE              Browse the LIBRARIAN module
+         CLI   CMAINOPT,C' '           =n(.n) command given in RPFBRO?
+         BNE   RETURN                  Yes: return at once
+         LTR   R15,R15                 Browse ok?
+         BZ    RPF210                  Yes: good, branch
+         MVC   LPGMR(15),=CL15'*Not-browsed'                       @rp1
+         B     RPF299                  Next entry if possible
+RPF210   DS    0H
+         MVC   LPGMR(15),=CL15'*Browsed'                           @rp1
+         B     RPF299                  Next entry if possible
+RPF213   CLI   0(3),C'E'               EDIT Line command given?
+         BNE   RPF219                  Branch if not
+         TM    COMMFLG1,$COMNTMP       No temporary ds under RPFEDT1?
+         BNO   RPF214                  Present: branch
+         MVC   LPGMR(15),=CL15'*Edit-N/A' move message
+         OI    SW,$CHANGE              Set flag
+         B     RPF299                  Next entry if possible
+RPF214   DS    0H
+         OI    SW,$CHANGE              Set modification bit
+         BAL   14,EDIT                 Save workspace and go to EDIT
+         CLI   CMAINOPT,C' '           =n/=n.n cmd given in EDIT?  @rp1
+         BNE   RETURN                  Return immediately          @rp1
+         LTR   R15,R15                 Edit ok?
+         BZ    RPF217                  Yes: branch
+         C     R15,=F'4'               Workspace too small?
+         BE    RPF215                  Yes: branch
+         MVC   LPGMR(15),=CL15'*Not-Edited'                        @rp1
+         B     RPF299                  Next entry in workspace
+RPF215   MVC   LPGMR(15),=CL15'*WS too small'                      @rp1
+         B     RPF299                  Next entry in workspace
+RPF217   MVC   LPGMR(15),=CL15'*Edited'                            @rp1
+         B     RPF299                  Next entry in workspace
+RPF219   DS    0H
+         MVC   LPGMR(15),=CL15'*Sel B,D,E,P'
+         OI    SW,$CHANGE              Mark modifications on
+         B     RPF299                  Next entry if possible
+RPF299   DS    0H
+         LA    R3,9(,R3)               Next entry input
+         LA    R8,NEXTENT(,R8)         Next entry in workspace
+         BCT   R4,RPF201               Process next entry
+         L     R14,R14SCRN             Restore register 14
+         BR    R14
+         TITLE 'Browse LIBRARIAN modules'
+*---------------------------------------------------------------------*
+*
+*        Routine:     BROWSE
+*        Function:    Browse the selected LIBRARIAN modules
+*        Parameter:   Register 1, address of the to be browsed module
+*        Returncodes: 00 - no errors
+*                     08 - error(s) occured in RPFBRO
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+BROWSE   DS    0H                      Register 1 = A(Module Name)
+         LR    R2,R1                   Save register 1
+         STM   R2,R14,SAVESHW          Save registers
+BRO001   DS    0H
+         LA    R15,LIBOPEN             Address FAIROPN routine
+         CALL  (15)                    Execute
+         CLI   OPENRES,C'0'
+         BE    BRO003
+         MVC   MSG5,ERR4TXT            Msg: Error in open, code=xx
+         MVC   MSG5+22(2),OPENRES      Move open error code into msg
+         LA    R15,8                   Rc = 8
+         B     BRO999                  Terminate routine
+BRO003   DS    0H
+         MVC   MODULE,LMEMBR           Move module name
+         MVC   FAIRMOPS(8),=C'00000000'   SEE LIBFAIR MANUAL
+         MVC   FAIRROPS(3),=C'100'     Move read options
+         LA    R15,LIBMOD              Load FAIRMOD routine
+         CALL  (15)                    Execute this routine
+         CLI   MODRES,C'0'
+         BE    BRO005                  OKE ?
+         MVC   MSG5,ERR5TXT            Msg: Module not in Master
+         LA    R15,8                   Set return code
+         B     BRO999                  End of routine
+BRO005   DS    0H
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (EDITDCB,(OUTPUT)),MF=(E,COMOPN) Open temporary file
+BRO007   DS    0H
+         LA    R15,LIBREC              Read routine (FAIRREC)
+         CALL  (15)                    Execute this routine
+         CLI   RECRES,C'0'             Record read?
+         BE    BRO009                  Yes: move to RPFEDT1
+         CLI   RECRES,C'1'             FAIRREC detected end of file?
+         BE    BRO011                  Yes: close and invoke RPFBRO
+         MVC   MSG5,ERR6TXT            Msg: Error in READ code=x
+         MVC   MSG5+23(1),RECRES
+         BAL   R14,CLOSETMP            Close RPFEDT1 file
+         LA    R15,8
+         B     BRO999
+BRO009   DS    0H
+         MVC   RECORD,RECRES+X'78'     Move record
+         LA    R15,PUTIT               Write record on RPFEDT1
+         CALL  (15)                    Execute this routine
+         B     BRO007                  Next record
+BRO011   DS    0H
+         BAL   R14,CLOSETMP            Close RPFEDT1 file
+         MVC   COMMPRM(8),=CL8'RPFEDT1'  RPFBRO will browse this DDNAME
+         MVC   EPLOC,=CL8'RPFBRO'      Module to link to
+         BAL   R14,LINKMOD             LINK to module            @rpa01
+         LTR   R15,R15                 Browse ok?
+         BZ    BRO997                  Yes good
+         MVC   MSG5,COMMPRM            Move message of RPFBRO in screen
+         LA    R15,8                   Set return code
+         B     BRO999                  End of routine
+BRO997   DS    0H
+         XR    R15,R15
+BRO999   DS    0H
+         LR    R2,R15                  Save register 15
+         LA    R15,LIBCLOSE            Load FAIRCLS routine
+         CALL  (15)                    Execute this routine
+         LR    R15,R2                  Restore register 15
+         LM    R2,R14,SAVESHW          Restore the registers
+         BR    R14
+         TITLE 'EDIT or COPY a Librarian module'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        E D I T   Edit or Copy the specified module.                 *
+*                  This routine executes the following functions:     *
+*                  1. Save RPFLIB workspace on DDNAME RPFEDT1.        *
+*                  2. Read module into the EDIT workspace.            *
+*                  3. Invoke the editor (RPFEDIT) for Edit or RPFSAVE *
+*                     for C (COPY).                                   *
+*                  4. Restore workspace from RPFEDT1                  *
+*                                                                     *
+*                  Register 8 points to the current Librarian entry   *
+*                  in the EDIT workspace.                             *
+*                                                                     *
+*        Returncodes: 00 - no errors                                  *
+*                     04 - EDIT workspace too small                   *
+*                     08 - EDIT not executed.                         *
+*                     12 - Copy not executed.                         *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+EDIT     DS    0H
+         STM   R2,R14,SAVESHW          Save all the registers
+         NI    SW,255-$EDITERR-$WSFULL Reset error flags
+         MVC   SFIRSTSC,COMMFSCR       Save COMMFSCR
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (EDITDCB,(OUTPUT)),MF=(E,COMOPN) Open temporary file
+         L     R3,COMWSTRT             COMWSTRT pointer
+         LA    R4,NEXTENT              Length of workspace entry (88)
+         L     R5,COMMLAST             COMMLASTpointer
+         LA    R5,1(,R5)               Plus 1 for BXLE
+EDIT01   DS    0H
+         MVC   RECORD,8(R3)            Move data portion workspace
+*                                      to the record
+         LA    R15,PUTIT               Load routine address
+         CALL  (15)                    Execute
+         BXLE  R3,R4,EDIT01            Loop until all workspace
+*                                      entries are save upon RPFEDT1
+         BAL   R14,CLOSETMP            Close RPFEDT1
+         L     R2,COMWSTRT             Clear
+         ST    R2,COMMFSCR                   EDIT
+         SL    R2,=A(NEXTENT)                    Workspace
+         ST    R2,COMMLAST
+         LA    R15,LIBOPEN             Entry point FAIROPN routine
+         CALL  (15)                    Execute
+         CLI   OPENRES,C'0'
+         BE    EDIT02
+         MVC   MSG5,ERR4TXT            Msg: Error in open, code=xx
+         MVC   MSG5+22(2),OPENRES      Move open error code in msg
+         OI    SW,$EDITERR             Mark error
+         B     EDIT11                  Terminate routine
+EDIT02   MVC   MODULE,LMEMBR
+         BAL   R14,FINDMEM             Read module in workspace
+         LTR   R15,R15                 Ok?
+         BZ    EDIT03                  Yes: branch
+         C     R15,=F'4'               Workspace too small?
+         BE    EDIT02A                 Yes: branch
+         OI    SW,$EDITERR             Mark edit error
+         B     EDIT11                  Terminate routine
+EDIT02A  DS    0H
+         OI    SW,$WSFULL              Mark workspace too small
+         B     EDIT11                  Terminate routine
+EDIT03   DS    0H
+         OI    COMMFLG1,$COMCURR       Bypass the loader RPFEDITL
+*                                      (EDIT current workspace)
+*        Flag $COMCURR is set. This flag forces the editor (RPFEDIT)
+*        to bypass the loader (RPFEDITL).
+*        This flag also will be tested if the data is
+*        changed and the END primary comand is issued in EDIT.
+*        The $COMCURR flag, always forces the appearance of the
+*        RPFSAVE entry screen and AUTOSAVE will not be executed.
+*
+         L     R15,EPEDIT              Entry point RPFEDIT
+         XC    COMMVM,COMMVM           No ISPF stats (Librarian module)
+         LA    R1,ADDRCOMM             Address of RPFCOMM
+         CALL  (15)                    Invoke RPFEDIT
+EDIT11   DS    0H
+         L     R3,COMWSTRT             Pick-up first record EDIT worksp
+         SL    R3,=A(NEXTENT)          Minus 88
+         ST    R3,COMMLAST             Save in 'COMMLAST'
+         L     R3,COMWSTRT             Reload register 3
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  EDITDCB,MF=(E,COMOPN)   Open saved workspace in RPFEDT1
+EDIT13   DS    0H
+         RPFSA24                       Switch to amode 24        @rpa01
+         LA    R15,GETIT               Read saved workspace record
+         CALL  (15)                    Execute this routine
+         LR    R2,R1                   Save register 1 with record addr
+         RPFSA31                       Restore AMODE (destroys R1)
+         LTR   R15,R15                 EOF ?
+         BNZ   EDIT91                  Yes: good, finished.
+         XC    0(8,R3),0(R3)           Clear prefix in workspace
+         MVC   8(80,R3),0(R2)          Move record to data portion
+         ST    R3,COMMLAST             And reset 'COMMLAST'
+         LA    R3,NEXTENT(,R3)         Go to next entry in workspace
+         B     EDIT13                  Read next record
+EDIT91   BAL   R14,CLOSETMP            Close the DCB
+EDIT99   DS    0H
+         XR    R15,R15                 Clear return code
+         TM    SW,$WSFULL              Workspace too small?
+         BNO   *+8                     No: test other errors
+         LA    R15,4                   Else Rc = 4
+*+8
+         TM    SW,$EDITERR             Error detected?
+         BNO   *+8                     No: good
+         LA    R15,8                   Else Rc = 8
+*+8
+         MVC   COMMFSCR,SFIRSTSC       Restore COMMFSCR
+         LM    R2,R14,SAVESHW          Restore the registers
+         BR    R14                     Return
+         TITLE 'PRINT THE OUTPUT LISTING'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        R P F P R T:   Routine to print the output listing.          *
+*        In this section a the LIBRARIAN module will be moved         *
+*        to RPFEDT1, and the browse function (RPFBRO) will be invoked *
+*        If the allocation fails the a returncode will be placed      *
+*        in register 15.                                              *
+*        R8 points to the to be printed module entry in the workspace *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFPRT   DS    0H
+         STM   R2,R14,SAVESHW          Save all registers
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (EDITDCB,(OUTPUT)),MF=(E,COMOPN) Open RPFEDT1
+PRT001   DS    0H
+         LA    R15,LIBREC              LIBRARIAN Read routine
+         CALL  (15)                    Execute this routine
+         CLI   RECRES,C'0'             Read LIBRARIAN ok?
+         BE    PRT003                  Yes: good
+         CLI   RECRES,C'1'             End of file detected by FAIRREC?
+         BE    PRT005                  Yes: also good
+         MVC   MSG5,ERR6TXT            Msg: Error in READ code=x
+         MVC   MSG5+23(1),RECRES       Move LIBRARIAN Read error code
+         LA    R15,LIBCLOSE            Entry point FAIRCLS routine
+         CALL  (15)                    Close Master file
+         BAL   R14,CLOSETMP            Close RPFEDT1 data set
+         LA    R15,8                   Set return code
+         B     PRTEND
+PRT003   DS    0H
+         MVC   RECORD,RECRES+X'78'     Move record
+         LA    R15,PUTIT               Write record
+         CALL  (15)
+         B     PRT001                  Read next record
+PRT005   DS    0H
+         LA    R15,LIBCLOSE            Entry point FAIRCLS
+         CALL  (15)                    Execute
+         BAL   R14,CLOSETMP            Close RPFVTC1
+         MVC   COMMPRM(8),=CL8'RPFEDT1' Move DDNAME to browse
+         MVC   COMMPRM+8(8),=CL8'PRINT' Mark print only for browse
+         MVC   EPLOC,=CL8'RPFBRO'      Module to link to
+         BAL   R14,LINKMOD             LINK to module            @rpa01
+         LTR   R15,R15                 OK ?
+         BZ    PRTEND                  Yes: OK, carry
+         MVC   MSG5,ERRFTXT            Msg: Alloc error SYSOUT
+PRTEND   DS    0H                      End of Print routine
+         LM    R2,R14,SAVESHW          Restore registers
+         BR    R14                     Return to caller
+         TITLE 'Unallocate the master file'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Function: unallocate the master file and tape master         *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+UNALLOC  DS    0H
+         ST    R14,R14UNALL            Save register 14
+         XC    RPFD18,RPFD18           Clear unallocation parm block
+         LA    R1,RPFD18               Point to unallocation parm blk
+         USING DAPB18,R1               Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,FAIRDDN         DDNAME to unallocate
+         MVC   DA18MNM(8),=CL8' '      Provide no member name
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         L     R14,R14UNALL            Restore register 14
+         BR    R14                     Return
+         TITLE 'Link to modules'
+LINKMOD  DS    0H
+         ST    R14,R14LNK              Save return register
+         XC    LNKLST(L#LNKLST),LNKLST Clear the SF=L form
+         LA    R1,ADDRCOMM             Address of RPFCOMM
+         RPFSA24                       Go to addressing mode 24
+         LINK  EPLOC=EPLOC,SF=(E,LNKLST)
+         RPFSA31                       Restore addressing mode
+         L     R14,R14LNK              Restore return register
+         BR    R14
+         TITLE 'CONVERT SCREEN ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        C O N V I N:        Convert a TGET ASIS screen to formatted  *
+*        The SBA's and attribute bytes will be removed and the        *
+*        rest will be placed in 'SCREEN'. The AID byte will be        *
+*        placed in 'AIDBYTE'                                          *
+*        The length of the output will be placed in register 1        *
+*        Register 2 points to the AID byte                            *
+*        Register 5 points to the output screen area                  *
+*                                                                     *
+*        Return codes:                                                *
+*              0, successful convert                                  *
+*              4, partial screen or no data received                  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+CONVIN   DS    0H                      Convert screen routine
+         ST    R14,R14CONV             Save R14
+         L     R3,COMMSCR              Screen address from RPFCOMM
+         LR    R1,R3                   Duplicate area address
+         LA    R0,2048                 Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         MVC   0(1,R2),0(R3)           Save AIDbyte
+         LR    R4,R1                   Save input length
+         SH    R4,=H'6'                Skip AID, cursor and first SBA
+         C     R4,=F'100'              Significate bytes received?
+         BNH   CONV095                 Not high: error, incomplete scr.
+         LA    R3,6(,R3)               Point after AID, cursor and SBA
+         LR    R1,R5                   Save register 5
+         MVI   0(R5),X'40'             Blank command ...
+         MVC   1(23,R5),0(R5)                        field in output
+         LA    R14,24                  Max length of command
+*
+*        Output screen is pointed to by register 5
+*
+CONV001  DS    0H
+         CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+         MVC   0(1,R5),0(R3)           Move byte input to screen area
+         OI    0(R5),X'40'             Xlate to upper
+         LA    R3,1(,R3)               Next byte input
+         LA    R5,1(,R5)               N xt byte output
+         BCT   R14,CONV001             Test next byte
+CONV003  DS    0H
+         LA    R5,24(,R1)              Reset output scr.           @rp8
+         LH    R2,#LINES               # data lines on screen
+*
+*        We are here after the command field and at the first
+*        module entry. Each entry contains the following.
+*        SBA selection field and selection code (0 or 1 byte)
+*        SBA member entry and member name (always 8 bytes),
+*            because the member name is a protected field with MDT on
+*        The number of module entries is in #LINES (21 -> 96)
+*
+CONV005  DS    0H
+         CLI   0(R3),COMMSBA           SBA of selection field?
+         BNE   CONV095                 Should be there. otherwise error
+         LA    R3,3(,R3)               Point after SBA
+         MVI   0(R5),C' '              Init selection field to blank
+         CLI   0(R3),COMMSBA           SBA of member name?
+         BE    CONV007                 Erase or DEL key used in sel.
+         MVC   0(1,R5),0(R3)           Move byte to output screen
+         OI    0(R5),X'40'             Xlate to upper
+         LA    R3,1(,R3)               Next byte input
+CONV007  DS    0H
+         LA    R5,1(,R5)               Next byte output
+         CLI   0(R3),COMMSBA           SBA of module name after sel.?
+         BNE   CONV095                 Should be there ...
+         LA    R3,3(,R3)               Point after SBA module name
+         MVC   0(8,R5),0(R3)           Move module name (always 8)
+         LA    R5,8(,R5)               Point after module name output
+         LA    R3,8(,R3)               Point after module name input
+         BCT   R2,CONV005              Loop until all lines done
+         XR    R15,R15                 Rc = 0, successful conversion
+         B     CONV099                 End of routine
+CONV095  DS    0H
+         LA    R15,4                   Rc = 4, conversion failed
+CONV099  DS    0H
+         L     R14,R14CONV             Restore register 14
+         BR    R14                     Return to caller
+         TITLE 'Close temporary data set RPFVTC1'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        CLOSE the temporary data set with DDNAME=RPFEDT1             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+CLOSETMP DS    0H
+         ST    R14,R14CLS              Save register 14
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE EDITDCB,MF=(E,COMCLS)   Close temp data set
+         FREEPOOL EDITDCB              and free the buffers
+         L     R14,R14CLS              Restore register 14
+         BR    R14
+         TITLE 'P F K  SEARCH ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        P F K    Routine to check the AIDbyte with the PFK definition*
+*                 in RPFCOMM. If the PFK is found, the command        *
+*                 in the PFK will be placed into the field pointed    *
+*                 to by register 2.                                   *
+*        Register 1 points to the AID byte                            *
+*        Register 2 points to the command area of the screen          *
+*                                                                     *
+*        Returncodes: 00 PFK found confirmation is no                 *
+*                     04 PFK found confirmation is yes                *
+*                     08 pfk not defined or not found                 *
+*                     12 Invalid PFK definition                       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+PFK      ST    R14,R14PFK              Save register 14
+         LA    R4,COMPFK01             Pickup PFK's from RPFCOMM
+         LA    R5,24                   Max 24 PFK's
+PFK01    CLC   0(1,R4),0(R1)           Test PFK against AID byte
+         BE    PFK05                   Yes: found
+         LA    R4,26(,R4)              Next PFK
+         BCT   R5,PFK01                Test next PFK
+         LA    R15,8                   Pfk not found
+         B     PFK99                   End of routine
+PFK05    CLI   1(R4),C'X'              PFK not defined?
+         BNE   PFK06                   Yes: proceed                @rp1
+         LA    R15,8                   Returncode
+         B     PFK99                   End of routine
+PFK06    DS    0H                      Clear input command field   @rp1
+         MVI   1(R2),C' '              Clear output ...
+         MVC   2(22,R2),1(R2)                      command field
+         TM    0(R2),X'94'             Max operand (SCROLL)?       @rp1
+         BNO   PFK08                   No: branch                  @rp1
+         CLC   2(4,R4),=C'DOWN'        Scroll forward?             @rp1
+         BNE   PFK07                   No: test if UP is given
+         MVC   0(6,R2),=C'BOTTOM'      Yes: BOTTOM command         @rp1
+         B     PFK08A                                              @rp1
+PFK07    CLC   2(2,R4),=C'UP'          Scroll backward?            @rp1
+         BNE   PFK08                   No: ignore                  @rp1
+         MVC   0(3,R2),=C'TOP'         'TOP' command               @rp1
+         B     PFK08A                                              @rp1
+PFK08    DS    0H                                                  @rp1
+         MVC   0(24,R2),2(R4)          Move PFK command in screen
+         CLI   1(R4),C'N'              No confimation?
+         BNE   PFK09                   Yes: rc = 0
+PFK08A   DS    0H                                                  @rp1
+         XR    R15,R15
+         B     PFK99
+PFK09    CLI   1(R4),C'Y'              Confirmation?
+         BNE   PFK11                   No: invalid PFK definition
+         LA    R15,4                   Rc = 4: confirmation
+         B     PFK99
+PFK11    LA    R15,12                  Invalid PFK definition
+         B     PFK99                   End of routine
+PFK99    L     R14,R14PFK              Restore register 14
+         BR    R14                     Return to caller
+         LTORG
+         TITLE 'TEMPORARY SAVE AND PRINT DCB'
+         PRINT NOGEN
+MDLEDIT  DCB   DDNAME=RPFEDT1,DSORG=PS,MACRF=(GL,PM),EODAD=GET003,     *
+               RECFM=FB,LRECL=80,BLKSIZE=12960                     @rp1
+MDLLEN   EQU   *-MDLEDIT
+         PRINT GEN
+         TITLE 'Constants'
+         DC    C' '
+INTHI    DC    X'1DF8'                 Hilite prot MDT off
+INTLOW   DC    X'1DF0'                 No hilite prot MDT off
+ERR2TXT  DC    CL25'---------- Invalid option'
+ERR3TXT  DC    CL25'-- Alloc error XXXX on DS'   +15
+ERR4TXT  DC    CL25'------ Open error Code=XX'   +23
+ERR5TXT  DC    CL25'---- Module not in MASTER'
+ERR6TXT  DC    CL25'-- Error in read, Code= X'   +23
+ERR7TXT  DC    CL25'- Data set not in catalog'
+ERR8TXT  DC    CL25'-- Data set not on volume'
+ERR9TXT  DC    CL25'--------- PFK not defined'
+ERRATXT  DC    CL25'-- PFK definition invalid'
+ERRBTXT  DC    CL25'------ Specify Masterfile'
+ERRCTXT  DC    CL25'----- Enter locate string'
+ERRDTXT  DC    CL25'--------- Invalid command'
+ERRFTXT  DC    CL25'- Allocation error SYSOUT'
+*
+         LTORG
+         DROP  ,
+*
+         COPY  CALLTS
+*
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+*
+         COPY  TPUTS
+         TITLE 'Master file selection screen and INDEX screen'
+SCREENS  CSECT
+SCR2TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR2TXT  DC    X'00C21100001DF8'       EW or EWA, r1,c1
+         DC    CL46'RPF LIBRARIAN Masterfile selection: User ID = '
+SCR2UID  DS    CL8
+SC2R1C56 DC    X'110000'               r1,c56+
+MSG2     DC    CL25'-------------------------'
+*
+SC2R2C1  DC    X'110000',X'1DF8',C'Option  ===>',X'1DC113'         @rp1
+SCR2CMD  DC    C' ',X'1DF0'
+*
+SC2R4C4  DC    X'110000',AL3(WHITE),C'1  ',AL3(TURQ)     R04,C04+  @rp1
+         DC    C'Master file - ',AL3(GREEN)                        @rp1
+         DC    C'Allocate MASTER file'                             @rp1
+SC2R5C4  DC    X'110000',AL3(WHITE),C'2  ',AL3(TURQ)     R05,C04+  @rp1
+         DC    C'Tape master - ',AL3(GREEN)                        @rp1
+         DC    C'Allocate Tape MASTER on disk'                     @rp1
+*
+SC2R13C2 DC    X'110000'              R13,C02+                     @rp1
+         DC    AL3(YELLOW),C'MASTER file or Tape master information:'
+*
+SC2R16C1 DC    X'110000',AL3(TURQ)     r16,c01+
+         DC    X'1DF5'
+S2MSTR   DC    C'MASTER file   =',X'1DC9',AL3(RED)
+         DC    AL3(USCORE)
+SCR2DSN  DC    CL46' ',X'1DF0',AL3(HDEFAULT) Master file DSN
+*
+SC2R17C1 DC    X'110000'               r17,c01+
+         DC    X'1DF5',AL3(TURQ)
+S2VOL    DC    C'Volume serial =',X'1DC9',AL3(RED)
+         DC    AL3(USCORE)
+SCR2VOL  DC    CL6' ',X'1DF0',AL3(HDEFAULT)
+         DC    AL3(TURQ),C'if not cataloged'
+*
+         DC    AL3(TURQ)                                           @rp1
+SCR2LAST DC    X'1100001DF0',C'Hit ',AL3(WHITE)                    @rp1
+         DC    C'PF03/15',AL3(TURQ)                                @rp1
+         DC    C' to return'                                       @rp1
+SCR2LEN  EQU   *-SCR2TXT           LENGTH SCREEN
+SCR2LENF EQU   *-SCR2TXTF          LENGTH SCREEN with ESC character
+*
+*        LIBRARIAN module index data screen
+*
+SCR5TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR5TXT  DC    X'00C21100001DF8'
+         DC    CL16'Modules of LIBR '                              @rp1
+HEADMSTR DC    CL12'masterfile: '                                  @rp1
+SCR5DSN  DC    CL30' '
+SCR5HYPH DC    116C' '
+SCR5SBA1 DC    X'110000'               r1,c56+
+MSG5     DC    CL25'-------------------------'
+SCR5SBA2 DC    X'110000',X'1DF8',C'Cmd =>',X'1DC113'               @rp1
+         DC    AL3(USCORE)
+REP5     DC    CL24' ',AL3(HDEFAULT),X'1DF0'
+SCR5SBA3 DC    X'110000',X'1DF0',AL3(YELLOW)  R02,C last
+         DC    C' C Module   Description                    '      @rp1
+HEADUPD  DC    C'Updated        Rcrds  Pgmr/msg'                   @rp1
+         DC    X'1DF0'
+SCR5LEN  EQU   *-SCR5TXT
+SCR5LENF EQU   *-SCR5TXTF              Length including ESC character
+LNE5     EQU   *
+SCREENSL EQU   *-SCREENS               Length of both screens
+*        DS    CL(97*(99-3))           Module entries
+         TITLE 'Large areas'
+LARGE    CSECT ,
+         TITLE 'DSECT''s'
+         CVT   DSECT=YES,LIST=NO
+         IKJCPPL
+         IKJDAPL
+         IKJDACB
+         IKJDAP08                      IKJDAIR allocation parm block
+         IKJDAP18                      IKJDAIR unallocation parm block
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Our save area
+DBW      DS    D                       Used in RCTOSBA
+SBAR0R1  DS    D                       Used in RCTOSBA
+RPFDAPL  DS    5F                      DAIR parameter list
+ECB      DS    F                       An Event control block
+RPFD08   DS    CL84                    IKJDAIR entry 08, allocation
+RPFD18   DS    CL40                    IKJDAIR entry 18, unallocation
+DATALINE DS    F                       Length data entry on screen
+SFIRSTSC DS    F
+SAVESHW  DS    13F
+FAIRPRM  DS    4F                      Parameter for the FAIR routines
+PARMFLD  DS    3F                      3 parameters for DSNPARS
+A#SCRNS  DS    F                       Address of screen area
+L#SCRNS  DS    F                       Length of screen area
+ADDRCOMM DS    F                       Contains address of RPFCOMM
+R12TS    DS    F                       Save register 12 CALLTS
+R14CLS   DS    F                       Save register 14 CLOSETMP
+R14CONV  DS    F                       Save register 14 CONVIN
+R14FMEM  DS    F                       Save register 14 FINDMEM
+R14GETIT DS    F                       Save register 14 GETIT
+R14LBCLS DS    F                       Save register 14 LIBCLOSE
+R14LBMOD DS    F                       Save register 14 LIBMOD
+R14LBOPN DS    F                       Save register 14 LIBOPEN
+R14LBREC DS    F                       Save register 14 LIBREC
+R14LNK   DS    F                       Save register 14 LINKMOD
+R14PFK   DS    F                       Save register 14 PFK
+R14PUTIT DS    F                       Save register 14 PUTIT
+R14SCRN  DS    F                       Save register 14 RPFSCRN
+R14TPUT  DS    F                       Save register 14 PUT
+R14TS    DS    F                       Save register 14 CALLTS
+R14UNALL DS    F                       Save register 14 UNALLOC
+FAIROPN  DS    F                       Entry point FAIROPN
+FAIRCLS  DS    F                       Entry point FAIRCLS
+FAIRMOD  DS    F                       Entry point FAIRMOD
+FAIRREC  DS    F                       Entry point FAIRREC
+TPUTLEN  DS    F                       Length of screen
+NEXTSCR  DS    F                       21 --> 96 * NEXTENT
+EDITDCB  DS    CL(MDLLEN)
+CAMLST   DS    XL16                    For LOCATE and OBTAIN
+LNKLST   LINK  EPLOC=*,SF=L            For LINK macro
+L#LNKLST EQU   *-LNKLST                Length
+EPLOC    DS    CL8                     Contains module name to LINK to
+RECORD   DS    CL86
+BUFMSTR  DS    CL46
+#LINES   DS    H                       # lines = scrsize -3
+AIDBYTE  DS    C
+AIDBYTE2 DS    C
+SCREEN   DS    0CL888                  = 96*1 + 96*8 + 24
+BUFFER   DS    CL120                   Buffer, output from menu
+         DS    CL768
+SC@BUFF  DS    CL24                    \_____ copy of _____/
+         DS    CL24                    /  command buffer   \
+#MODULES DS    PL3                     To count libr. modules
+         DS    0D                      LOCAREA is on dbw boundary
+LOCAREA  DS    CL6
+LOCVOL   DS    CL6
+LOCREST  DS    CL253
+DSCB1    DS    CL140
+*
+COMMAND  DS    C
+END2     DS    CL15                    Contains # modules
+MSTRL    DS    AL2                     \___ actual length MSTRFILE___/
+MSTRFILE DS    CL44                    /   Contains Master file DSN  \
+MODULE   DS    CL8                     Contains LIBRARIAN module
+MSTRVOL  DS    CL6                     Contains Volume of Master file
+FAIRWKAR DS    5F                      20 byte workarae of Masterfile
+FAIROCMD DS    CL4                     Reserved
+OPTIONS  DS    0CL60
+FAIROOPS DS    CL20                    \__Options for FAIROPN__/
+FAIRMOPS DS    CL20                    |  Options for FAIRMOD  |
+FAIRROPS DS    CL20                    /  Options for FAIRREC  \
+FAIRDDN  DS    CL8
+OPENRES  DS    30F                     120 bytes open area of FAIR
+MODRES   DS    CL800
+         ORG   MODRES
+RECRES   DS    CL400
+         ORG   ,
+CLOSERES DS    XL8
+SW       DS    X
+$CHANGE  EQU   128                     Something changed
+$WSFULL  EQU   64                      EDIT: workspace too small
+$EDITERR EQU   32                      EDIT: other errors
+WORKL    EQU   *-WORKAREA              Length of working storage
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+         TITLE 'LIBRARIAN INDEX AREA.'
+MEMAREA  DSECT
+LSTART   EQU   *
+LPREFIX  DS    CL8                                                 @rp1
+LMEMBR   DS    CL8                                                 @rp1
+         DS    C
+LPGMR    DS    CL15                                                @rp1
+         DS    C
+LDESCR   DS    CL30                                                @rp1
+         DS    C
+LINPUT   DS    CL5                                                 @rp1
+         DS    C
+LDATE    DS    0CL14                                               @rp1
+LDAY     DS    CL2                                                 @rp1
+         DS    C                                                   @rp1
+LMND     DS    CL2                                                 @rp1
+         DS    C                                                   @rp1
+LYEAR    DS    CL2                                                 @rp1
+         DS    C                                                   @rp1
+LHOUR    DS    CL2                                                 @rp1
+         DS    C                                                   @rp1
+LMIN     DS    CL2                                                 @rp1
+LMEML    EQU   *-LSTART
+         TITLE 'Data entry on screen'
+SCRENTRY DSECT                         Line on screen (mapped by LNE5)
+SCRESBA  DS    CL3
+SCREATT1 DS    CL2                     X'1DC9'  Hilite unprot MDT on
+SCRECOL1 DS    CL3                     Color Red
+SCREOPER DS    C
+SCREATT2 DS    CL2                     X'1DF1'  No hilite MDT on
+SCRECOL2 DS    CL3                     Color Green
+SCREMOD  DS    CL8                     Librarian module
+SCREATT3 DS    CL2                     X'1DF0'  No hilite MDT off
+SCRECOL3 DS    CL3                     Color Turquoise
+SCREDESC DS    CL30                    LIBRARIAN module description
+SCREFIL1 DS    CL1
+SCRELUPD DS    CL14                    LIBRARIAN module Last update
+SCREFIL2 DS    CL1
+SCRELINP DS    CL5                     # records of LIBRARIAN module
+SCREFIL3 DS    CL1
+SCRECOL4 DS    CL3                     Color Turquoise or White
+SCRELPGM DS    CL15                    Module programmer name or msg
+SCRENT   EQU   *-SCRENTRY
+*
+         END

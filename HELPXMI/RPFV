@@ -1,0 +1,34 @@
+)F   FUNCTION -
+   The RPFV command executes the RPF DS-LIST function from
+   the TSO command line.
+   This function is similar to RPF 3.4 with option 1.
+)X  SYNTAX -
+    RPFV      PREFIX('data set prefix') | PREFIX(NONE)
+              VOLUME('volume serial')
+              LINES('number of lines')
+    DEFAULTS - PREFIX('userid')
+               VOLUME(<blank>)
+               LINES(7000)
+)O  OPERANDS -
+))VOLUME('volser')
+              - Specifies the volume serial, which contains
+                the data sets to be listed. Only the data sets
+                starting with 'PREFIX' will be listed.
+))PREFIX('data set prefix')
+              - Specifies the data set prefix, the maximum
+                length is 17. Example: a data set prefix of
+                'SYS1' is valid and will display all data sets
+                starting with SYS1. If the prefix is 'SYS1.L'
+                all data sets starting with 'SYS1.L', like
+                SYS1.LINKLIB, SYS1.LPALIB and SYS1.LOGREC
+                are displayed in the DS-LIST.
+))PREFIX(NONE)
+              - If NONE is specified, VOLUME is required.
+                the DSLIST will list all data sets on that
+                volume.
+))LINES('number')
+              - Specifies a number of lines of the workspace,
+                used for the DS-LIST function.
+                LINES is a value between 200 and 50,000 lines.
+                If the command processor runs in 31 bit mode,
+                the number of lines will be multiplied by 10.

@@ -1,0 +1,3050 @@
+         PUNCH ' SETCODE AC(1)'
+RPFMVCPY TITLE 'RPF, Move and Copy routine'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFMVCPY                                      *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFUTIL (option 3.3)                          *
+*                                                                     *
+*        Function:      Present an allocation menu of two data sets   *
+*                       (a FROM and a TO data set) and a menu to      *
+*                       specify the operation M(ove) or C(copy).      *
+*                       You also can specify to replace members or not*
+*                                                                     *
+*                       After succesful allocation, the FROM data set *
+*                       is copied to the TO data set if the data      *
+*                       sets are sequential.                          *
+*                                                                     *
+*                       If the data sets are partitioned, a directory *
+*                       of the FROM data set will be displayed.       *
+*                       By spefifying an "S" the member is selected   *
+*                       to copy. After a screen is processed,         *
+*                       IEBCOPY will be invoked to copy the members   *
+*                       from the FROM data set to the TO data set.    *
+*                       If Move is specified the members will be      *
+*                       deleted from the FROM data set.               *
+*                                                                     *
+*                       If IEBCOPY suffers a nonzero return code for  *
+*                       some reason the output will be browsed.       *
+*                                                                     *
+*                       If 'dsn(*)' is specified in the allocation    *
+*                       screen, all members will be copied and no     *
+*                       member selection list will be presented       *
+*                                                                     *
+*                       RPFMVCPY Primary commands:                    *
+*                       -  BOTTOM:   Scroll to last page  (Alias 'B') *
+*                       -  DOWN:     Scroll 1 page forward.           *
+*                       -  END:      terminate MOVE/COPY              *
+*                       -  L member  Locate at member 'member'.       *
+*                       -  PFK:      Alter Program Function Keys.     *
+*                       -  RETURN:   Terminate Move/Copy and return   *
+*                                    to Main Menu                     *
+*                       -  SORT:     Sort on member name (default).   *
+*                       -  SORT CHA: Sort on date changed descending. *
+*                       -  SORT TTR: Sort on TTR descending.          *
+*                       -  TOP:      Scroll to first page (alias 'T') *
+*                       -  UP:       Scroll 1 page backward.          *
+*                       -  =n or =n.n Return to RPFMAIN and exec.     *
+*                          option 'n' or option 'n.n'                 *
+*                                                                     *
+*        Subroutines:   RPFPFK,   The PFK definition routine          *
+*                       RPFBRO,   Browse output of IEBCOPY if RC > 0  *
+*                       IEBCOPY,  IBM's copy routine                  *
+*                                                                     *
+*        Return codes:  00 - No errors or retried errors.             *
+*                                                                     *
+*        Notes: The SYS1.(A)MODGEN macro library should be included.  *
+*                                                                     *
+*        Registers:     Registers 12 and 10 are the base registers.   *
+*                       Register 11 points to RPFCOMM control block.  *
+*                       Register 13 points to the working storage.    *
+*                       Register 9 always points to an entry in the   *
+*                                  EDIT workspace.                    *
+*                       Register 8 points to the input screen area    *
+*                                  mapped by the SCREENS CSECT.       *
+*                                                                     *
+*        -------------------- Important note! ---------------------   *
+*        Set &OS390 or &MVSXA in member SYSVARS to 1 to prevent       *
+*        APF bit setting for IEBCOPY in MVS/ESA and up, therefore     *
+*        IEBCOPY does not need APF authorization, rather than MVS38J. *
+*        -------------------- Important note! ---------------------   *
+*                                                                     *
+*        Change log:                                                  *
+*        May 04,2004 If member in TO ds exists give msg 'Replaced' @rp1
+*        Dec 18,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Jan 11,2019 Rpr: abend0c4 solved in call IEBCOPY          @rp2
+*                         FREEPOOL's in AMODE24                    @rp2
+*        Feb 02,2019 RPr: Add ISPF/RPF date created in member list @rp3
+*        Feb 14,2019 Rpr: List load module attributes if library   @rp4
+*                         is a LOADLIB.                            @rp4
+*        Mar 26,2019 Rpr: Support added for all kinds of 3270 screens *
+*                         up to 62 lines x 160 columns (3290)         *
+*        May 14,2019 Rpr: Add alias commands DOWN and UP              *
+*        Oct 05,2019 Rpr: Allow DEL and/or EOF key in command field.  *
+*        Oct 23,2019 Rpr: Allow DEL and/or EOF in entire screen.      *
+*        Jan 25,2020 RPr: Support terminals up to 9920 bytes.         *
+*                         (like 62x160 or 99x100)                     *
+*        Apr 02,2020 RPr: Slight improvement in header                *
+*                         Support screens up to 16384 bytes with a    *
+*                         maximum linecount of 99 and a maximum width *
+*                         of 200 bytes.                               *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Jul 22,2020 RPr: Error in First SBA in SCR5TXT fixed         *
+*        Oct 22,2020 RPr: Primary command 'SORT TTR' added.           *
+*        Nov 09,2020 RPr: Handle IO-error input PDS(E)                *
+*        May 25,2021 RPr: Replace DYNALLOC's by IKJDAIR calls.        *
+*        Aug 07,2021 RPr: Move SCR5TXT to GETMAIN'ed area.            *
+*        Nov 18,2021 RPr: RPFMVCPY made re-entrant and re-usable.     *
+*        Feb 03,2022 RPr: Set APF bit for IEBCOPY in MVS38J.          *
+*        Mar 17,2022 RPr: Options 'OV' and 'NX' added in load module  *
+*                         member selection list if in effect.         *
+*        Mar 18,2022 RPr: Add message 'Data set not in catalog'       *
+*        Jun 06,2022 RPr: Primary command 'SORT' added.               *
+*        Dec 14,2022 RPr: Process extended section of ISPF stats      *
+*                         if present if one of number of lines        *
+*                         exceeds 64k.                                *
+*        May 01,2023 RPr: Primary command SORT CHA fixed.             *
+*        Jun 05,2023 RPr: If all members selected, create only an     *
+*                         IEBCOPY 'COPY' statement and no SELECTS to  *
+*                         avoid msgIEB105I if member contains invalid *
+*                         characters.                                 *
+*        Jun 23,2023 RPr: Support COPY/MOVE sequential data sets with *
+*                         LRECL up to 4096 and variable or fixed      *
+*                         records and RACHECK added to check for upd. *
+*                         Retry issued after I/O error input.         *
+*        Mar 28,2024 RPr: **END** + # members added after last member *
+*                         and message 'Scroll had no effect' deleted. *
+*        Apr 02,2024 RPr: Remove limitation of LRECL up to 4096 for   *
+*                         sequential data sets by using BSAM IO.      *
+*        Apr 30,2024 RPr: Fix abusive 'Conflicting DCB parameters'    *
+*                         if BLKSIZE From > BLKSIZE To on Fixed or    *
+*                         variable partitioned data sets.             *
+*                         Allocate SYSUT3 and SYSUT4 in IEBCOPY.      *
+*        Jul 31,2024 RPr: Set cursor on field in error if a problem   *
+*                         is detected.                                *
+*        Dec 07,2024 RPr: Use standard TSO naming conventions for     *
+*                         data set names.                             *
+*        Dec 20,2024 RPr: Primary command SORT SIZE added and SORT    *
+*                         fields corrected.                           *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFMVCPY CSECT                         *
+RPFMVCPY AMODE 31                      *                         @rpa01
+RPFMVCPY RMODE 24                      *                         @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Our base
+         USING RPFMVCPY,R12,R10        Provide addressability
+         L     R11,0(,R1)              Load RPFCOMM area
+         GETMAIN R,LV=WORKL            Obtain working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1                  Exchange savearea
+         LA    R10,2048(,R12)          2nd base register
+         LA    R10,2048(,R10)
+         B     RPFINITT                Branch around time stamp
+*
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+RPFINITT DS    0H
+         USING COMMAREA,R11            Get addressability RPFCOMM
+         USING WORKAREA,R13            Make working storage addressable
+         ST    R11,ADDRCOMM            Save A(RPFCOMM) for later use
+         XC    BLOCK,BLOCK             Initiallly no block acquired
+         XC    COMMPRM,COMMPRM         Clear parm initially
+         MVI   SC@BUFF,C' '            Blank parse ...
+         MVC   SC@BUFF+1(47),SC@BUFF               buffer
+         MVC   SYSIN,MDLSYS            Create SYSIN DCB
+         MVC   DDNF,=CL8'RPFUT1'       DD name in allocation blk FROM
+         MVC   DDNT,=CL8'RPFUT2'       DD name in allocation blk TO
+         AIF   (&SVS).NORA
+         MVC   RR(RACFL),RACF          Move list form to working stg
+.NORA    ANOP
+         MVC   BLDLLIST(4),=X'0001000E' One entry of 14 bytes
+         MVI   SW,0                    Clear switch
+         MVC   INF2TXT,MOD2TXT         Move constant to INF2TXT
+         L     R0,COMMSIZE             # line on screen
+         BCTR  R0,0                    Minus 3 ....
+         BCTR  R0,0                            .... header
+         BCTR  R0,0                                        .... lines
+         LA    R1,17         Each line contains sel. + member + newname
+         MR    R0,R0                   Multiply
+         LA    R1,L'SCRCMD(,R1)        + 24 bytes command
+         ST    R1,SCROUTSZ             Save this size
+         GETMAIN R,LV=(1)              Obtain TGET screen space
+         ST    R1,SCROUTP              Save output area TGET       @rpa
+         L     R0,COMMSIZE             Pickup # lines on screen
+         LA    R1,SCRENT               Columns + colors + attr
+*                                      See DSECT SCRENTRY
+         BCTR  R0,0                                                @gp1
+         BCTR  R0,0                                                @gp1
+         BCTR  R0,0                    Discount top 3 lines        @gp1
+         MR    R0,R0                   Screen size minus 3 lines   @gp1
+         LA    R3,SCR5LEN(,R1)         Length of TPUT              @gp1
+         ST    R3,TPUTLEN              Save the TPUT length
+         LA    R3,1(,R3)               + ESC character
+         LA    R3,SCR1#L(,R3)          + length data entry screen
+         GETMAIN R,LV=(3)              Allocate input screen
+         ST    R1,SCRINP               Save its address
+         ST    R3,SCRINPSZ             and its length
+         LR    R8,R1                   Save in screen base register
+         USING SCREENS,R8              Make output screen addressable
+         LR    R0,R1                   Prepare for move
+         LA    R1,SCREENSL             Length 1
+         LR    R3,R1                   Length 2 = length 1
+         L     R2,=V(SCREENS)          Input
+         MVCL  R0,R2                   Move to dynamic area
+         MVC   SCR1UID+41(8),COMMUSER  User id in allocation screen
+         MVC   SCR1DSNF,COMMDSN        From data set of MOVE/COPY
+         MVC   SCR1VOLF,COMMVOL
+         MVI   SCR1DSNT,C' '           Clear the ....
+         MVC   SCR1DSNT+1(L'SCR1DSNT-1),SCR1DSNT    To
+         MVC   SCR1VOLT,SCR1DSNT                       fields
+         MVC   SCR1REPL,COMMREPL       Default Replace from RPFCOMM
+         MVI   MSG1,C'-'               Clear
+         MVC   MSG1+1(L'MSG1-1),MSG1        both
+         MVC   SCR1TXT(1),COMMCMD      Move EW or EWA
+         MVI   MSG5,C'-'                        message
+         MVC   MSG5+1(L'MSG5-1),MSG5                   areas
+         MVC   SCR5TXT(1),COMMCMD      Move EW or EWA
+         MVI   SCR5HYPH,C' '           Move ' ' to
+         MVC   SCR5HYPH+1(L'SCR5HYPH-1),SCR5HYPH  ... header
+         MVI   SCR5HYPH,C'-'           Move 1 hyphen
+         L     R1,COMMCOLS             Current width of screen
+         S     R1,=F'82'               Minus minimum width + 2
+         BM    INIT2                   Do not move if width = 81
+         EX    R1,HYPH                 with hyphens
+         B     INIT2                   Branch
+HYPH     MVC   SCR5HYPH+1(0),SCR5HYPH  << executed >>
+INIT2    DS    0H
+         L     R0,COMMSIZE             Restore # lines on screen
+         LA    R3,3
+         SR    R0,R3                   Get data display line count
+         STH   R0,#LINES               Save it
+         LA    R3,NEXTENT              Lenght of entry in workspace
+         MH    R3,#LINES               * number of lines (21 -> 96)
+         ST    R3,NEXTSCR              And save for later use
+         LA    R3,SCRENT               Width of screen
+         ST    R3,DATALINE             Save data entry length on screen
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+         LA    R0,1                    Parameter line (1)
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5SBA0+1         And Save in SCR5TXT
+*
+         L     R1,COMMCOLS             Screen width
+         LA    R0,24                   Get adjustment size
+         SR    R1,R0                   Get the right column
+         LA    R0,1                    Row 1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5SBA1+1         And Save (r1,c59+)
+         MVI   SCR5SBA1,COMMSBA        Move SBA order
+*
+         LA    R0,2                    Parameter line (2)
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5SBA2+1         And Save
+*
+         LA    R0,3                    Parameter line
+         LA    R1,1                    Column 1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5SBA3+1         And Save
+*
+         LH    R2,#LINES               # data lines
+         LA    R3,LNE5                 Point to data area in screen
+         USING SCRENTRY,R3             Use DSECT
+         LA    R4,4                    First data line is line4
+SCR01    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         MVI   SCRESBA,COMMSBA         Move a SBA order
+         STCM  R0,3,SCRESBA+1          And Save
+*
+         MVC   SCREATT1,=X'1DC9'
+         MVC   SCREATT2(2),=X'1DF1'
+         MVC   SCREATT3,=X'1DC9'
+         MVC   SCREATT4,=X'1DF0'
+         MVC   SCRECOLR,=AL3(TURQ)
+         MVC   SCRECOL2,=AL3(GREEN)
+         LA    R4,1(,R4)               Increase line number
+         L     R1,DATALINE             Length of data screen line
+         LA    R3,0(R1,R3)             Next line in screen
+         BCT   R2,SCR01                And do complete screen
+         DROP  R3                      Kill addr. of SCR5LINE
+*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         L     R5,COMMCOLS             Pickup # columns of screen
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+         LA    R0,1                    Line 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1R1C1+1         And Save
+*
+         LA    R0,1                    Line 1
+         LA    R1,56                   Column 56+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R1C56+1         And Save
+*
+         LA    R0,2                    Line 2
+         LA    R1,15                   Column 15+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R2C15              And Save (position Option ===>)
+*
+         LA    R0,11                   Line 11
+         LA    R1,18                   Column 18+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R11C18             And Save (position FROM dsn)
+*
+         LA    R0,15                   Line 15
+         LA    R1,18                   Column 18+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R15C18             And Save (position TO dsn)
+*
+         LA    R0,18                   Line 18
+         LA    R1,24                   Column 24+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R18C24             And Save (position REPLACE like)
+*
+         LA    R0,2                    Line 2
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R2C2+1          And Save
+*
+         LA    R0,4                    Line 4
+         LA    R1,4                    Column 4+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R4C4+1          And Save
+*
+         LA    R0,5                    Line 5
+         LA    R1,4                    Column 4+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R5C4+1          And Save
+*
+         LA    R0,6                    Line 6
+         LA    R1,20                   Column 20+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R6C20+1            And Save
+*
+         LA    R0,10                   Line 10
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R10C2+1         And Save
+*
+         LA    R0,11                   Line 11
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R11C1+1         And Save
+*
+         LA    R0,12                   Line 12
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R12C1+1         And Save
+*
+         LA    R0,14                   Line 14
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R14C2+1         And Save
+*
+         LA    R0,15                   Line 15
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R15C1+1         And Save
+*
+         LA    R0,16                   Line 16
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R16C1+1         And Save
+*
+         LA    R0,18                   Line 18
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R18C1+1         And Save
+*
+         L     R0,COMMSIZE             Row last
+         LA    R1,2                    Col 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC2+1          And Save (r last c2+)
+*
+*        end of screen setup           ------------------------------*
+*
+START21  DS    0H
+         MVC   SCR1ADDR+1(2),R11C18    Set cursor standard on FROM
+         STM   R8,R13,ESTAERGS         Save for ESTAE
+*---------------------------------------------------------------------*
+*        Issue allocation screen, ask for FROM and TO data set.       *
+*---------------------------------------------------------------------*
+RESTART  DS    0H
+         LA    R1,RPFUT1               DCB address
+         ST    R1,BUFDCBF              Save in Allocation parm list
+         LA    R1,RPFUT2               DCB address
+         ST    R1,BUFDCBT              Save in Allocation parm list
+         NI    SW,255-$ALLMEM-$NOTAUTH Reset COPY all and update access
+         L     R15,=V(UNALLOC)         Load routine address
+         CALL  (15)                    Unallocate files
+         LA    R1,SCR1TXT              Parm for TPUTS (address screen)
+         LA    R0,SCR1LEN              Parm for TPUTS (length screen)
+         L     R15,=V(TPUTS)
+         BALR  R14,R15                 Write screen
+         MVC   SCR1ADDR+1(2),R11C18    Set cursor standard on FROM
+         MVI   BUFDSNF,C' '            Blank
+         MVC   BUFDSNF+1(51),BUFDSNF        From DSN + volume
+         MVC   BUFDSNT(52),BUFDSNF     And clear To DSN + volume
+         MVC   BUFCMD,BUFDSNT          And clear command field
+         L     R3,COMMSCR              Point to output buffer
+         LR    R1,R3                   Duplicate area address
+         LA    R0,300                  Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read contents of scr1.
+         LR    R4,R1                   Save length
+*
+*        Do a  TGET ASIS to obtain the AID byte
+*        After the TGET ASIS remove the SBA'S from the output
+*
+         CLI   0(R3),X'F3'             PFK3 (END) pressed?
+         BE    RETURN                  Yes: exit
+         CLI   0(R3),X'C3'             PFK15 (END) pressed?
+         BE    RETURN                  Yes: exit
+         TM    SW,$ABEND               x37, or B0A abend occurred?
+         BO    RETURN                  Return immediately
+         XR    R2,R2                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   REMOVE9                 <= 0: end of routine
+         LA    R3,3(,R3)
+         L     R5,SCROUTP              Output screen
+*
+*        Input screen is pointed to by register 3
+*        Output screen is pointed to by register 5
+*        The next section will remove all the SBA's
+*
+REMOVE1  DS    0H
+         CLI   0(R3),COMMSBA           SBA order found?
+         BE    REMOVE3                 Yes: skip next 3 bytes
+REMOVE2  DS    0H
+         MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               NEXT BYTE OUTPUT
+         BCT   R4,REMOVE1              Test next byte
+         B     REMOVE9                 End of REMOVE routine
+REMOVE3  DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes input
+         SH    R4,=H'2'                Minus 2 BCT
+         BNP   REMOVE9                 <=0: terminate conversion
+         BCT   R4,REMOVE1              Test next byte
+REMOVE9  DS    0H
+         LR    R1,R2                   Output length in register 1
+         L     R5,SCROUTP              Output buffer
+         MVI   SCR5FDSN,C' '           Clear from
+         MVC   SCR5FDSN+1(L'SCR5FDSN-1),SCR5FDSN  data set name
+         MVC   SCR5TDSN,SCR5FDSN       Clear To data set name
+         LTR   R1,R1                   No input received (erase EOF)?
+         BZ    RESTART                 YES: refresh screen
+         LR    R6,R1                   Length of buffer
+         LA    R4,BUFCMD               Point to option field
+SCAN01   DS    0H
+         CLC   S1DSNF,0(R5)            Search for DSN of FROM data set
+         BE    SCAN03                  Found: process To DSN
+         MVC   0(1,R4),0(R5)           1 char. command
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte
+         LA    R4,1(,R4)               Next byte in command
+         BCT   R6,SCAN01               Examine next bytes
+         B     RESTART                 Clear key pressed.
+SCAN03   DS    0H
+         LA    R5,L'S1DSNF(,R5)        Point after 'Data set name' from
+         LA    R4,BUFDSNF              Point to from data set name
+SCAN11   DS    0H
+         CLC   S1VOLF,0(R5)            Search for volume FROM
+         BE    SCAN13                  Found: process volume
+         MVC   0(1,R4),0(R5)           1 char From dsn
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN11               Examine next bytes
+         B     RESTART                 Clear key pressed
+SCAN13   DS    0H
+         LA    R5,L'S1VOLF(,R5)        Point after 'Volume=' From
+         LA    R4,BUFVOLF              Point to volume
+SCAN17   DS    0H
+         CLC   S1DSNT,0(R5)            Search for DSN of to data set
+         BE    SCAN19                  Found: process end of screen
+         MVC   0(1,R4),0(R5)           1 char. FROM volume
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN17               Examine next bytes
+         B     RESTART                 Clear key pressed
+SCAN19   DS    0H
+         LA    R5,L'S1DSNT(,R5)        Point after 'Data set name' to
+         LA    R4,BUFDSNT              Point to TO data set name
+SCAN23   DS    0H
+         CLC   S1VOLT,0(R5)            Search for volume TO
+         BE    SCAN25                  Found: process volume
+         MVC   0(1,R4),0(R5)           1 char TO dsn
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN23               Examine next bytes
+         B     RESTART                 Clear key pressed
+SCAN25   DS    0H
+         LA    R5,L'S1VOLT(,R5)        Point after 'Volume=' To
+         LA    R4,BUFVOLT              Point to volume
+SCAN29   DS    0H
+         CLC   S1REPL,0(R5)            Search for Replace Like members
+         BE    SCAN31                  Found: process replace
+         MVC   0(1,R4),0(R5)           1 char volume to data set name
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN29               Examine next bytes
+         B     RESTART                 Clear key pressed
+SCAN31   DS    0H
+         LA    R5,L'S1REPL(,R5)     Point after 'replace like members:'
+         LA    R4,BUFREPL              Point to REPLACE
+SCAN35   DS    0H
+         CLC   S1END,0(R5)             Search for End of screen
+         BE    SCAN37                  Found: All done
+         MVC   0(1,R4),0(R5)           1 char replace
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN35               Examine next bytes
+         B     RESTART                 Clear key pressed
+SCAN37   DS    0H
+         MVC   SCR1DSNF,BUFDSNF        Move the
+         MVC   SCR1DSNT,BUFDSNT                fields
+         MVC   SCR1VOLF,BUFVOLF                      in the
+         MVC   SCR1VOLT,BUFVOLT                            scr.
+         MVC   SCR1REPL,BUFREPL                               een
+         MVC   SCR1CMD(3),BUFCMD       Move command in screen
+         CLI   BUFCMD,C'M'             Move command?
+         BE    SCAN41                  Yes: branch (OK)
+         CLI   BUFCMD,C'C'             Move command?
+         BE    SCAN41                  Yes: branch (OK)
+         MVC   MSG1,ERRFTXT            Move error message (invalid opt)
+         MVC   SCR1ADDR+1(2),R2C15     Set cursor on Option
+         B     RESTART                 Write allocation screen again
+SCAN41   CLI   BUFDSNF,C' '            Data set specified?
+         BNE   SCAN43                  Yes: branch
+         MVC   MSG1,ERR2TXT            Msg: Data set name missing
+         B     RESTART                 Write allocation screen again
+SCAN43   CLI   BUFDSNT,C' '            Data set specified?
+         BNE   SCAN47                  Yes: branch
+         MVC   MSG1,ERR2TXT            Msg: Data set name missing
+         MVC   SCR1ADDR+1(2),R15C18    Set cursor on TO
+         B     RESTART                 Write allocation screen again
+SCAN47   CLC   =C'NO',BUFREPL          Replace = NO specified?
+         BE    SCAN49                  Yes: good
+         CLC   =C'YES',BUFREPL         Replace = YES specified?
+         BE    SCAN49                  Yes: also good
+         MVC   MSG1,ERRHTXT            Msg: Replace not YES or NO
+         MVC   SCR1ADDR+1(2),R18C24    Set cursor on REPLACE like
+         B     RESTART                 Write allocation screen again
+SCAN49   DS    0H
+         LA    R1,BUFDCBF              Point to FROM DCB, DSN and vol.
+         L     R15,=V(ALLOC)           Routine address
+         CALL  (15)                    Allocate and check data set
+         B     *+4(15)                 Process branchlist
+         B     SCAN55                  OK!
+         B     SCAN59                  Data set not allocated
+         B     SCAN61                  Data set not on volume
+         B     SCAN65                  Data set not PS or PO
+         B     SCAN67                  Data set not in catalog
+         B     SCAN68                  Access denied
+SCAN55   DS    0H
+         LA    R1,BUFDCBT              Point to TO DCB, DSN and vol.
+         MVC   SCR1ADDR+1(2),R15C18    Set cursor on TO
+         L     R15,=V(ALLOC)           Routine address
+         CALL  (15)                    Alloc and check data set
+         B     *+4(15)                 Process branchlist
+         B     SCAN69                  OK!
+         B     SCAN59                  Data set not allocated
+         B     SCAN61                  Data set not on volume
+         B     SCAN65                  Data set not PS or PO
+         B     SCAN67                  Data set not in catalog
+         B     SCAN68                  Access denied
+SCAN59   DS    0H
+         MVC   MSG1,ERR6TXT            Msg: allocation error
+         B     RESTART                 Write allocation screen again
+SCAN61   DS    0H
+         MVC   MSG1,ERRBTXT            Move Data set not on volume
+         B     RESTART                 Write allocation screen again
+SCAN65   DS    0H
+         MVC   MSG1,ERR5TXT            Move Data set not PS or PO
+         B     RESTART                 Write allocation screen again
+SCAN67   DS    0H
+         MVC   MSG1,ERRDTXT            Move Data set not in catalog
+         B     RESTART                 Write allocation screen again
+SCAN68   MVC   MSG1,ERRMTXT            Msg: Access denied
+         B     RESTART                 Write allocation screen again
+SCAN69   DS    0H
+         CLC   BUFDSNF(52),BUFDSNT     FROM and TO data sets are equal?
+         BNE   SCAN73                  No: Ok
+         MVC   MSG1,ERRJTXT            Data set cannot be equal
+         B     RESTART                 Write allocation screen again
+SCAN73   DS    0H
+*---------------------------------------------------------------------*
+*
+*    Check if DCB FROM data set matches with DCB TO data set
+*    DSORG of both data sets = PS = match
+*    DSORG of both data sets = PO = match
+*    RECFM=U in both data sets and BLKSIZE From <= BLKSIZE To = Match
+*    RECFM=F(B) in both data sets and LRECL both equal = Match
+*    RECFM=V(B) in both data sets and LRECL both equal = Match
+*    RECFM=FBA in From and RECFM=FB in To = no match
+*    RECFM=VBA in From and RECFM=VB in To = no match
+*    RECFM/LRECL/BLKSIZE in both data sets all equal = always match
+*
+*------------------------------------------ (C) 2022 Skybird Systems -*
+*
+         CLC   DSNFDSOR,DSNTDSOR       Does DSORG match?
+         BNE   SCANERR                 No: give error msg and branch
+         CLC   DSNFRECF,DSNTRECF       Does record format match?
+         BNE   SCANERR                 No: give error msg and branch
+         TM    DSNFDSOR,DCBDSGPS       DSORG=PS?
+         BO    SCAN83                  Yes: process sequential data set
+         TM    DSNFRECF,DCBRECU        Record FM = U
+         BNO   SCAN81                  No: test match blksize+lrecl
+         CLC   DSNFBLK,DSNTBLK         Test block sizes only if RECFM=U
+         BH    SCANERR                 Error if input > output
+         B     SCAN85                  No: continue
+SCAN81   DS    0H
+         CLC   DSNFLREC(2),DSNTLREC    Does LRECL match?
+         BNE   SCANERR                 Error if not
+         B     SCAN85                  Move/copy PDS members
+SCAN83   DS    0H
+         CLC   DSNFBLK,DSNTBLK         Test block sizes
+         BH    SCANERR                 Error if input > output
+         B     SEQ000                  Process sequential data set
+SCAN85   DS    0H
+*
+*        Allocate IEBCOPY SYSIN, SYSPRINT, SYSUT3 and SYSUT4 data sets
+*        Use ddnames RPFIN, RPFPRINT, RPFUT3 and RPFUT4
+*
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFIN'     DDNAME to allocate
+         MVC   DA08PDSN,=A(SYSINL)     Temporary data set name
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name (SYSDA)
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVI   DA08PQTY+3,X'05'        5 cylinders primary
+         MVI   DA08SQTY+3,X'02'        2 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFPRINT'  DDNAME to allocate
+         MVC   DA08PDSN,=A(PRTDSNL)    Temporary data set name
+         LA    R1,RPFD08               Point to allocation parm block
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFUT3'    DDNAME to allocate
+         MVC   DA08PDSN,=A(SYSUT3L)    Temporary data set name
+         MVI   DA08PQTY+3,75           75 cylinders primary
+         MVI   DA08SQTY+3,25           25 cylinders secondary
+         LA    R1,RPFD08               Point to allocation parm block
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFUT4'    DDNAME to allocate
+         MVC   DA08PDSN,=A(SYSUT4L)    Temporary data set name
+         DROP  R1                      RPFD08
+         LA    R1,RPFD08               Point to allocation parm block
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         MVC   SCR5FDSN,BUFDSNF        Move to
+         MVC   SCR5TDSN,BUFDSNT               PDS screen
+         MVC   INF2TXT+19(6),=C'copied' default copied
+         MVC   SCR5VAR,=C'Copy'               Copy
+         CLI   BUFCMD,C'M'             Move command
+         BNE   PDS000                  No: finished
+         MVC   INF2TXT+19(6),=C'moved ' Else moved
+         MVC   SCR5VAR,=C'Move'             move
+         B     PDS000                  Display screen
+SCANERR  DS    0H
+         MVC   MSG1,ERR7TXT            Msg: Conflicting DCB parameters
+         B     RESTART                 Write allocation screen again
+         TITLE 'Process partitioned data sets'
+PDS000   DS    0H
+         ZAP   MEMCNT,=P'0'            Init member counter
+         TM    SW,$ESTAE               Is ESTAE already active?
+         BO    PDSSKIP                 Yes: skip
+         LA    R2,ESTAERGS
+         XC    ESTAEL(L#ESTAEL),ESTAEL
+*
+         AIF   (&SVS).SVS1
+         ESTAE RECOVER,PARAM=(2),MF=(E,ESTAEL) Establish ESTAE
+         AGO   .NOSVS1
+.SVS1    ANOP
+         STAE  RECOVER,PARAM=(2),MF=(E,ESTAEL) Establish STAE
+.NOSVS1  ANOP
+         OI    SW,$ESTAE               Set ESTAE active
+PDSSKIP  DS    0H
+         MVC   COMMFSCR,COMWSTRT       Save startaddr in COMMFSCR
+         L     R9,COMWSTRT             And load into R9
+         LR    R1,R9                   Copy
+         SL    R1,=A(NEXTENT)          Minus entry length (88)
+         ST    R1,COMMLAST             Initial empty workspace
+         USING MEMBAREA,R9             Get addressability
+         MVI   RPFUT1+DCBRECFM-IHADCB,X'80' Recfm=F
+         MVC   RPFUT1+DCBBLKSI-IHADCB(2),=XL2'0100' BLKSIZE=256
+         MVC   RPFUT1+DCBSYNA-IHADCB(3),=AL3(PDSSYN)  SYNAD exit
+         MVI   RPFUT2+DCBRECFM-IHADCB,X'80' Recfm=F
+         MVC   RPFUT2+DCBBLKSI-IHADCB(2),=XL2'0100' BLKSIZE=256
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  RPFUT1,MF=(E,COMOPN)    Open PDS(E) for input
+PDS001   DS    0H                      Set PDS002 Routine in amode24
+         LA    R3,DIRAREA              Load DIREAREA from AREAS    @rp3
+         RPFSA24                       Switch to amode 24        @rpa01
+         LA    R2,RPFUT1               DCB address
+         XC    DECBR(DECBRLEN),DECBR   Clear Data event control block
+         READ  DECBR,SF,(2),(3),'S',MF=E
+         CHECK DECBR                   Wait for completion
+         RPFSA31                       Switch to amode 31        @rpa01
+         LR    R5,R3                   Same address in R5
+         AH    R5,0(R3)                Add # of usable bytes
+         BCTR  R5,0                    Minus 1 for BXLE
+         LA    R3,2(,R3)               Point to first member
+PDS004   DS    0H
+         CLI   0(R3),X'FF'             EOF ?
+         BE    PDS017                  Close data set
+PDS005   DS    0H
+         L     R1,COMWRKND             End of EDIT workspace
+         SL    R1,=A(NEXTENT)          Minus 1 entry
+         CR    R9,R1                   End of workspace reached ?
+         BNH   PDS007                  No: continue
+         MVC   MSG5,ERR8TXT            Workspace truncated
+         UNPK  MSG5+12(5),MEMCNT       Convert to zoned in message
+         OI    MSG5+16,X'F0'           Clear sign
+         B     PDS017                  Force EOF
+*                                      not all members fits in workspc.
+*        SYNAD error of PDS directory
+PDSSYN   DS    0H                                                     .
+         RPFSA31                       Restore addressing mode
+         L     R15,=V(CLOSE)           Close routine
+         BALR  R14,R15                 Execute
+         MVC   MSG1,ERRPTXT            Msg: I/O error input
+         B     RESTART
+*                                      not all members fits in workspc.
+PDS007   DS    0H
+         MVI   PREFIX,C' '             Blank
+         MVC   PREFIX+1(NEXTENT-1),PREFIX    workspace line
+         XC    PREFIX,PREFIX           Blank the prefix
+         USING PDS2,R3                 Address IHAPDS              @rp4
+         MVC   MEMBR,PDS2NAME          Store member into area
+         MVC   INPTTR(3),PDS2TTRP      Move TTR to workspace       @rp4
+         MVI   INPHL,NONHLM            Move highlite CH (NO HL MDT)
+         AP    MEMCNT,=P'1'            Add member
+         MVI   ALIAS,C' '              BLANK Alias field
+         TM    11(R3),X'80'            Alias entry ?
+         BNO   PDS009                  No: branch
+         MVI   ALIAS,C'A'              Mark alias
+PDS009   DS    0H
+         MVC   SAVEC,PDS2INDC          Save 'C' byte               @rp4
+         NI    PDS2INDC,B'00011111'    Zero first 3 bits of C byte @rp4
+         TM    RECFM,DCBRECU           RECFM=U?                    @rp4
+         BM    ISPFTEST                No: branch                  @rp3
+*
+*        We have a possible loadmodule library (RECFM=U)
+*        In this section will be looked if the PDS-member contains
+*        LINK EDIT userdata. If so, display on the terminal
+*
+         UNPK  DBW(3),SAVEC(2)         Expand each byte
+         NC    DBW(2),=X'0F0F0F0F0F0F' Clear hi order nibbles
+         TR    DBW(2),=C'0123456789ABCDEF'
+         MVC   INPC(2),DBW             Move to user field
+         XR    R4,R4                   Clear register 4
+         IC    R4,PDS2INDC             Insert 'C' byte             @rp4
+         SLL   R4,1                    * 2 because C = # halfwords
+         LTR   R4,R4                   No userdata present?
+         BZ    PDS015                  If not: branch              @rp4
+         UNPK  DBW(7),PDS2STOR(4)      Expand each byte
+         NC    DBW(6),=X'0F0F0F0F0F0F' Clear hi order nibbles
+         TR    DBW(6),=C'0123456789ABCDEF'
+         MVC   INPSIZE(6),DBW          Move to user field
+         TM    PDS2ATR1,PDS2RENT       Is Loadmod reentrant?       @rp4
+         BNO   *+10                    No: branch                  @rp4
+         MVC   INPRENT,=C'RN'          Move reentrant attr.        @rp4
+         TM    PDS2ATR1,PDS2REUS       Is Loadmod re-usable?       @rp4
+         BNO   *+10                    No: branch                  @rp4
+         MVC   INPREUS,=C'RU'          Move re-usable attr.        @rp4
+         TM    PDS2ATR2,PDS2REFR       Is Loadmod refreshable
+         BNO   *+10                    No: branch
+         MVC   INPREFR,=C'RF'          Move refreshable attribute
+         TM    PDS2ATR1,PDS2SCTR       Is there a SCATTER section? @rp4
+         BNO   *+10                    no: branch                  @rp4
+         MVC   INPSC,=C'SC'            Mark scatter load           @rp4
+         TM    PDS2ATR1,PDS2OVLY       Is module in overlay?
+         BNO   *+10                    No: do not mark
+         MVC   INPOV,=C'OV'            Mark overlay
+         TM    PDS2ATR1,PDS2EXEC       Is module executable?
+         BO    *+10                    Yes: good
+         MVC   INPNX,=C'NX'            Mark not executable
+         TM    PDS2ATR2,PDS2EP0        Entry point zero?           @rp4
+         BNO   *+10                    no: branch                  @rp4
+         MVC   INPEP0,=C'EP0'          Mark entry point is 0       @rp4
+         MVC   INPAM,=C'24 '           Default AMODE               @rp4
+         TM    PDS2FTB2,X'03'          Amode ANY?                  @rp4
+         BZ    AMODEND                 All zero? leave 24          @rp4
+         BM    AMOD02                  Mixed: Amode 31 or Amode 64 @rp4
+         MVC   INPAM,=C'ANY'           Amode ANY                   @rp4
+         B     AMODEND                 and branch                  @rp4
+AMOD02   DS    0H                                                  @rp4
+         TM    PDS2FTB2,X'02'          Amode 31?                   @rp4
+         BZ    AMOD64                  Then it's Amode 64 (x'01')  @rp4
+         MVC   INPAM,=C'31 '           Amode = 31                  @rp4
+         B     AMODEND                 and branch                  @rp4
+AMOD64   DS    0H                                                  @rp4
+         MVC   INPAM,=C'64 '           Amode = 64                  @rp4
+AMODEND  DS    0H                                                  @rp4
+         MVC   INPRM,=C'24 '           Default Rmode               @rp4
+         TM    PDS2FTB2,X'30'          Rmode 64?                   @rp4
+         BZ    RMODEND                 All zero? leave 24          @rp4
+         BM    RMOD02                  Mixed: Rmode 31 or Rmode 64 @rp4
+         MVC   INPRM,=C'64 '           Rmode ANY (x'30')           @rp4
+         B     RMODEND                 and branch                  @rp4
+RMOD02   DS    0H                                                  @rp4
+         TM    PDS2FTB2,X'10'          Rmode 31?                   @rp4
+         BZ    RMODEND                 No: it's 24  (x'10' or '00')@rp4
+         MVC   INPRM,=C'ANY'           Rmode = 31 (x'20')          @rp4
+RMODEND  DS    0H                                                  @rp4
+         TM    PDS2FTB1,PDSAPFLG       Is info in PDSAPF valid?    @rp4
+         BNO   PDS018NO                No: branch                  @rp4
+         LA    R6,PDSBCLN(,R3)         Point after basic section   @rp4
+         TM    PDS2ATR1,PDS2SCTR       Is there a SCATTER section? @rp4
+         BNO   *+8                     no: branch                  @rp4
+         LA    R6,PDSS01LN(,R6)        Point after scatter section @rp4
+         TM    SAVEC,PDS2ALIS          Is there an ALIAS  section? @rp4
+         BNO   *+8                     no: branch                  @rp4
+         LA    R6,PDSS02LN(,R6)        Point after alias section   @rp4
+         TM    PDS2FTB1,PDS2SSI        Is there an SSI    section? @rp4
+         BNO   NOSSI                   no: branch                  @rp4
+         LA    R6,1(,R6)               + 1 because SSI section     @rp4
+         SRL   R6,1                    is on halfword              @rp4
+         SLL   R6,1                    boundary                    @rp4
+         LA    R6,PDSS03LN(,R6)        Length of SSI section       @rp4
+NOSSI    DS    0H                                                  @rp4
+         MVC   APFC,1(R6)              Move AC code                @rp4
+         UNPK  DBW(3),APFC(2)          Expand each byte of AC code
+         NC    DBW(2),=X'0F0F0F0F0F0F' Clear hi order nibbles
+         TR    DBW(2),=C'0123456789ABCDEF'
+         MVC   INPAPF(2),DBW           Move to user field
+PDS018NO DS    0H                                                  @rp4
+         TM    SAVEC,PDS2ALIS          An alias?                   @rp4
+         BNO   PDSNOAL                 Branch if not               @rp4
+         LA    R6,PDSBCLN(,R3)         Point after basic section   @rp4
+         TM    PDS2ATR1,PDS2SCTR       Is there a 'scatter' sect?  @rp4
+         BNO   *+8                     no: branch                  @rp4
+         LA    R6,PDSS01LN(,R6)        Point after scatter sect.   @rp4
+         MVC   INPALIAS,3(R6)          Move truename               @rp4
+PDSNOAL  DS    0H                                                  @rp4
+         B     PDS015                  LKED userdata in screen     @rp4
+ISPFTEST DS    0H
+*---------------------------------------------------------------------*
+*
+*        In the next section will be looked if the member is saved
+*        by ISPF (System Productivity Facility) or with the new format
+*        userdata of RPF, If so, it will be displayed.
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         DROP  R3                      Kill addressability IHAPDS @rp4
+         USING SPFDATA,R3              Address same area          @rp4
+         CLI   SPFC,X'0F'              Is userdata in dir 15 halfwords?
+         BE    ISPFTST2                Yes: possible ISPF stats
+         CLI   SPFC,X'14'              Is userdata in dir 20 halfwords?
+         BNE   PDS015                  No: no ISPF stats
+ISPFTST2 DS    0H
+         TM    SPFDATEU+3,X'0C'        Does SPFDATEU contain a sign?
+         BNO   PDS015                  No: definitely no ISPF stats
+         TM    SPFDATEI+3,X'0C'        Does SPFDATEI contain a sign?
+         BNO   PDS015                  No: definitely no ISPF stats
+         LR    R1,R3                   A(MEMBER+TTR+UDATA) in reg 1
+         L     R15,=V(SPFRPFU)         Routine address
+         CALL  (15)                    Invoke ISPF stats routine
+PDS015   DS    0H
+         ST    R9,COMMLAST             Save last record pointer
+         LA    R9,NEXTENT(,R9)         Next entry in workspace
+         XR    R4,R4                   of 'TTRC' in directory block
+         IC    R4,SPFC                 And insert it into R3
+         AR    R4,R4                   Double because halfwords
+         AH    R4,=H'12'               + minimum length member entry
+         BXLE  R3,R4,PDS004            Next member if any
+         B     PDS001                  Read next directory block
+         DROP  R3                      SPFDATA
+PDS017   DS    0H                      End of file RPFUT1
+*
+*  Add an END line with totals in the EDIT workspace
+*
+         MVC   END1,=CL8'**END**'      End of data text
+         MVC   END2(8),=C'Members:'
+         MVC   END2+8(7),=X'4020206B202120' Edit pattern
+         ED    END2+8(7),MEMCNT+5      # of members
+         MVI   PREFIX,C' '             Blank member
+         MVC   PREFIX+1(87),PREFIX                  workspace entry
+         MVC   MEMBR,END1              ** End ** in member
+         MVI   INPSTATS,C' '           Blank statistics ares
+         MVC   INPSTATS+1(L'INPSTATS-1),INPSTATS
+         MVC   INPSTATS(L'END2),END2   Display number of members
+         ST    R9,COMMLAST             Save last record pointer
+         L     R15,=V(CLOSE)           Close routine
+         BALR  R14,R15                 Execute
+         ZAP   SORTCNT,MEMCNT          # records to sort for SORT xxx
+         CP    MEMCNT,=P'0'            Does FROM data set contain mbrs?
+         BNE   PDS019                  Yes: OK
+         MVC   MSG1,ERRLTXT            'No members in FROM ds'
+         B     RESTART
+PDS019   DS    0H                      End of file RPFUT1
+         TM    SW,$ALLMEM              Copy/Move All members?
+         BNO   PDS020                  No: continue normally
+         CALL  ALLMEM                  Move/Copy all members
+         B     RESTART                 Allocation menu again
+PDS020   DS    0H                      Process the output
+         MVC   SCR1ADDR+1(2),R11C18    Set cursor on default position
+         L     R15,=V(RPFTPUT)         Write the screen
+         BALR  R14,R15                 Execute
+         TITLE 'Process primary commands'
+PDS021   DS    0H                      Process the output
+         LA    R2,AIDBYTE              AIDbyte address
+         USING SCREEN,R5               Address the output area
+         L     R5,SCROUTP              Point to output of TGET
+         L     R15,=V(CONVIN)          Routine address
+         CALL  (15)
+         XC    REP5,REP5               Clear command field
+         LTR   R15,R15                 Did we receive output?
+         BNZ   NEWSCR                  No: review screen
+         MVC   SC@BUFF,SCRCMD          Copy command buffer
+         TRT   SC@BUFF,COMSKPSP        Search for first non-blank
+         BZ    ENDSCAN                 All blanks, nothing to parse
+         MVC   SCRCMD,0(R1)            Shift command to start of BUFFER
+ENDSCAN  DS    0H
+         TR    SCRCMD,COMTCAPS         XLATE to uppercase
+         CLI   AIDBYTE,X'7D'           Enter key ?
+         BE    PDS024                  Yes: branch
+         LA    R1,AIDBYTE              AIDbyte address
+         L     R2,SCROUTP              Addr. of screen for PFK rout
+         L     R15,=V(PFK)
+         CALL  (15)                    Get PFK definitions
+         B     PDS0212(15)             Execute branchlist
+PDS0212  B     PDS024                  RC = 0
+         B     PDS023                  RC = 4 - Confirmation=YES
+         B     PDS022                  RC = 8 - PFK not defined
+         B     PDS0213                 RC = 12 - PFK def. invalid
+PDS0213  DS    0H
+         MVC   MSG5,ERRATXT            PFK definition invalid
+         XC    REP5,REP5               Clear command field
+         B     PDS059                  Write and process screen
+PDS022   DS    0H
+         MVC   MSG5,ERR9TXT            Move error message
+         XC    REP5,REP5               Clear command field
+         B     PDS059                  Write and process screen
+PDS023   DS    0H
+         MVI   MSG5,C'-'               Clear
+         MVC   MSG5+1(L'MSG5-1),MSG5         message
+         MVC   REP5,SCRCMD             Repeat command
+         B     PDS059                  Write and process screen
+PDS024   DS    0H
+         CLI   SCRCMD,C'?'             Refresh command?
+         BNE   PDS025                  Continue if not
+NEWSCR   DS    0H
+         XC    REP5,REP5               Clear command field
+         B     PDS059                  Write and process screen
+PDS025   DS    0H
+         MVI   MSG5,C'-'               Clear
+         MVC   MSG5+1(L'MSG5-1),MSG5        message area
+PDS027   DS    0H                      Process the commands
+         MVC   BUFFER,SCRCMD           Move command
+         BAL   R14,RPFSCRN             Process 'S' Line command
+         CLC   SCRCMD(4),=C'DOWN'      Scroll forward?
+         BNE   PDS035                  No: test other commands
+         L     R9,COMMFSCR             First line on screen
+         AL    R9,NEXTSCR              Next screen
+         CL    R9,COMMLAST             Compare with A(Last line)
+         BH    PDS059                  Beyond: ignore scroll
+         ST    R9,COMMFSCR             New first line on screen
+         B     PDS059                  Write and process screen
+PDS035   DS    0H
+         CLC   SCRCMD(3),=C'PFK'       PFK entered ?
+         BNE   PDS036                  No: test next command
+         L     R15,EPPFK               Entry point RPFPFK        @rpa01
+         LA    R1,ADDRCOMM             Address of RPFCOMM
+         CALL  (15)                    Link to module            @rpa01
+         B     NEWSCR                  Write new screen
+PDS036   DS    0H                      Process 'UP' command
+         CLC   SCRCMD(2),=C'UP'        Scroll backward?
+         BNE   PDS039                  No: test other commands
+         L     R9,COMMFSCR             1st line on screen
+         CL    R9,COMWSTRT             Already first screen ?
+         BNH   PDS059                  Yes: ignore scroll
+         SL    R9,NEXTSCR              1 screen back
+         CL    R9,COMWSTRT             and compare with start workspce
+         BNL   *+8                     If Low: reset to first screen
+         L     R9,COMWSTRT             Reset to first screen
+         ST    R9,COMMFSCR             New 1ST line on screen
+         B     PDS059                  Write and process screen
+PDS039   CLI   SCRCMD,C'B'             BOTTOM command ?
+         BNE   PDS041                  No: process other commands
+         L     R3,COMMLAST             Load begin address
+         SL    R3,NEXTSCR              Subtract screen length
+         LA    R3,NEXTENT(,R3)               Minus one
+         CL    R3,COMWSTRT             Before COMWSTRT ?
+         BNL   PDS040                  No: proceed
+         L     R3,COMWSTRT             Divide by screen length
+         B     PDS059                  Rewrite the screen
+PDS040   ST    R3,COMMFSCR             Save address first line on scr.
+         B     PDS059                  Write and process screen
+PDS041   DS    0H
+         CLC   SCRCMD(2),=C'L '        'Locate on member command'
+         BNE   PDS045                  No: process other commands
+         L     R15,=V(LOCATE)          Try to locate string
+         BALR  R14,R15
+         LTR   R15,R15                 Found ?
+         BZ    PDS043                  Yes: branch
+         MVC   MSG5,ERRCTXT            Msg: no string specified
+         MVC   REP5,SCRCMD             Repeat command
+PDS043   DS    0H
+         B     PDS059                  Write and process screen
+PDS045   DS    0H                      Process 'TOP' command
+         CLC   SCRCMD(3),=C'TOP'       TOP entered ?
+         BE    PDSTOP                  Yes: process command
+         CLC   SCRCMD(2),=C'T '        TOP command (Alias 'T') ?
+         BNE   PDS047                  No: other commands
+PDSTOP   MVC   COMMFSCR,COMWSTRT       First line is 1st member
+         B     PDS059                  Re-write screen
+PDS047   DS    0H
+         CLI   SCRCMD,C'='             =n or =n.n command?
+         BNE   PDS049                  No: branch
+         MVC   CMAINOPT,SCRCMD+1       Move options
+         OI    COMMFLG2,$COMRTRN       Set return indicator in RPFCOMM
+         B     RETURN                  And terminate (to main)
+PDS049   DS    0H
+         CLC   SCRCMD(6),=C'RETURN'    RETURN command ?
+         BNE   PDS051                  No: branch
+         OI    COMMFLG2,$COMRTRN       Set return indicator in RPFCOMM
+         B     RETURN                  And terminate
+PDS051   DS    0H
+         CLC   SCRCMD(5),=C'SORT '     Primary command 'SORT'?
+         BNE   PDS055                  No: test other primary commands
+         L     R6,COMWSTRT             First record in workspace
+         CVB   R7,SORTCNT              Records to sort
+         C     R7,=F'2'                Less than 2 records?
+         BL    PDS059                  Yes: ignore SORT
+         LA    R1,SCRCMD+5             Point after SORT verb
+         LA    R14,L'SCRCMD-8          Length to test
+PDS052   DS    0H
+         CLC   0(3,R1),=C'CHA'         Sort on change date/time?
+         BE    PDS052A                 Yes: execute this SORT
+         CLC   0(3,R1),=C'TTR'         Sort on TTR?
+         BE    PDS052B                 Yes: execute this SORT
+         CLC   0(3,R1),=C'SIZ'         Sort on number of records
+         BE    PDS052C                 Yes: execute this SORT
+         LA    R1,1(,R1)               Next byte in SCRCMD
+         BCT   R14,PDS052              Loop.
+         XR    R1,R1                   0  = sort on member name
+         B     PDS052D                 Execute sort
+PDS052A  DS    0H
+         LA    R1,8                    8  = sort on date/time changed
+         B     PDS052D                 Execute sort
+PDS052B  DS    0H
+         LA    R1,4                    4  = sort on TTR
+         B     PDS052D                 Execute sort
+PDS052C  DS    0H
+         LA    R1,12                   12 = sort on number of records
+PDS052D  DS    0H
+         L     R15,=V(SORT)            Load sort routine
+         BALR  R14,R15                 Execute
+         B     PDS059                  Rewrite screen
+PDS055   DS    0H
+         CLC   SCRCMD(3),=C'END'       END command ?
+         BNE   PDS057                  No: continue
+         MVI   MSG1,C'-'               Clear
+         MVC   MSG1+1(L'MSG1-1),MSG1        message area
+         B     RESTART                 Issue allocation screen
+PDS057   DS    0H
+         CLI   SCRCMD,C' '             Nothing entered ?
+         BE    PDS059                  Continue
+         MVC   MSG5,ERR3TXT            Invalid command
+         MVC   REP5,SCRCMD             Repeat command in error
+*
+*        PDS059 = Landing point to re-write the member selection list
+*
+PDS059   DS    0H
+         B     PDS020                  Write member list
+         TITLE 'Process seqential data set'
+*---------------------------------------------------------------------*
+*
+*        DSORG of both data sets are sequential. Copy the entire
+*        data set to the output data set.
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SEQ000   DS    0H
+         TM    SW,$ESTAE               Is ESTAE already active?
+         BO    SEQSKIP                 Yes: skip
+         LA    R2,ESTAERGS
+         XC    ESTAEL(L#ESTAEL),ESTAEL
+*
+         AIF   (&SVS).SVS2
+         ESTAE RECOVER,PARAM=(2),MF=(E,ESTAEL) Establish ESTAE
+         AGO   .NOSVS2
+.SVS2    ANOP
+         STAE  RECOVER,PARAM=(2),MF=(E,ESTAEL) Establish STAE
+.NOSVS2  ANOP
+         OI    SW,$ESTAE               Set ESTAE active
+SEQSKIP  DS    0H
+         LA    R2,RPFUT1               DCB address
+         USING IHADCB,R2               DCBD
+         LA    R1,SEQ009               EODAD address
+         STCM  R1,B'0111',DCBEODA      in DCB
+         MVC   DCBSYNA(3),=AL3(SEQSYN) SYNAD exit
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  RPFUT1,MF=(E,COMOPN)    Input data set
+         OI    RPFUT2+DCBMACR2-IHADCB,DCBMRWRT   Macrf=(W)
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (RPFUT2,(OUTPUT)),MF=(E,COMOPN)  Output data set
+         XR    R3,R3                   Counter
+         LH    R4,DCBBLKSI             Aquire
+         GETMAIN R,LV=(4)              BLKSIZE as buffer
+         ST    R1,BLOCK                Save it's address
+         ST    R4,BLOCKLEN             And length
+         LR    R4,R1                   Copy in register 4
+         RPFSA24                       Enter 24 bit mode
+SEQ003   DS    0H
+         XC    DECBR(DECBRLEN),DECBR   Clear Data event control block
+         READ  DECBR,SF,(2),(4),'S',MF=E Read a block
+         CHECK DECBR                   Wait for completion
+         LH    R5,DCBBLKSI             BLKSIZE at time of read
+         L     R1,DECBR+16             Status area address
+         SH    R5,14(,R1)              Subtract residual count
+         LA    R3,1(,R3)               Count block
+         XC    DECBW(DECBWLEN),DECBW   Clear Data event control block
+         STH   R5,RPFUT2+DCBBLKSI-IHADCB
+         WRITE DECBW,SF,RPFUT2,(4),(5),MF=E write the block
+         CHECK DECBW                   Wait for completion
+         B     SEQ003                  Next record
+SEQ009   DS    0H                      EODAD addres RPFUT1
+         RPFSA31                       Restore addressing mode
+         L     R15,=V(CLOSE)           Close routine
+         BALR  R14,R15                 Execute
+         BAL   R2,SEQFREE              Release block
+         CVD   R3,DBW                  Make counter packed
+         MVC   MSG1,ERRNTXT            Msg:  xxx records copied
+         MVC   MSG1+3(8),=X'6020202020202120' move EDIT pattern
+         ED    MSG1+3(8),DBW+4
+         B     RESTART                 Back to allocation screen
+SEQSYN   DS    0H                                                     .
+         RPFSA31                       Restore addressing mode
+         L     R15,=V(CLOSE)           Close routine
+         BALR  R14,R15                 Execute
+         BAL   R2,SEQFREE              Freemain
+         MVC   MSG1,ERRPTXT            Msg: I/O error input
+         B     RESTART                 Retry
+SEQFREE  L     R3,BLOCKLEN             Release
+         FREEMAIN R,LV=(3),A=(4)               block
+         XC    BLOCK,BLOCK             And clear it's address
+         BR    R2
+         DROP  R2                      DCBD
+         TITLE 'END OF ROUTINE'
+RETURN   DS    0H                      End of RPFMVCPY
+         TM    SW,$ESTAE               ESTAE active?
+         BNO   RETNOEST                No: do not cancel
+*
+         AIF   (&SVS).SVS3
+         ESTAE 0                       Kill ESTAE routine
+         AGO   .NOSVS3
+.SVS3    ANOP
+         STAE 0                        Kill STAE routine
+.NOSVS3  ANOP
+RETNOEST DS    0H
+         L     R15,=V(UNALLOC)         Load routine address
+         CALL  (15)                    Unallocate files
+         L     R5,SCRINP               Input screen area (from SCREENS)
+         L     R1,SCRINPSZ             and length
+         FREEMAIN R,LV=(1),A=(5)       Release this area
+         L     R5,SCROUTP              Screen area for TGET/CONVIN
+         L     R1,SCROUTSZ             and length
+         FREEMAIN R,LV=(1),A=(5)       Release this area
+         LR    R5,R13                  Working storage
+         L     R13,4(,R13)             Previous save area
+         FREEMAIN R,LV=WORKL,A=(5)     Release working storage
+         RETURN (14,12),RC=0           Back to caller
+         DROP  R5                     Kill addressability of SCREEN
+         TITLE 'PROCESS THE LINE-COMMANDS'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Process the "S" line command before the membername.          *
+*                                                                     *
+*        RETURNCODES                                                  *
+*                    00. Ok                                           *
+*                                                                     *
+*        Upon exit of RPFSCRN, register 5 will be reloaded with       *
+*        the address of the screen output area from the TGET          *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFSCRN  DS    0H
+         ST    R14,R14SCRN             Save register 14
+         ST    R5,R5SCRN               Save register 5
+         L     R3,SCROUTP              Load gotten screen
+         LA    R3,24(,R3)              Skip COMMAND area
+         L     R9,COMMFSCR             First line on screen
+         LH    R6,#LINES               Number of data lines on screen
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (SYSIN,(OUTPUT)),MF=(E,COMOPN) Open IEBCOPY SYSIN file
+         MVI   SYSREC,C' '             Blank
+         MVC   SYSREC+1(L'SYSREC-1),SYSREC  record
+         MVC   SYSREC(38),=C' COPY INDD=RPFUT1,OUTDD=RPFUT2,LIST=NO'
+         L     R15,=V(WRITEIT)         Routine address
+         CALL  (15)
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  RPFUT2,MF=(E,COMOPN)    Open RPFUT2 for BLDL
+SCRN03   DS    0H
+         NI    SW,255-$REPL            Reset replace flag          @rp1
+         TR    0(17,R3),COMTCAPS       Xlate linecmd + member+newname
+         CLI   0(R3),C' '              No line command?
+         BE    SCRN98                  Take next entry
+         CLI   0(R3),C'.'              No line command?
+         BE    SCRN98                  Take next entry
+         CLI   1(R3),C' '              No member in entry ?
+         BE    SCRN98                  Possible last screen
+         CLI   0(R3),C'S'              'S' line command (Select)?
+         BNE   SCRN21                  No: branch
+         MVI   BLDLNAME,C' '           Blank BLDL entry
+         MVC   BLDLNAME+1(L'BLDLNAME-1),BLDLNAME
+         MVC   BLDLNAME(8),1(R3)       Move member to BLDL
+         CLI   9(R3),C' '              Newname present?
+         BE    SCRN05                  No: branch
+         MVC   BLDLNAME(8),9(R3)       Move newname to BLDL
+SCRN05   DS    0H
+         BLDL  RPFUT2,BLDLLIST         Locate member
+         LTR   R15,R15                 Member found?
+         BNZ   SCRN07                  No: copy/move member
+         OI    SW,$REPL                member exists in to data set
+*                                      so give 'replaced' msg
+         CLC   =C'YES',BUFREPL         Members should be replaced?
+         BE    SCRN07
+         MVI   OPER,X'FB'              Member not replaced
+         B     SCRN98                  Next entry
+SCRN07   DS    0H
+         MVI   SYSREC,C' '             Blank
+         MVC   SYSREC+1(L'SYSREC-1),SYSREC  record
+         MVC   SYSREC(17),=C' SELECT MEMBER=(('
+         MVC   SYSREC+17(8),1(R3)      Move membername in control stmt
+         LA    R4,SYSREC+18            Point on 2nd byte of member
+         LA    R5,7                    Max 7 times
+SCRN09   DS    0H
+         CLI   0(R4),C' '              End of member?
+         BE    SCRN11                  Yes: branch
+         LA    R4,1(,R4)               Next character in member
+         BCT   R5,SCRN09               Loop until all done
+SCRN11   DS    0H
+         CLI   9(R3),C' '              Newname present?
+         BNE   SCRN13                  No: branch
+         MVC   0(5,R4),=C',,R))'       Make control statement complete
+         B     SCRN19                  Write record
+SCRN13   DS    0H
+         MVI   0(R4),C','
+         MVC   1(8,R4),9(R3)           Move new name in control stmnt
+         LA    R4,2(,R4)               Point to 2nd byte of new name
+         LA    R5,7                    Loop max. 7 times (l'member-1)
+SCRN15   DS    0H
+         CLI   0(R4),C' '              End of new name?
+         BE    SCRN17                  Yes: branch
+         LA    R4,1(,R4)               Next character in member
+         BCT   R5,SCRN15               Loop until all done
+SCRN17   DS    0H
+         MVC   0(4,R4),=C',R))'        Make control statement complete
+SCRN19   DS    0H
+         L     R15,=V(WRITEIT)         Routine address
+         CALL  (15)                    Write record
+         OI    SW,$COPY                Mark members to be copied
+         MVI   OPER,C'C'               Member Copied
+         CLI   BUFCMD,C'M'             Member moved?
+         BNE   SCRN96                  No: jump over
+         MVI   OPER,C'M'               Member Moved
+         B     SCRN96                  Next entry                  @rp1
+SCRN21   DS    0H
+         MVI   OPER,X'EE'              Invalid line command
+SCRN96   DS    0H                                                  @rp1
+         TM    SW,$REPL                Member replaced?            @rp1
+         BNO   SCRN98              No: give 'moved' or 'copied'msg @rp1
+         MVI   OPER,C'R'               Mark 'Replaced'             @rp1
+SCRN98   DS    0H
+         LA    R3,17(,R3)              Next entry input
+         LA    R9,NEXTENT(,R9)         Next entry in workspace
+         BCT   R6,SCRN03               Loop
+SCRN99   DS    0H
+         L     R15,=V(CLOSE)           Close routine
+         BALR  R14,R15                 Execute
+         TM    SW,$COPY                Copy statements made?
+         BNO   SCRN999                 No: do not invoke IEBCOPY
+         L     R15,=V(IEBCOPY)         Exec copy routine
+         CALL  (15)
+SCRN999  DS    0H
+         L     R5,R5SCRN               Restore register 5
+         L     R14,R14SCRN             Restore R14
+         BR    R14                     Return
+         AIF   (&SVS).SVSR
+         TITLE 'ESTAE recovery routine, Retry From abends'
+RECOVER  DS    0H
+         DROP  ,
+         USING *,R15                   Get temporary addressability
+         USING SDWA,R1                 Get addressability over sdwa
+         CH    R0,=H'12'               Is there an SDWA
+         BE    SETRP00                 No: continue with abend
+         XR    R2,R2                   Clear register 2
+         ICM   R2,7,SDWACMPC           Insert completion code
+         SRL   R2,12                   Shift out user completion codep1
+         CLM   R2,3,=X'0B0A'           IEBCOPY authorization abend?
+         BE    SETRP04                 Yes: try to retry
+         CLM   R2,3,=X'0D37'           Data set full ?
+         BE    SETRP04                 Yes: try to retry
+         CLM   R2,3,=X'0B37'           End of extents ?
+         BE    SETRP04                 Yes: try to retry
+         CLM   R2,3,=X'0E37'           End of volume ?
+         BE    SETRP04                 Yes: try to retry
+SETRP00  DS    0H
+         XR    R15,R15                 Else continue with abend
+         BR    R14                     Branch to RTM
+SETRP04  DS    0H
+         L     R3,SDWAPARM             PARM with registers 8-13
+         MVC   SDWASR08(24),0(R3)      Restore registers 8-13
+         ST    R2,SDWASR02             Save register 2 for retry rout
+         SETRP RC=4,RETADDR=RET,RETREGS=YES,FRESDWA=YES,               X
+               DUMP=NO
+         DROP  R1,R15                  SDWA and RECOVER
+         BR    R14                     Branch to rtm
+         TITLE 'ESTAE RETRY ROUTINE'
+RET      DS    0H
+         DROP  ,
+         USING RPFMVCPY,R12,R10        Make module addressable again
+         USING WORKAREA,R13            Our working storage
+         USING COMMAREA,R11
+         USING SCREENS,R8
+         RPFSA31                       Go to AMODE 31
+         AIF   (&OS390 OR &MVSXA OR &SVS).NOAPFR2
+         TM    SW,$MAGAPF              APF bit set by magic SVC?
+         BNO   RET07                   No: do not reset APF bit
+         SR    R1,R1                   R1=0 = set APF off
+         SR    R0,R0                   R0 should be zero
+         SVC   COMMAGIC                Become APF unauthorized
+         NI    SW,255-$MAGAPF          Reset APF flag
+RET07    DS    0H
+.NOAPFR2 ANOP
+         AGO   .NOSVSR
+.SVSR    ANOP
+         TITLE 'STAE recovery routine, Retry From abends'
+RECOVER  DS    0H
+         DROP  ,
+         USING *,R15                   Get temporary addressability
+         USING SCB,R1            Get addressability over workarea
+         CH    R0,=H'12'               Is there an 104 byte area?
+         BE    SETRP00                 No: continue with abend
+         XR    R2,R2                   Clear register 2
+         ICM   R2,7,SCBCMP+1           Insert completion code
+         SRL   R2,12                   Shift out user completion codep1
+         CLM   R2,3,=X'0B0A'           IEBCOPY authorization abend?
+         BE    SETRP04                 Yes: try to retry
+         CLM   R2,3,=X'0D37'           Data set full ?
+         BE    SETRP04                 Yes: try to retry
+         CLM   R2,3,=X'0B37'           End of extents ?
+         BE    SETRP04                 Yes: try to retry
+         CLM   R2,3,=X'0E37'           End of volume ?
+         BE    SETRP04                 Yes: try to retry
+SETRP00  DS    0H
+         XR    R15,R15                 Else continue with abend
+         BR    R14                     Branch to RTM
+SETRP04  DS    0H
+         L     R3,SCBPARM              PARM with registers 8-13
+         ST    R2,24(,R3)              Save register 2 for retry rout
+         LA    R0,RET                  Retry routine
+         LA    R15,4                   Rc=4: Retry
+         BR    R14                     Branch to rtm
+         TITLE 'STAE RETRY ROUTINE'
+RET      DS    0H
+         DROP  ,
+         USING RPFMVCPY,R12,R10        Make module addressable again
+         USING WORKAREA,R13            Our working storage
+         USING COMMAREA,R11
+         USING SCREENS,R8
+         USING SCB,R1                  Get addressability over workarea
+         L     R3,SCBPARM              7 fullwords reg 8-13 and 2
+         LM    R8,R13,0(R3)            Restore regs. 8-13
+         L     R2,24(,R3)              Restore register 2
+         FREEMAIN R,LV=104,A=(1)       FREEMAIN workarea
+.NOSVSR  ANOP
+         OI    SW,$ABEND               Abend occurred
+         L     R15,=V(CLOSE)           Close routine
+         BALR  R14,R15                 Execute
+         STCM  R2,3,DBW+6              Completion code
+         UNPK  DBW(5),DBW+6(3)         Expand each byte of ABEND code
+         NC    DBW(4),=X'0F0F0F0F0F0F' Clear hi order nibbles
+         TR    DBW(4),=C'0123456789ABCDEF'
+         MVC   MSG1,ERRGTXT            Move abend message
+         MVC   MSG1+12(4),DBW          Move to user field
+         ICM   R2,15,BLOCK             Address of block in SEQxxx routs
+         BZ    RET09                   Nothing to free
+         L     R3,BLOCKLEN             Length
+         FREEMAIN R,LV=(3),A=(2)       Else free this area
+         XC    BLOCK,BLOCK             And clear it's address
+RET09    LA    R14,RESTART             Return address
+         BR    R14                     Retry successful
+         DROP  ,
+         TITLE 'Constants'
+SYSINL   DC    AL2(7)                  Real length SYSINDSN
+SYSINDSN DC    CL44'&&&&RPFIN'         IEBCOPY Sysin data set
+PRTDSNL  DC    AL2(10)                 Real length PRTDSN
+PRTDSN   DC    CL44'&&&&RPFPRINT'      IEBCOPY Sysprint data set
+SYSUT3L  DC    AL2(8)                  Real length SYSUT3
+SYSUT3   DC    CL44'&&&&SYSUT3'        IEBCOPY SYSUT3 data set
+SYSUT4L  DC    AL2(8)                  Real length SYSUT4
+SYSUT4   DC    CL44'&&&&SYSUT4'        IEBCOPY SYSUT3 data set
+*
+COPYPARM DC    AL2(0)                  First parm of IEBCOPY
+*
+COPYDDNS DS    0F
+         DC    AL2(STOPC-STARTC)
+STARTC   EQU   *
+         DC    XL8'00'                 Empty entry (SYSLIN)
+         DC    XL8'00'                 EMPTY ENTRY (SYSLMOD MBR)
+         DC    XL8'00'                 EMPTY ENTRY (SYSLMOD)
+         DC    XL8'00'                 Empty entry (SYSLIB)
+         DC    CL8'RPFIN'              SYSIN
+         DC    CL8'RPFPRINT'           SYSPRINT
+         DC    XL8'00'                 Empty entry (SYSPUNCH)
+         DC    CL8'RPFUT1'             SYSUT1
+         DC    CL8'RPFUT2'             SYSUT2
+         DC    CL8'RPFUT3'             SYSUT3
+         DC    CL8'RPFUT4'             SYSUT4
+         DC    XL8'00'                 Empty entry (SYSTERM)
+STOPC    EQU   *
+*
+         PRINT NOGEN
+MODELDCB DCB   DSORG=PO,DDNAME=RPFUT1,MACRF=R
+DCBLEN   EQU   *-MODELDCB
+         ENTRY MODELDCB
+MODELDC2 DCB   DSORG=PS,DDNAME=RPFUT1,MACRF=R
+DCBLEN2  EQU   *-MODELDC2
+         ENTRY MODELDC2
+MDLSYS   DCB   DSORG=PS,DDNAME=RPFIN,MACRF=(PM),LRECL=80,              X
+               BLKSIZE=3120,RECFM=FB
+MDLSYSL  EQU   *-MDLSYS
+         PRINT GEN
+NONHL    EQU   X'F0'                   Non highlight no MDT on
+HL       EQU   X'F8'                   Highlight no MDT on
+NONHLM   EQU   X'F1'                   Non highlight MDT on
+HLM      EQU   X'F9'                   Highlight MDT on
+ERR2TXT  DC    CL25'--- Data set name missing'
+ERR3TXT  DC    CL25'--------- Invalid command'
+ERR5TXT  DC    CL25'--- Data set not PS or PO'
+ERR6TXT  DC    CL25'--- Data set alloc. error'
+ERR7TXT  DC    CL25'--- Conflicting DCB parms'
+ERR8TXT  DC    CL25'Truncate to XXXXX entries' +12
+ERR9TXT  DC    CL25'--------- PFK not defined'
+ERRATXT  DC    CL25'-- PFK definition invalid'
+ERRBTXT  DC    CL25'-- Data set not on volume'
+ERRCTXT  DC    CL25'----- No string specified'
+ERRDTXT  DC    CL25'- Data set not in catalog'
+ERRFTXT  DC    CL25'---------- Invalid option'
+ERRGTXT  DC    CL25'----- Abend xxxx detected' +12
+ERRHTXT  DC    CL25'--- Replace not YES or NO'
+ERRJTXT  DC    CL25'--- FROM and TO are equal'
+ERRKTXT  DC    CL25'----------- IEBCOPY error'
+ERRLTXT  DC    CL25'- No members in FROM data'
+ERRMTXT  DC    CL25'----------- Access denied'
+ERRNTXT  DC    CL25'-- xxxxxxxx blocks copied' +3
+ERRPTXT  DC    CL25'--------- I/O error input'
+INF1TXT  DC    CL25'Hit enter to exec Cmd.'
+MOD2TXT  DC    CL25'---xxxxxxx members yyyyyy' +3 and +19
+         AIF   (&SVS).NORR
+         AIF   (&OS390).RR
+RACF     RACHECK CLASS='DATASET',MF=L
+         AGO   .RRE
+.RR      ANOP
+RACF     RACROUTE CLASS='DATASET',REQUEST=AUTH,RELEASE=1.9,            X
+               MF=L
+.RRE     ANOP
+RACFL    EQU   *-RACF
+.NORR    ANOP
+         LTORG ,
+         DROP  ,
+         TITLE 'CLOSE RPFUT1 and/or RPFUT2 and/or SYSIN'
+CLOSE    CSECT
+         USING WORKAREA,R13            Make our working storage avail.
+         USING COMMAREA,R11            Make RPFCOMM available
+         STM   R10,R14,SAVECLS         Save registers
+         LR    R12,R15                 Setup base register
+         USING CLOSE,R12               Provide addressability
+         TM    RPFUT1+DCBOFLGS-IHADCB,DCBOFOPN Is data set opened?
+         BNO   CLOSE2                  No: try RPFUT2
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFUT1,MF=(E,COMCLS)
+CLOSE2   TM    RPFUT2+DCBOFLGS-IHADCB,DCBOFOPN Is data set opened?
+         BNO   CLOSE3                  No: test if SYSIN = opened
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFUT2,MF=(E,COMCLS)
+CLOSE3   TM    SYSIN+DCBOFLGS-IHADCB,DCBOFOPN Is data set opened?
+         BNO   CLOSE4                  No: finished
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE SYSIN,MF=(E,COMCLS)
+         FREEPOOL SYSIN
+CLOSE4   LM    R10,R14,SAVECLS         Restore registers
+         BR    R14
+         LTORG ,
+         DROP  ,
+         TITLE 'TPUT modified screen'
+RPFTPUT  CSECT                         Routine to write the screen
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Function: populate the screen with the member entries and    *
+*                  write this screen on the terminal.                 *
+*                                                                     *
+*        Register usage in this routine:                              *
+*                                                                     *
+*        R3    Number of lines on the screen (21 --> 96)              *
+*        R4    Address of screen to be TPUT'ed.                       *
+*        R5    Address of message table                               *
+*        R6    Total number of messages, which can be given           *
+*        R8    Current address the SCREENS (see CSECT SCREENS).       *
+*        R9    Current address of memberlist in EDIT workspace.       *
+*        R11   Address of RPFCOMM (like always).                      *
+*        R13   Address of our working storage (like always).          *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Our working storage
+         USING MEMBAREA,R9             Make workspace entry available
+         USING SCREENS,R8              Make SCREENS available
+         STM   R2,R14,SAVETPUT         Save registers 2-14
+         LR    R12,R15                 Setup base register
+         USING RPFTPUT,R12             Provide addressability
+         LA    R4,LNE5                 Beginaddres line
+         USING SCRENTRY,R4             Address screen line         @rp3
+         L     R9,COMMFSCR             First line on screen
+         LH    R3,#LINES               Number of lines
+TPUT001  DS    0H                      *START LOOP*
+         MVC   SCRECOL2,=AL3(GREEN)    Paint member name green
+         MVI   SCREATT1+1,X'C9'
+         MVI   SCREOPER,C'.'           Initialize
+         MVI   SCREATT3+1,X'C9'                the
+         MVI   SCREAREA,C' '                       fields
+         MVC   SCREAREA+1(L'SCREAREA-1),SCREAREA         in
+         MVC   SCRETTR(7),SCREAREA                         the
+         MVC   SCRENEWN,SCREAREA                              scr
+         MVC   SCREMEM,SCREAREA                                  een
+         MVC   SCRECOLR,=AL3(TURQ)     Default turquoise
+         CL    R9,COMMLAST             Beyond last record pointer?
+         BH    TPUT008                 Yes: branch
+         MVC   SCREMEM,MEMBR           Member name
+         TR    SCREMEM,COMTRTAB        Remove unprintables in member
+         CLC   SCREMEM,END1            **END** line?
+         BNE   TPUT001A                No: process data line in screen
+         MVI   SCREOPER,C' '           Blank selection field
+         MVC   SCREAREA,INPSTATS       Move **END** line
+         MVC   SCRECOL2,=AL3(YELLOW)   Paint **END** yellow
+         MVC   SCRECOLR,=AL3(YELLOW)   And paint the rest yellow too.
+         MVI   SCREATT1+1,X'F9'        Protect the **END** line
+         MVI   SCREATT3+1,X'F9'                 ,,
+         B     TPUT011                 Complete screen with blank lines
+TPUT001A DS    0H                      *START LOOP*
+         LA    R1,SCRETTR              Point to output field in screen
+         UNPK  DBW(7),INPTTR(4)        Expand each byte of TTR
+         NC    DBW(6),=X'0F0F0F0F0F0F' Clear hi order nibbles
+         TR    DBW(6),=C'0123456789ABCDEF'
+         MVC   0(6,R1),DBW             Move to user field
+         TM    INPHL,NONHLM            INPHL is X'F1' or 'F9'?
+         BO    *+8                     Yes: skip
+         MVI   INPHL,NONHLM            Move default no-highlight MDT on
+         MVC   SCREHL,INPHL            Move highlight char         @rp3
+         MVI   INPHL,NONHLM            No high-light MDT on
+         TM    RECFM,DCBRECU           Fixed or variable records?  @rp3
+         BM    TPUT002                 Yes: branch                 @rp3
+         MVC   SCRELINK,INPC           Move LINKEDIT userdata
+         MVC   SCR5H,PDSH2             Move LKED header            @rp4
+         B     TPUT005                 BRANCH
+TPUT002  DS    0H
+         CLI   INPUID,C' '             No ISPF/RPF userdata in list?
+         BE    TPUT003                 Yes: proceed
+         MVC   SCREUID(7),INPUID       Move owner of member
+         MVC   SCREDATE(4),INPDATE     Move year of date saved
+         MVI   SCREDATE+4,C'-'         separate with a hyphen
+         MVC   SCREDATE+5(2),INPDATE+4 Move monthnumber of
+         MVI   SCREDATE+7,C'-'         separate with a hyphen
+         MVC   SCREDATE+8(2),INPDATE+6 Move daynumber of month
+         MVC   SCRETIME,INPTIME+1      Move time saved
+         MVC   SCRELINE,INPLINEC       Current number of lines
+         MVC   SCREVERS,INPVERS        Move version number if there
+*        Move RPF/ISPF date created into workspace
+         MVC   SCREDATC(4),INPDATC     Move year of date saved
+         MVI   SCREDATC+4,C'-'         separate with a hyphen
+         MVC   SCREDATC+5(2),INPDATC+4 Move monthnumber of
+         MVI   SCREDATC+7,C'-'         separate with a hyphen
+         MVC   SCREDATC+8(2),INPDATC+6 Move daynumber of month
+         MVC   SCR5H,PDSH1             Move RPF Userdata header    @rp4
+TPUT003  DS    0H
+         CLI   ALIAS,C'A'              Alias ?
+         BNE   TPUT005                 No: branch
+         MVC   SCREDATC,=CL10'Alias'   Tell it to programmer       @rp3
+TPUT005  DS    0H
+         LA    R6,MSG#                 Number of possible msgs
+         L     R5,=V(MSGTBLE)          Load table address          @rp3
+TPUT007  DS    0H
+         CLC   0(1,R5),OPER            Match found of OPER?
+         BE    TPUT009                 Branch if yes
+         LA    R5,32(,R5)              Next entry in MSGTBLE
+         BCT   R6,TPUT007              Loop until all done
+         MVI   OPER,C' '                      ,,
+         B     TPUT011                 Next entry
+TPUT008  DS    0H                      Create empty lines
+         MVI   SCREATT1+1,X'F9'        Protect the
+         MVI   SCREATT3+1,X'F9'                   empty fields
+         MVI   SCREOPER,C' '
+         B     TPUT013
+TPUT009  DS    0H
+         MVC   SCRECOLR,=AL3(WHITE)    Make message white          @rp3
+         MVC   SCREDATC(30),1(R5)      Move message after TTR field@rp3
+         MVC   SCREDATC+30(3),=CL3' '
+         MVC   OPER,31(R5)             Move replacement OPER.
+TPUT011  DS    0H                      Set pointers on next line
+         LA    R9,NEXTENT(,R9)         Next entry in workspace
+TPUT013  DS    0H                      Set pointers on next line
+         L     R1,DATALINE             Length of data entry on screen
+         LA    R4,0(R1,R4)             Next line on screen
+         BCT   R3,TPUT001              Loop back
+         DROP  R4
+         L     R0,TPUTLEN              Length to be written
+         LA    R1,SCR5TXT              Parm for TPUTS (address screen)
+         L     R15,=V(TPUTS)
+         BALR  R14,R15                 Write screen
+         LM    R2,R14,SAVETPUT         Restore registers 2-14
+         BR    R14
+PDSH1    DC    CL52'ID       VV.MM Created        Changed          SizeX
+               '
+PDSH2    DC    CL52'C  Size   Alias of AC AM  RM  --- variable data ---X
+               '
+         LTORG ,
+         DROP
+         TITLE 'Position to member xxxx with primary command ''L'''
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:   LOCATE                                            *
+*        Function:  Locate on Membername                              *
+*                   The to be located string is in 'SCREEN'+2         *
+*                   After successful locate, the address of the       *
+*                   the workspace entry that matches the string, will *
+*                   be placed in COMMFSCR (first entry on screen)     *
+*        Returncodes:                                                 *
+*                   0000: located string found, R9 loaded             *
+*                         R1=0000 = exact match on membername         *
+*                         R1=0004 = fuzzy match                       *
+*                   0004: located string not found                    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE
+LOCATE   CSECT
+         USING WORKAREA,R13            Make our working storage avail.
+         USING COMMAREA,R11            Make RPFCOMM available
+         USING MEMBAREA,R9             Make workspace entry available
+         STM   R2,R14,SAVELOC          Save registers 2-14
+         LR    R12,R15                 Setup base register
+         USING LOCATE,R12              Provide addressability
+         L     R3,SCROUTP              Load output screen address
+         LA    R3,2(,R3)               Point to locate string
+         LA    R4,16                   Max 16 characters in length
+         XR    R5,R5                   Count length in reg.5
+LOC001   DS    0H
+         CLI   0(R3),C' '              End of string ?
+         BE    LOC003                  Yes: stop search
+         LA    R5,1(,R5)               Count nonblank byte
+         LA    R3,1(,R3)               Next byte in 'SCREEN'
+         BCT   R4,LOC001               Loop
+LOC003   DS    0H
+         LTR   R5,R5                   No bytes found ?
+         BE    LOCERR1                 Yes: rc = 4, no match found
+         BCTR  R5,0                    Minus 1 for EX instruction
+         L     R9,COMWSTRT             Load start address    (BXLE)
+         L     R7,COMMLAST             Last record pointer   (BXLE)
+         LA    R7,79(,R7)              Adjust offset         (BXLE)
+         LA    R6,NEXTENT              Length of entry       (BXLE)
+         L     R3,SCROUTP              Load output screen address
+         LA    R3,2(,R3)               Point to locate string
+COMPM    DS    0H                      Compare member name
+         CH    R5,=H'7'                Not longer than 8
+         BNH   *+8                     No: carry
+         LA    R5,7                    Max length of membername -1
+         EX    R5,LCOMP1               Compare if match found
+         BL    COMPBX                  Low: continue loop
+         BE    LOC097                  Equal: exact match
+         B     LOC098                  High: fuzzy match
+*
+COMPBX   DS    0H                      Compare membername
+         BXLE  R9,R6,COMPM             Loop                  (BXLE)
+LOCERR1  DS    0H                      Compare membername
+         LA    R15,4                   Rc = 4, not match found
+         B     LOC999                  Branch
+LOC097   DS    0H                      Locate the found member
+         XR    R1,R1                   Exact match
+         B     LOC099
+LOC098   DS    0H                      Locate the found member
+         LA    R1,4                    Fuzzy match
+LOC099   DS    0H
+         XR    R15,R15                 RC=0000
+         ST    R9,COMMFSCR             Address found member is 1st line
+         MVI   INPHL,HLM               Move highlight char (MDT)
+LOC999   DS    0H
+         LM    R2,R14,SAVELOC          Restore registers 2-14
+         BR    R14                     Return
+LCOMP1   CLC   MEMBR(0),0(R3)          << executed >>
+         LTORG ,
+         DROP  ,
+         TITLE 'MOVE/COPY all members'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine ALLMEM                                               *
+*                Flag $ALLMEM has been set, because the user          *
+*                specifies 'DSN(*)' in the allocation screen          *
+*                Cycle trough the entire workspace (all members of    *
+*                the FROM data set) and create an IEBCOPY Sysin file  *
+*                with only a COPY INDD,R or COPY INDD statement       *
+*                depending of the Replace option.                     *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+ALLMEM   CSECT
+         USING WORKAREA,R13            Make our working storage avail.
+         USING COMMAREA,R11            Make RPFCOMM available
+         USING MEMBAREA,R9             Make workspace entry available
+         USING SCREENS,R8              Make output screen addressable
+         STM   R2,R14,SAVEALMB         Save registers
+         LR    R12,R15                 Setup base
+         USING ALLMEM,R12              Provide addressability
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (SYSIN,(OUTPUT)),MF=(E,COMOPN) Open IEBCOPY SYSIN file
+         MVI   SYSREC,C' '             Blank
+         MVC   SYSREC+1(L'SYSREC-1),SYSREC  record
+         MVC   SYSREC(38),=C' COPY INDD=RPFUT1,OUTDD=RPFUT2,LIST=NO'
+         CLC   =C'YES',BUFREPL         Members should be replaced?
+         BNE   ALLM01                  No: copy conditionally
+         MVC   SYSREC(44),=C' COPY INDD=((RPFUT1,R)),OUTDD=RPFUT2,LIST=*
+               NO'
+ALLM01   DS    0H
+         L     R15,=V(WRITEIT)         Routine address
+         CALL  (15)                    Write record
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  RPFUT2,MF=(E,COMOPN)    Open RPFUT2 for BLDL
+         XR    R7,R7                   Clear counter
+         L     R9,COMWSTRT             Point to first record in worksp
+         LA    R9,0(,R9)               Clear high-order
+         ZAP   COPYCNT,=P'0'           Initialize copy counter
+ALLM03   DS    0H
+         CLC   MEMBR,END1              Past last record?
+         BE    ALLM99                  Yes: branch
+         LA    R7,1(,R7)               Increase counter
+         CLC   =C'YES',BUFREPL         Members should be replaced?
+         BE    ALLM05                  Yes: copy unconditionally
+         MVI   BLDLNAME,C' '           Blank BLDL entry
+         MVC   BLDLNAME+1(L'BLDLNAME-1),BLDLNAME
+         MVC   BLDLNAME(8),MEMBR       Move member to bldl
+         BLDL  RPFUT2,BLDLLIST         Locate member
+         LTR   R15,R15                 Member found?
+         BNZ   ALLM05                  No: copy/move member
+         MVI   OPER,X'FB'              Member not replaced
+         B     ALLM98                  Next entry
+ALLM05   DS    0H
+         AP    COPYCNT,=P'1'           Increase copy counter
+         OI    SW,$COPY                Mark members to be copied
+         MVI   OPER,C'C'               Member Copied
+         CLI   BUFCMD,C'M'             Member moved?
+         BNE   ALLM98                  No: jump over
+         MVI   OPER,C'M'               Member Moved
+ALLM98   DS    0H
+         LA    R9,NEXTENT(,R9)         Next entry in workspace
+         B     ALLM03                  Loop
+ALLM99   DS    0H
+         L     R15,=V(CLOSE)           Close routine
+         BALR  R14,R15                 Execute
+         ST    R7,#ALLLNS              Save # lines
+         TM    SW,$COPY                Copy statements made?
+         BNO   ALLM998                 No: do not invoke IEBCOPY
+         L     R15,=V(IEBCOPY)         Exec copy routine
+         CALL  (15)
+         MVC   MSG1,MBRKTXT            Default error msg
+         LTR   R15,R15                 RC IEBCOPY /= 0?
+         BNZ   ALLM999                 Yes: Branch
+ALLM998  DS    0H
+         MVC   INF2TXT+3(7),=X'6020206B202120'
+         ED    INF2TXT+3(7),COPYCNT
+         MVC   MSG1,INF2TXT            # members copied
+ALLM999  DS    0H
+         LM    R2,R14,SAVEALMB         Restore registers
+         BR    R14                     Return
+MBRKTXT  DC    CL25'----------- IEBCOPY error'
+         LTORG ,
+         DROP  ,
+         TITLE 'Write on SYSIN file'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        WRITEIT: Routine to write the IEBCOPY control statements     *
+*                 This routine has been entered in AMODE 24      @rpa01
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+WRITEIT  CSECT
+         USING COMMAREA,R11            Address RPFCOMM
+         USING WORKAREA,R13            Make our working storage avail.
+         ST    R12,R12WI               Save register 12
+         ST    R14,R14WI               Save register 14
+         LR    R12,R15                 Base register
+         USING WRITEIT,R12
+         RPFSA24                       Enter addressing mode 24
+         PUT   SYSIN,SYSREC            Write control statement
+         RPFSA31                       Restore addressing mode
+         L     R14,R14WI               Restore reg 14
+         L     R12,R12WI               Restore reg 12
+         BR    R14                     Return
+         DROP  ,
+         TITLE 'Fill in ISPF stats in member entry in workspace'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine  SPFRPFU:                                            *
+*              Fill in RPF new format or ISPF userdata in the member  *
+*              list, for each entry                                   *
+*        Input:  R9   Pointer to current member entry in workspace,   *
+*                     mapped with DSECT 'MEMBAREA' (via R9)           *
+*                R1   Pointer to member + ISPF userdata,              *
+*                     mapped with DSECT 'SPFDATA' (via R3)            *
+*        Output: Pointed by R9, formatted member entry in workspace.  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SPFRPFU  CSECT
+         USING WORKAREA,R13            Make our working storage avail.
+         USING COMMAREA,R11            Make RPFCOMM available
+         USING MEMBAREA,R9             Make workspace entry available
+         STM   R2,R14,SAVEUDAT         Save registers
+         LR    R12,R15                 Setup base
+         USING SPFRPFU,R12             Provide addressability
+         LR    R3,R1                   Member entry in reg3
+         USING SPFDATA,R3              Make member entry available
+         MVC   MEMBR,0(R3)             Move membername
+         MVC   INPTTR,SPFTTR           Move TTR
+         XR    R7,R7                   Clear reg. 7
+         IC    R7,SPFVERS              Version number
+         CVD   R7,DBW                  Convert to packed
+         OI    DBW+7,X'0F'             Clear sign
+         UNPK  INPVERS(2),DBW          UNPK the result
+         MVI   INPERIOD,C'.'           Move period
+         IC    R7,SPFMOD               Version number
+         CVD   R7,DBW                  Convert to packed
+         OI    DBW+7,X'0F'             Clear sign
+         UNPK  INPMOD(2),DBW           UNPK the result
+         MVC   INPUID,SPFUID           Move USERID saver
+         MVC   YYDDD,SPFDATEU          Saved date
+         L     R15,EPCNVDT             RPFCNVDT routine
+         MVI   DDMMYY,X'FF'            First parm is 4 bytes
+         LA    R1,YYDDD                Parm 1
+         LA    R2,DDMMYY               Parm 2
+         STM   R1,R2,PRMCNVDT          Save them
+         LA    R1,PRMCNVDT             Parameter for RPFCNCDT
+         CALL  (15)                    Convert date to gregorian
+         MVC   INPDATE(4),CC           Year including century
+         MVC   INPDATE+4(2),MONNBR     Month number
+         MVC   INPDATE+6(2),DD         Daynumber in month
+         XR    R7,R7                   Clear reg 7.     (00000000)
+         ICM   R4,6,SPFTIME            Insert in middle (00TTTT00)
+         IC    R4,=X'F0'               Insert sign      (00TTTTF0)
+         SRL   R4,4                    Shift to sign    (000TTTTF)
+         ST    R4,DBW                  Store the result
+         MVC   TEMP(7),=X'402120207A2020'  Move pattern
+         ED    TEMP(7),DBW+1           Move time saved
+         MVC   INPTIME,TEMP+1          Remove first non-spec char
+         XR    R7,R7                   Clear register 7.
+         ICM   R7,3,SPFRECU            Number of records
+         CVD   R7,DBW                  Convert to packed
+         TM    SPFFLGS,SPFEXT          Is there an extended section?
+         BO    SPFRPF3                 Yes: use this section
+         MVC   INPLINEC,=X'4020202020202120' move ED string
+         ED    INPLINEC(8),DBW+4       Convert to zoned
+         B     SPFRPF5
+SPFRPF3  DS    0H
+         ICM   R7,15,SPFERECU          Number of records member ext.
+         CVD   R7,DBW                  Convert to packed
+         MVC   DBW2,=X'4020202020202120' move ED string
+         ED    INPLINEC(8),DBW+4       Convert to zoned
+SPFRPF5  DS    0H
+         MVC   YYDDD,SPFDATEI          Creation date               @rp3
+         L     R15,EPCNVDT             RPFCNVDT routine            @rp3
+         MVI   DDMMYY,X'FF'            First parm is 4 bytes       @rp3
+         LA    R1,PRMCNVDT             Parameter for RPFCNCDT
+         CALL  (15)                    Convert date to gregorian   @rp3
+         MVC   INPDATC(4),CC           Year including century      @rp3
+         MVC   INPDATC+4(2),MONNBR     Month number                @rp3
+         MVC   INPDATC+6(2),DD         Daynumber in month          @rp3
+         LM    R2,R14,SAVEUDAT         Restore registers
+         BR    R14                     Return
+         LTORG ,
+         DROP  ,
+         TITLE  'Unallocate files'
+UNALLOC  CSECT
+         USING WORKAREA,R13            Make our working storage avail.
+         ST    R12,R12UNALL            Save RPFMVCPY base
+         LR    R12,R15                 Base register UNALLOC
+         USING UNALLOC,R12
+         LR    R3,R14                  Save return register
+         XC    RPFD18,RPFD18           Clear parameter block
+         LA    R1,RPFD18               Point to unallocation parm block
+         USING DAPB18,R1               Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 0018 (unallocate)
+         MVC   DA18DDN,=CL8'RPFUT1'    DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFUT2'    DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFUT3'    DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFUT4'    DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFIN'     DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFPRINT'  DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         L     R12,R12UNALL            Restore register 12
+         DROP  R1                      RPFD18
+         BR    R3
+         LTORG ,
+         DROP
+         TITLE 'P F K  SEARCH ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        P F K    Routine to check the AIDbyte with the PFK definition*
+*                 in RPFCOMM. If the PFK is fount, the command        *
+*                 in the PFK will be placed into the field pointed to *
+*                 by register 2 (the output screen area)              *
+*        Register 1 points to the AID byte.                           *
+*        Register 2 points to the command area of the screen.         *
+*                                                                     *
+*        Returncodes: 00 PFK found, con = no (execute immediately)    *
+*                     04 PFK found, con = yes (wait for ENTER key)    *
+*                     08 PFK not defined or not found                 *
+*                     12 Invalid PFK definition.                      *
+*                                                                     *
+*        Upon exit of PFK, registers 2-14 will be reloaded            *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+PFK      CSECT
+         USING WORKAREA,R13            Make our working storage avail.
+         USING COMMAREA,R11            Make RPFCOMM available
+         STM   R2,R14,SAVEPFK          Save registess
+         LR    R12,R15                 Base register PFK
+         USING PFK,R12
+         LA    R4,COMPFK01             PFK's from RPFCOMM
+         LA    R5,24
+PFK01    CLC   0(1,R4),0(R1)           Compare against AID byte
+         BE    PFK05
+         LA    R4,26(,R4)              Next PFK
+         BCT   R5,PFK01
+         LA    R15,8                   Rc = 8, PFK not found
+         B     PFK99
+PFK05    CLI   1(R4),C'X'              X = Not defined
+         BNE   PFK06
+         LA    R15,8                   PFK not defined or invalid
+         B     PFK99
+PFK06    DS    0H                      Clear input command field
+         MVI   1(R2),C' '              Clear output command field
+         MVC   2(22,R2),1(R2)          Except the first byte
+         TM    0(R2),X'94'             MAX operand (scroll) ?
+         BNO   PFK08                   No: ignore
+         CLC   2(4,R4),=C'DOWN'        Srcoll forward?
+         BNE   PFK07                   No: try 'UP'
+         MVC   0(6,R2),=C'BOTTOM'      Yes: BOTTOM command
+         XR    R15,R15                 Rc = 0
+         B     PFK99
+PFK07    CLC   2(2,R4),=C'UP'          Srcoll backward (alias)?
+         BNE   PFK08                   No: ignore
+         MVC   0(3,R2),=C'TOP'         Yes: TOP command
+         XR    R15,R15                 Rc = 0
+         B     PFK99
+PFK08    DS    0H                      Move PFK command into rep area
+         MVC   0(24,R2),2(R4)          Move PFK command into BUFFER
+         CLI   1(R4),C'N'
+         BNE   PFK09
+         XR    R15,R15                 Rc = 0
+         B     PFK99
+PFK09    CLI   1(R4),C'Y'              Confirmation?
+         BNE   PFK11                   No: branch
+         LA    R15,4                   Rc = 4 CON=Y
+         B     PFK99
+PFK11    LA    R15,12                  Rc = 12
+         B     PFK99
+PFK99    DS    0H
+         LM    R2,R14,SAVEPFK          Restore registers
+         BR    R14
+         LTORG ,
+         DROP
+*
+         COPY  CALLTS
+         COPY  TPUTS
+*
+         TITLE 'CONVERT SCREEN ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        C O N V I N:        Convert a TGET ASIS screen to normal     *
+*        The SBA'S and attribute bytes will be removed and the        *
+*        rest will be placed in 'SCREEN'.                             *
+*                                                                     *
+*        SCREEN (second part of screen area in RPFCOMM) contains:     *
+*        1. The command, 24 bytes                                     *
+*        2. The member entry containing:                              *
+*           a: the selection (the S), 1 byte.                         *
+*           b: the membername to be copied or moved, 8 bytes.         *
+*           c: the newname after copy or move, 8 bytes.               *
+*        There are #LINES (Screen lines - 3) member entries.          *
+*                                                                     *
+*        The AID byte will be placed in 'AIDBYTE'.                    *
+*        The length of the output will be placed into register 1      *
+*        Register 2 points to the AIDbyte.                            *
+*        Register 5 points to the output screen area                  *
+*        Register 5 points to the output screen area and will be      *
+*                   restored upon exit of CONVIN                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+CONVIN   CSECT                         Convert screen routine
+         USING WORKAREA,R13            Make our working storage avail.
+         USING COMMAREA,R11            Make RPFCOMM available
+         STM   R2,R14,SAVECNV          Save registers
+         LR    R12,R15                 Setup base
+         USING CONVIN,R12              Provide addressability
+         L     R3,COMMSCR              Screen address from RPFCOMM
+         LR    R1,R3                   Duplicate area address
+         L     R0,TPUTLEN              Length of screen
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         MVC   0(1,R2),0(R3)           Save AIDbyte
+         XR    R2,R2                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'6'                Skip AID, cursor and first SBA
+         C     R4,=A(24+(21*17))       At least 24 + 21*(3xSBA+member)?
+         BL    CONV095                 Not high: error
+         LA    R3,6(,R3)               Point after AID, cursor and SBA
+         LR    R1,R5                   Save register 5
+         MVI   0(R5),C' '              Blank command ...
+         MVC   1(24,R5),0(R5)          field in output
+         LA    R14,24                  Max length of command
+*
+*        Output screen is pointed to by register 5
+*
+CONV001  DS    0H
+         CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+         MVC   0(1,R5),0(R3)           Move byte input to screen area
+         LA    R3,1(,R3)               Next byte input
+         LA    R5,1(,R5)               Next byte output
+         BCT   R14,CONV001             Test next byte
+CONV003  DS    0H
+         LA    R5,24(,R1)              Reset output scr.           @rp8
+         LH    R2,#LINES               # data lines on screen
+*
+*        We are here after the command field and at the first
+*        member entry. Each entry contains the following.
+*        SBA selection field and selection code (0 or 1 byte)
+*        SBA member entry and member name (always 8 bytes),
+*            because the member name is a protected field with MDT on
+*        SBA newname + max 8 bytes newname field (0-8 bytes)
+*        The number of member entries is in #LINES (21 -> 96)
+*
+CONV005  DS    0H
+         CLI   0(R3),COMMSBA           SBA of selection field?
+         BNE   CONV095                 Should be there. otherwise error
+         LA    R3,3(,R3)               Point after SBA
+         MVI   0(R5),C' '              Init selection field to blank
+         CLI   0(R3),COMMSBA           SBA of member name?
+         BE    CONV007                 Erase or DEL key used in sel.
+         MVC   0(1,R5),0(R3)           Move byte to output screen
+         LA    R3,1(,R3)               Next byte input
+CONV007  DS    0H
+         LA    R5,1(,R5)               Next byte output
+         CLI   0(R3),COMMSBA           SBA of member name after sel.?
+         BNE   CONV095                 Should be there ...
+         LA    R3,3(,R3)               Point after SBA member name
+         MVC   0(8,R5),0(R3)           Move member name (always 8)
+         LA    R5,8(,R5)               Point after member name output
+         LA    R3,8(,R3)               Point after member name input
+         MVI   0(R5),C' '              Init newname ...
+         MVC   1(7,R5),0(R5)           ... to blanks
+         CLI   0(R3),COMMSBA           SBA of newname?
+         BNE   CONV095                 Should be there ...
+         LA    R3,3(,R3)               Point after SBA of newname
+         LA    R6,8                    Max length of newname
+         LR    R1,R5                   Save start of newname in output
+CONV011  DS    0H
+         CLI   0(R3),COMMSBA           SBA of next member entry?
+         BE    CONV015                 Yes: process newname first
+         MVC   0(1,R5),0(R3)           Move 1 byte newname
+         LA    R3,1(,R3)               Next byte output            @rp8
+         LA    R5,1(,R5)               Next byte output            @rp8
+         BCT   R6,CONV011              Loop until newname filled
+CONV015  DS    0H
+         LR    R5,R1                   Point again to start of newname
+         LA    R5,8(,R5)               and point now after newname
+         BCT   R2,CONV005              Process next entry if present
+         B     CONV097                 All done
+CONV095  DS    0H
+         LA    R15,4                   Rc = 4, conversion failed
+         B     CONV099                 Return to caller
+CONV097  DS    0H
+         XR    R15,R15                 Rc = 0, conversion done
+CONV099  DS    0H
+         LM    R2,R14,SAVECNV          Restore register 14
+         BR    R14                     Return to caller
+         LTORG ,
+         DROP
+         TITLE 'Sort EDIT workspace on an argument'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:   SORT                                              *
+*        Function:  Sort EDIT workspace on TTR, Last changed,         *
+*                   Size (# records) or member name                   *
+*        Input:     Register 1: 0  = sorted on member                 *
+*                               4  = sorted on TTR                    *
+*                               8  = sorted on Date/time changed      *
+*                               12 = sorted on size.                  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+SORT     CSECT
+         USING COMMAREA,R11            Addressability of RPFCOMM
+         USING WORKAREA,R13            Addressability of working stor.
+         STM   R2,R14,SAVESRT          Save registers
+         LR    R12,R15                 Setup base
+         USING SORT,R12                Provide addressability
+         L     R6,COMWSTRT             First record in workspace
+         CVB   R7,MEMCNT               Number of entries
+         C     R7,=F'2'                Less than 2 records?
+         BL    SORT999                 Yes: no sort needed
+         B     *+4(1)                  Execute the right sort
+         B     SORTNAME                Member name
+         B     SORTTTR                 TTR
+         B     SORTCHA                 Date/time changed
+         B     SORTSIZE                Number of records
+SORTNAME DS    0H
+         RPFSORT (6),88,8,(7),10       Sort workspace on member
+         B     SORT999                 Exit
+SORTTTR  DS    0H
+         RPFSORT (6),88,3,(7),20,ORDER=D Sort workspace on TTR desc.
+         B     SORT999                 Exit
+SORTCHA  DS    0H
+         RPFSORT (6),88,15,(7),31,ORDER=D Sort on date/time desc.
+         B     SORT999                 Exit
+SORTSIZE DS    0H
+         RPFSORT (6),88,8,(7),48,ORDER=D Sort workspc on size desc.
+SORT999  MVC   COMMFSCR,COMWSTRT       Set display on first record
+         LM    R2,R14,SAVESRT          Restore registers
+         BR    R14                     Rewrite screen
+         LTORG ,
+         DROP
+         TITLE 'Allocate data set'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        ALLOC:      Routine  to allocate FROM or TO data set.        *
+*                    INPUT:  R1       Pointer to Parameter list       *
+*                                     See ALLOCLST DSECT for layout.  *
+*                            R15:     return code of allocate         *
+*                                     00 - Alloc ok                   *
+*                                     04 - Allocation error           *
+*                                     08 - Data set not on volume     *
+*                                     12 - Data set not PO            *
+*                                     16 - Data set not in catalog    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+ALLOC    CSECT
+         USING WORKAREA,R13            Make our working storage avail.
+         USING COMMAREA,R11            Make RPFCOMM available
+         STM   R2,R14,SAVEALC          Save registers
+         LR    R12,R15                 Setup base
+         USING ALLOC,R12               Provide addressability
+         LR    R4,R1                   Pickup parameter list
+         USING ALLOCLST,R4             Address it
+         XC    CAMLST(16),CAMLST       Clear LOCATE/OBTAIN parm list
+         LA    R6,ADSN                 Point to dsname
+         LA    R14,45                  Max. length
+*---------------------------------------------------------------------*
+*        Check if DSNAME contains "(*)" at the end                    *
+*        If so, set all members flag to copy all the members          *
+*---------------------------------------------------------------------*
+ALLOC01  DS    0H
+         CLI   0(R6),C' '              Already at the end of the DSN?
+         BE    ALLOC05                 Yes: end of test
+         CLC   =C'(*)',0(R6)           Does DSN contains the (*)
+         BE    ALLOC03                 Yes: Set all members flag
+         LA    R6,1(,R6)               Next char. in dsn
+         BCT   R14,ALLOC01             Loop until found or exhausted
+         B     ALLOC05                 Normal DSN
+ALLOC03  DS    0H
+         MVC   0(4,R6),=CL4' '         Blank (*)
+         OI    SW,$ALLMEM              Set all members flag
+ALLOC05  DS    0H
+         ST    R11,PARMFLD             Parameter for DSNPARS
+         LA    R1,ADSN                 Input
+         ST    R1,PARMFLD+4
+         LA    R1,ADSNNEW              Output
+         ST    R1,PARMFLD+8
+         L     R15,EPDSNPA             Routine address
+         LA    R1,PARMFLD              Parameter
+         BALR  R14,R15                 Execute
+         MVC   ADSN,ADSNNEW            Move parse data set name
+         MVC   ADSN+44(2),=X'4040'     Add 2 trailing blanks
+         LA    R1,ADSN+44              End of data set name
+         LA    R14,ADSN                Start of data set name
+         TRT   ADSN(44),COMSKPNS       Stop at first blank
+         SLR   R1,R14                  Real length
+         STCM  R1,3,ADSNL             Save real length of data set name
+         CLI   AVOL,C' '               Volume specified?
+         BNE   ALLOC09                 Yes: bypass LOCATE
+         LA    R0,ADSN                 Data set name to locate
+         ST    R0,CAMLST+4             Option 2
+         MVI   CAMLST,X'44'            CAMLST NAME
+         LA    R0,LOCAREA
+         ST    R0,CAMLST+12            Option 4
+         LOCATE CAMLST                 Check if data set is in catalog
+         LTR   R15,R15                 Data set found in catalog?
+         BZ    ALLOC07                 Yes: good
+         LA    R15,16                  Rc=16, data set not in catalog
+         B     ALLOC99                 Exit
+ALLOC07  DS    0H
+         MVC   AVOL,LOCVOL             Move gotten volume
+*
+*        Allocate the FROM or TO data set.
+*
+ALLOC09  DS    0H
+         XC    CAMLST(16),CAMLST       Clear OBTAIN parameter list
+         MVI   CAMLST,X'C1'            CAMLST SEARCH
+         LA    R0,ADSN                Point to data set name FROM or TO
+         ST    R0,CAMLST+4             DSN in camlst
+         LA    R0,AVOL                 Point to volume serial
+         ST    R0,CAMLST+8             Save in CAMLST
+         LA    R0,IECSDSL1             Point to DSCB
+         ST    R0,CAMLST+12            Save in camlst
+         OBTAIN CAMLST                 Check if data set is on volume
+         LTR   R15,R15                 OK ?
+         BZ    ALLOC11                 Branch if on volume
+         LA    R15,8                   Rc=8, data set not on volume
+         B     ALLOC99                 Return
+ALLOC11  DS    0H
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,ADDN            DDNAME to allocate
+         LA    R0,ADSNL                Length + data set name
+         STCM  R0,15,DA08PDSN          Set in DAPB08 parameter block
+         MVI   DA08DSP1,DA08SHR        DISP=SHR,
+         MVI   DA08DPS2,DA08KEEP                KEEP
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08SER+6(2),=CL2' '    Blank last 2 bytes volume
+         MVC   DA08UNIT,COMMUNIT       Move UNIT name (SYSALLDA)
+         MVC   DA08SER(6),AVOL         Move volume serial
+         LA    R1,RPFD08               Point to allocation parm block
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         BALR  R14,R15
+         LTR   R15,R15                 Allocation OK?
+         BZ    ALLOC15                 Yes: continue.
+         LA    R15,4                   Rc = 4, allocation error
+         B     ALLOC99                 Return
+         DROP  R1                      RPFD08
+ALLOC15  DS    0H
+         XR    R15,R15                 Default return code 0
+         TM    COMMOS,X'13'            MVS or higher
+         BNO   ALLOC21                 No: forget RACHECK/RACROUTE
+*
+         AIF   (&SVS).SVSNOR
+         L     R14,CVTPTR(,0)          Point to CVT
+         USING CVT,R14
+         ICM   R14,15,CVTRAC           Point to Access control CVT
+         BZ    ALLOC21                 No security
+         DROP  R14                     CVT
+         LA    R5,ADSN                 Data set name is necessary
+         LA    R6,AVOL                 Volume serial is necessary
+         AIF   (&OS390).RACR
+         LA    R1,RR                   List form in working storage
+         CLI   BUFCMD,C'M'             With MOVE both data sets should
+         BE    ALLOC17                 be checked for UPDATE access
+         CLC   ADDN,=CL8'RPFUT2'       Output data set?
+         BE    ALLOC17                 Yes: check for UPDATE access
+         RACHECK ENTITY=((5)),                                         X
+               VOLSER=((6)),                                           X
+               ATTR=READ,                                              X
+               DSTYPE=N,MF=(E,(1))
+         B     ALLOC19                 Check return code
+ALLOC17  DS    0H
+         RACHECK ENTITY=((5)),                                         X
+               VOLSER=((6)),                                           X
+               ATTR=UPDATE,                                            X
+               DSTYPE=N,MF=(E,(1))
+         AGO   .NRACR
+.RACR    ANOP
+         GETMAIN R,LV=512              Obtain SAF work area
+         LR    R7,R1                   Save its address
+         LA    R1,RR                   List form in working storage
+         CLI   BUFCMD,C'M'             With MOVE both data set should
+         BE    ALLOC17                 be checked for UPDATE access
+         CLC   ADDN,=CL8'RPFUT2'       Output data set?
+         BE    ALLOC17                 Yes: check for UPDATE access
+         RACROUTE REQUEST=AUTH,                                        X
+               ENTITY=((5)),                                           X
+               VOLSER=((6)),                                           X
+               ATTR=READ,                                              X
+               DSTYPE=N,                                               X
+               RELEASE=1.9,                                            X
+               WORKA=(7),MF=(E,(1))
+         B     ALLOC18                 Release storage RACROUTE worka
+ALLOC17  DS    0H
+         RACROUTE REQUEST=AUTH,                                        X
+               ENTITY=((5)),                                           X
+               VOLSER=((6)),                                           X
+               ATTR=UPDATE,                                            X
+               DSTYPE=N,                                               X
+               RELEASE=1.9,                                            X
+               WORKA=(7),MF=(E,(1))
+ALLOC18  DS    0H
+         LR    R2,R15                  Save return code RACROUTE
+         FREEMAIN R,LV=512,A=(7)       Release SAF work area
+         LR    R15,R2                  Restore return code RACROUTE
+.NRACR   ANOP
+ALLOC19  LTR   R15,R15                 Access granted?
+         BZ    ALLOC21                 We have SPECIAL attribute
+         C     R15,=F'4'               No decision by RACF?
+         BE    ALLOC21                 We have SPECIAL attribute
+         LA    R15,20                  Rc=20: access denied
+         B     ALLOC99                 Return
+.SVSNOR  ANOP
+*
+ALLOC21  MVC   ADSORG,DS1DSORG-44      Data set organisation
+         L     R1,=V(MODELDCB)         Pickup DCB from mainline
+         TM    DS1DSORG-44,X'02'       Is data set partitioned?
+         BO    ALLOC25                 Yes: good
+         L     R1,=V(MODELDC2)         Pickup DCB from mainline
+         TM    DS1DSORG-44,X'40'       Sequential data set?
+         BO    ALLOC25                 Yes: good
+         LA    R15,12                  Rc=12, data set is not PO or PS
+         B     ALLOC99                 Return
+ALLOC25  DS    0H
+         L     R2,ADCB                 DCB address of RPFUT1 or RPFUT2
+         USING IHADCB,R2               Make DCB addressable
+         MVC   0(DCBLEN2,R2),0(R1)     Move model DCB
+         MVC   DCBDDNAM,ADDN           Move DD name
+         MVC   ARECFM,DS1RECFM-44      Record format
+         MVC   RECFM,ARECFM            Save RECFM for PDS rout     @rp4
+         NI    ARECFM,255-DCBRECBR     RECFM = FB/VB same as F/V
+         MVC   ALRECL,DS1LRECL-44      Record length
+         MVC   ABLK,DS1BLKL-44         Block length
+         XR    R15,R15                 Rc=0, good
+         DROP  R2                      IHADCB
+ALLOC99  DS    0H
+         LM    R2,R14,SAVEALC          Restore register 14
+         BR    R14                     Return (RC= (R15))
+         LTORG
+         DROP
+         TITLE 'Invoke IEBCOPY'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  IEBCOPY                                            *
+*        Function: Invoke IEBCOPY to process all the Copy or Move     *
+*                  line commands in the screen.                       *
+*                  This routine will be invoked after screen          *
+*                  If the move command is processed the members will  *
+*                  be deleted in the FROM data set after succesful    *
+*                  Processing of IEBCOPY                              *
+*                                                                     *
+*        Returncodes:                                                 *
+*                  00 - Ok                                            *
+*                  04 - IEBCOPY error                                 *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+IEBCOPY  CSECT
+         USING WORKAREA,R13            Make our working storage avail.
+         USING COMMAREA,R11            Make RPFCOMM available
+         USING MEMBAREA,R9             GET ADDRESSABLILITY
+         STM   R2,R14,SAVECOP          Save registers
+         LR    R12,R15                 Setup base
+         USING IEBCOPY,R12             Provide addressability
+*
+*        If MVS/ESA or higher, IEBCOPY does not need APF authorization.
+*        In MVS38J, check APF bit in JSCB. If not on,
+*        make temporary APF authorized with the magic SVC.
+*
+         AIF   (&OS390 OR &MVSXA OR &SVS).NOAPFS
+         USING PSA,0
+         L     R1,PSATOLD              Point to current TCB
+         USING TCB,R1
+         ICM   R1,7,TCBJSTCA           Point to jobstep TCB
+         ICM   R1,7,TCBJSCBB           Point to JSCB
+         DROP  R1                      TCB
+         USING IEZJSCB,R1
+         TM    JSCBOPTS,JSCBAUTH       Are we APF authorized?
+         BNZ   IEBCP01                 Yes: good, invoke IEBCOPY
+         LA    R0,COMMAGIC             SVC number magic SVC
+         CVD   R0,DBW                  Make packed
+         UNPK  DBW2,DBW                Make zoned w/o changing sign
+         MVC   DBW2(3),=C'IGC'         SVC module start
+         LM    R0,R1,DBW2              Set module name in r0-r1 pair
+         STM   R14,R12,12(R13)         Save our registers
+         L     R3,CVTPTR(,0)           CVT
+         L     R15,CVTLPDSR-CVT(,R3)   Address of IEAVVMSR
+         BALR  R14,R15                 Find IGC00xxx in SVC table
+         B     SVCEXEC                 BR 14+0 is found
+         LM    R14,R12,12(R13)         BR 14+4 is not found
+         B     IEBCP01                 No magic SVC found
+*
+SVCEXEC  LM    R14,R12,12(R13)         Restore registers
+         LA    R1,1                    R1=1 = set APF
+         SR    R0,R0                   R0 should be zero
+         SVC   COMMAGIC                Become APF authorized
+         OI    SW,$MAGAPF              Flag APF set by magic SVC
+         L     R1,PSATOLD              Point to current TCB
+         L     R1,TCBJSCB-TCB(,R1)     Point to JSCB
+         TM    JSCBOPTS,JSCBAUTH       Are we APF authorized now?
+         BO    IEBCP01                 Yes: good, link to IEBCOPY
+         DROP  R0,R1                   PSA and JSCB
+         NI    SW,255-$MAGAPF          Reset APF flag
+IEBCP01  DS    0H
+.NOAPFS  ANOP
+         RPFSA24                       Switch to amode 24        @rpa01
+         LINK  EP=IEBCOPY,PARAM=(COPYPARM,COPYDDNS),VL=1           @rp2
+         RPFSA31                       Switch to amode 31        @rpa01
+         LR    R2,R15                  Remember register 15
+         AIF   (&OS390 OR &MVSXA OR &SVS).NOAPFRS
+         TM    SW,$MAGAPF              APF bit set by magic SVC?
+         BNO   IEBCP02                 No: do not reset APF bit
+         SR    R1,R1                   R1=0 = set APF off
+         SR    R0,R0                   R0 should be zero
+         SVC   COMMAGIC                Become APF unauthorized
+         NI    SW,255-$MAGAPF          Reset APF flag
+.NOAPFRS ANOP
+IEBCP02  DS    0H
+         LTR   R2,R2                   RC IEBCOPY alright?
+         BZ    IEBCP07                 Yes: do nothing
+         MVC   COMMPRM(8),=CL8'RPFPRINT' If error show output
+         RPFSA24                       Switch to amode 24        @rpa01
+         LA    R1,ADDRCOMM             Parameter RPFCOMM
+         LINK  EP=RPFBRO               Link to browse            @rpa01
+         RPFSA31                       Switch to amode 31        @rpa01
+         L     R9,COMMFSCR             First line on screen
+         LH    R4,#LINES               Number of lines on screen.
+         TM    SW,$ALLMEM              Copy All members ?
+         BNO   IEBCP03                 No: continue
+         LA    R15,4                   RC = 0004
+         B     IEBCP99                 No need to update OPER!
+IEBCP03  DS    0H
+         CLI   OPER,C'M'               Member 'Moved'?             @rp1
+         BNE   IEBCP04                 No: test if Copied          @rp1
+         MVI   OPER,X'FE'              Error in MOVE
+         B     IEBCP06
+IEBCP04  DS    0H
+         CLI   OPER,C'C'               Member 'Copied'             @rp1
+         BNE   IEBCP05                 No: test if Replaced        @rp1
+         MVI   OPER,X'FE'              Error in Replace            @rp1
+         B     IEBCP06                                             @rp1
+IEBCP05  DS    0H                                                  @rp1
+         CLI   OPER,C'R'               Member 'Replaced'           @rp1
+         BNE   IEBCP06                 No: test if Replaced        @rp1
+         MVI   OPER,X'FE'              Error in COPY
+IEBCP06  DS    0H
+         LA    R9,NEXTENT(,R9)         next line in workspace
+         BCT   R4,IEBCP03              Loop
+         LA    R15,4                   RC = 0004
+         B     IEBCP99                 End of Routine
+IEBCP07  DS    0H
+         CLI   BUFCMD,C'M'             Move command
+         BNE   IEBCP99                 No: finished
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (RPFUT1,(UPDAT)),MF=(E,COMOPN)  Open FROM data set
+IEBCP08  DS    0H
+         L     R9,COMMFSCR
+         LH    R4,#LINES               Number of lines on screen.
+         TM    SW,$ALLMEM              All members to be copied?
+         BNO   IEBCP09                 No: continue
+         L     R9,COMWSTRT             First RECORD in workspace
+         L     R4,#ALLLNS              # members in FROM data set
+IEBCP09  DS    0H
+         CLI   OPER,C'M'               Member 'Moved'?             @rp1
+         BE    IEBCP10                 Yes: delete member          @rp1
+         CLI   OPER,C'R'               Member 'Moved' and 'Repl..' @rp1
+         BNE   IEBCP15                 No: do not delete           @rp1
+IEBCP10  DS    0H                                                  @rp1
+         TM    SW,$NOTAUTH             Access granted?
+         BZ    IEBCP10A                Yes: delete member
+         MVI   OPER,X'F8'              Member not deleted
+         B     IEBCP15                 Branch
+IEBCP10A DS    0H                                                  @rp1
+         MVC   STOWDEL,MEMBR           Move member name
+         STOW  RPFUT1,STOWDEL,D        Delete the member
+         LTR   R15,R15                 Ok ?
+         BNZ   IEBCP11                 Yes: branch
+         MVI   MEMBR,C' '              Blank member ...
+         MVC   MEMBR+1(7),MEMBR                     field (deleted)
+         B     IEBCP15                 Branch
+IEBCP11  DS    0H
+         MVI   OPER,X'FC'              Error in stow
+IEBCP15  DS    0H
+         LA    R9,NEXTENT(,R9)         Next entry in workspace
+         BCT   R4,IEBCP09              Loop
+         L     R15,=V(CLOSE)           Close routine
+         BALR  R14,R15                 Execute
+         XC    RPFD18,RPFD18           Clear parameter block
+         LA    R1,RPFD18               Point to unallocation parm block
+         USING DAPB18,R1               Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 0018 (unallocate)
+         MVC   DA18DDN,=CL8'RPFUT1'    DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,BUFDCBF              Parameter list RPFUT1
+         L     R15,=V(ALLOC)           Re-allocate, because we have
+         CALL  (15)                    opened for UPDAT to avoid
+*                                      IEBCOPY invalid BLKSIZE with
+*                                      next MOVE.
+         XR    R15,R15                 RC = 0000
+IEBCP99  DS    0H
+         NI    SW,255-$COPY            Mark pending copies off
+         LM    R2,R14,SAVECOP          Restore registers
+         BR    R14                     Return
+         LTORG
+         DROP
+*
+         TITLE 'Data sets entry screen and member list screen'
+SCREENS  CSECT
+SCR1TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR1TXT  DC    X'F5C2',AL3(WHITE) WRITE ERASE / R01,C02
+SCR1ADDR DC    X'11000013',AL3(WHITE)  Cursor address
+SCR1R1C1 DC    XL5'1100001DF8'         Reset address
+SCR1UID  DC    CL79'RPF Move/Copy Allocation Menu, User ID =         --C
+               ----------------------------'
+SC1R1C56 DC    X'110000'               r01,c56+
+MSG1     DS    CL25                    MESSAGE AREA
+*
+SC1R2C2  DC    X'110000',AL3(WHITE),C'Option  ===>'  R2,C2+
+         DC    AL3(RED),X'1DC1'
+SCR1CMD  DC    X'C300001DF0'
+SC1R4C4  DC    X'110000',AL3(WHITE),C'C ',X'1DF0',AL3(TURQ)
+         DC    CL13'Copy'              r04,c04+
+         DC    AL3(GREEN),C'Copy data set or members'
+SC1R5C4  DC    X'110000',AL3(WHITE),C'M ',X'1DF0',AL3(TURQ)
+         DC    CL13'Move'              r05,c04+
+         DC    AL3(GREEN),C'Move data set or members,'
+R6C20    DC    X'110000',C'and members of FROM data set will be deleted*
+               .'
+*
+SC1R10C2 DC    X'110000'               R10,C02+
+         DC    AL3(YELLOW),C'From - Data set. Specify DSN(*) to Move/Co*
+               py all members if DSORG=PO',AL3(TURQ)
+SC1R11C1 DC    X'110000'               R11,C01+
+         DC    X'1DF5'
+S1DSNF   DC    CL15'Data set name =',X'1DC9',AL3(RED),AL3(USCORE)
+SCR1DSNF DC    CL46' ',X'1DF0',AL3(HDEFAULT)  From data set name
+*
+SC1R12C1 DC    X'110000'               R12,C01+
+         DC    X'1DF5',AL3(TURQ)
+S1VOLF   DC    CL15'Volume serial =',X'1DC9',AL3(RED),AL3(USCORE)
+SCR1VOLF DC    CL6' ',X'1DF0',AL3(HDEFAULT),AL3(TURQ)
+         DC    C' if not cataloged'
+*
+SC1R14C2 DC    X'110000'               R14,C02+
+         DC    AL3(YELLOW),C'To - Data set ',AL3(TURQ)
+SC1R15C1 DC    X'110000'               R15,C01+
+         DC    X'1DF5'
+S1DSNT   DC    CL15'Data set name =',X'1DC9',AL3(RED),AL3(USCORE)
+SCR1DSNT DC    CL46' ',X'1DF0',AL3(HDEFAULT)  To data set name
+*
+SC1R16C1 DC    X'110000'               R16,C01+
+         DC    X'1DF5',AL3(TURQ)
+S1VOLT   DC    CL15'Volume serial =',X'1DC9',AL3(RED),AL3(USCORE)
+SCR1VOLT DC    CL6' ',X'1DF0',AL3(HDEFAULT),AL3(TURQ)
+         DC    C' if not cataloged'
+*
+SC1R18C1 DC    X'110000'               R18,C01+
+         DC    X'1DF5'
+S1REPL   DC    C'Replace like members:',X'1DC9',AL3(RED)
+SCR1REPL DC    CL3'YES',X'1DF5',AL3(TURQ)
+S1END    DC    C'Yes or No',X'1DF0'
+*
+RLASTC2  DC    X'110000'               Row last c2+
+         DC    AL3(TURQ),C'Hit ',AL3(WHITE),C'PF03/15 ',AL3(TURQ)
+         DC    C'to return'
+SCR1LEN  EQU   *-SCR1TXT
+SCR1#L   EQU   *-SCR1TXTF
+*
+SCR5TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR5TXT  DC    X'00C2'                 Command + write control char.
+SCR5SBA0 DC    X'1100001DF8'
+SCR5VAR  DC    CL4'xxxx'
+         DC    C' '
+SCR5FDSN DC    CL25' '
+         DC    C' > '
+SCR5TDSN DC    CL25' '
+SCR5HYPH DC    117C' '
+SCR5SBA1 DC    X'110000'               r01,c58+
+MSG5     DC    CL25' '
+SCR5SBA2 DC    X'110000',X'1DF8',C'Cmd =>',X'1DC113'
+         DC    AL3(USCORE)
+REP5     DC    CL24' ',X'1DF0'
+         DC    AL3(HDEFAULT)
+SCR5SBA3 DC    X'110000'               r3,c1
+         DC    AL3(YELLOW)
+         DC    C' C Name     Rename   TTR    '
+SCR5H    DC    CL51'         --- User data ---         '
+         DC    AL3(TURQ)
+SCR5LEN  EQU   *-SCR5TXT
+LNE5     EQU   *
+SCREENSL EQU   *-SCREENS               Start of area with max 89
+*                                      bytes * 96 screen lines
+         TITLE 'Large Area''s'
+AREAS    CSECT ,                                                   @rp3
+*        THE NEXT TABLE IS BUILT AS FOLLOWS
+*        1. THE OPERATION CODE TO BE TESTED
+*        2. THE ASSOCIATE MESSAGE
+*        3. THE REPLACEMENT OPERATION CODE
+MSGTBLE  DC    C'C',CL030'Copied                        ',X'FA'
+         ENTRY MSGTBLE                                             @rp3
+         DC    C'M',CL030'Moved                         ',X'FD'
+         DC    C'R',CL030'Replaced                      ',X'F9'
+         DC    X'FE',CL30'Error in IEBCOPY, see output  ',C' '
+         DC    X'FD',CL30'Moved                         ',X'FD'
+         DC    X'FA',CL30'Copied                        ',X'FA'
+         DC    X'FC',CL30'Unable to delete member       ',C' '
+         DC    X'FB',CL30'Member not replaced           ',C' '
+         DC    X'F9',CL30'Replaced                      ',X'F9'
+         DC    X'F8',CL30'Not deleted, no update access ',X'F8'
+         DC    X'EE',CL30'''S'' is the only line command',C' '
+MSG#     EQU   (*-MSGTBLE)/32
+*
+         DROP  ,
+         RCTOSBA RENT=YES              Convert Row/column to SBA
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area
+SAVECOP  DS    13F                     Save area IEBCOPY routine
+SAVECNV  DS    13F                     Save area CONVIN routine
+SAVEALC  DS    13F                     Save area ALLOC routine
+SAVEPFK  DS    13F                     Save area PFK routine
+SAVESRT  DS    13F                     Save area SORT routine
+SAVEALMB DS    13F                     Save area ALLMEM
+         ORG   SAVEALMB                Reuse these fullwords for ...
+SAVELOC  DS    13F                     ... LOCATE routine
+         ORG   SAVELOC                 Reuse these fullwords for ...
+SAVETPUT DS    13F                     ... RPFTPUT routine
+SAVECLS  DS    5F                      R10-R14 CLOSE routine
+SORTLA   DS    2F                      Work areas
+SORTLF   DS    F                                 for
+SORTLB   DS    F                                    SORT
+SORTLD   DS    F                                        macro
+BLOCK    DS    F                       Address of block in SEQxxx
+BLOCKLEN DS    F                       Length of block in SEQxxx
+TEMP     DS    CL8                     Temporary workfield
+RPFDAPL  DS    5F                      IKJDAIR parameter list
+RPFD08   DS    CL84                    DAIR allocation parameter block
+RPFD18   DS    CL40                    DAIR unallocation parameter blk
+ECB      DS    F                       An ECB for IKJDAIR
+*
+ADSNNEW  DS    CL44
+DBW      DS    D                       For CVD/CVB instructions
+DBW2     DS    D                       For CVD/CVB instructions
+SBAR0R1  DS    D                       Workfield RCTOSBA
+DECBR    READ  DECBRD,SF,0,0,'S',MF=L
+DECBRLEN EQU   *-DECBR
+DECBW    WRITE DECBWR,SF,0,0,'S',MF=L
+DECBWLEN EQU   *-DECBW
+*
+         AIF   (&SVS).SVSMF
+ESTAEL   ESTAE MF=L
+         AGO   .NOSVSMF
+.SVSMF   ANOP
+ESTAEL   STAE  MF=L
+.NOSVSMF ANOP
+*
+L#ESTAEL EQU   *-ESTAEL
+SORTCNT  DS    D                       # records to sort
+PRMCNVDT DS    2F                      Parm for RPFCNVDT
+ADDRCOMM DS    F                       Contains address of RPFCOMM
+SCRINP   DS    F                       Address of copy of SCR5 CSECT
+SCRINPSZ DS    F                       and length
+SCROUTP  DS    F                    Addr. outp. screen from CONVIN
+SCROUTSZ DS    F                       Length outp. screen from CONVIN
+R12TS    DS    F                       Save register 12 CALLTS routine
+R12UNALL DS    F                       Save register 12 UNALLOC
+R12WI    DS    F                       Save register 12 WRITIT
+R14SCRN  DS    F                       Save register 14 RPFSCRN
+R14TS    DS    F                       Save register 14 CALLTS routine
+R14WI    DS    F                       Save register 14 WRITIT
+R5SCRN   DS    F                       Save register 5 in RPFSCRN
+DATALINE DS    F                       Length of data screen entry
+ESTAERGS DS    7F                      Save registers for ESTAE
+*                                      + extra fullword for SVS
+NEXTSCR  DS    F                       21->96 * Entry length in workspc
+PARMFLD  DS    3F                      3 parameters for DSNPARS
+SAVEUDAT DS    13F                     Save area for SPFSPFU
+#LINES   DS    H                       Contains 21 thru 96
+#ALLLNS  DS    F                       Number of valid lines in worksp
+TPUTLEN  DS    F                       Length of screen to be written
+DIRAREA  DS    CL256                   Input buffer RPFUT1
+*
+LOCAREA  DS    0D
+         DS    CL6                     Not used by RPFDAIR
+LOCVOL   DS    CL6                     Obtained volume
+         DS    CL253                   Rest of LOCAREA
+*
+END1     DS    CL8                     Contains **END**
+END2     DS    CL15                    Contains # members
+*
+BUFFER   DS    CL24
+AIDBYTE  DS    C
+SAVEC    DS    C                       Save field for 'C' byte in dir
+APFC     DS    C                       Save field for AC code      @rp4
+RECFM    DS    C                       Save field for RECFM        @rp4
+MEMCNT   DS    D                       To count # members
+         DS    0F
+SYSIN    DS    CL(MDLSYSL)             DCB of SYSIN
+RPFUT1   DS    CL(DCBLEN2)             DCB of RPFUT1
+RPFUT2   DS    CL(DCBLEN2)             DCB of RPFUT2
+SYSREC   DS    CL80                    SYSIN record
+*
+SC@BUFF  DS    CL24                    \_____ copy of _____/
+         DC    CL24' '                 /  command buffer   \
+BUFCMD   DS    CL3
+INF2TXT  DC    CL25'---xxxxxxx members yyyyyy' +3 and +19
+*
+*        The fields BUFDSNF thru DSNFBLK and the fields BUFDSNT thru
+*        DSNTBLK are mapped with the ALLOCLST DSECT, so do not insert
+*
+*        ALLOCLST 1 set
+*
+BUFDCBF  DS    F                       Address of RPFUT1
+BUFDSFL  DS    CL2                     Real length DSN of FROM
+BUFDSNF  DS    CL46                    Dsname FROM data set
+BUFVOLF  DS    CL6                     Volume FROM data set
+DDNF     DC    CL8'RPFUT1'             Ddname FROM data set
+DSNFDSOR DS    C                       DSORG of FROM data set
+DSNFRECF DS    C                       RECFM of FROM data set
+DSNFLREC DS    CL2                     LRECL of FROM data set
+DSNFBLK  DS    CL2                     BLKSIZE of FROM data set
+*
+*        ALLOCLST 2 set
+*
+BUFDCBT  DS    F                       Address of RPFUT2
+BUFDSTL  DS    CL2                     Real length DSN of TO
+BUFDSNT  DS    CL46                    Dsname TO data set
+BUFVOLT  DS    CL6                     Volume TO data set
+DDNT     DC    CL8'RPFUT2'             Ddname TO data set
+DSNTDSOR DS    C                       DSORG of TO data set
+DSNTRECF DS    C                       RECFM of TO data set
+DSNTLREC DS    CL2                     LRECL of TO data set
+DSNTBLK  DS    CL2                     BLKSIZE of TO data set
+*
+COPYCNT  DS    PL3                     Members to be copied
+BUFREPL  DS    CL3                     Contains replace Yes or No
+SW       DS    X
+$ESTAE   EQU   128                     If on: ESTAE active
+$NOTAUTH EQU   32                      If on: no update access
+$COPY    EQU   16                      If on: COPY pending
+$ALLMEM  EQU   8                       If on: All members copied
+$REPL    EQU   4                       If on: member replaced      @rp1
+$ABEND   EQU   2                       If on: ESTAE routine entered
+$MAGAPF  EQU   1                       If on: APF auth. with magic SVC
+*
+CAMLST   CAMLST SEARCH,*-*,*-*,IECSDSL1
+         AIF   (&SVS).NORA2
+RR       DS    CL(RACFL)
+.NORA2   ANOP
+STOWDEL  DS    CL8                     For STOW macro (Delete)
+         DS    0D
+         IECSDSL1 1
+*
+DDMMYY   DS    0CL49                   Output field from CONVDATE
+DAYNBR   DC    CL2' '                  Daynbr in the week - 01=SUN
+DAYNM#E  DS    CL9                     Dayname in English
+DAYNM#D  DS    CL9                     Dayname in Dutch
+         DS    CL1
+DD       DS    CL2
+         DS    CL1
+MONNBR   DS    CL2                     Monthnbr in year - 01=Jan
+MNAME#E  DS    CL9                     Monthname in English
+MNAME#D  DS    CL9                     Monthname in Dutch
+         DS    C
+CC       DS    CL2                     Century
+YY       DS    CL2                     Year
+*
+YYDDD    DS    PL4                     Julian date (packed)
+*
+BLDLLIST DS    0F                      For BLDL
+N1       DC    AL2(1)                  Number of entries
+L1       DC    AL2(14)                 Length of entry
+BLDLNAME DS    CL14                    BLDL member
+*
+R2C15    DS    XL2                     Position after Option ===>
+R11C18   DS    XL2                     Position after FROM Dsname
+R15C18   DS    XL2                     Position after TO Dsname
+R18C24   DS    XL2                     Position after REPLACE like ...
+WORKL    EQU   *-WORKAREA
+         TITLE 'DSECT''s'
+SPFDATA  DSECT  ,                      Member with ISPF/RPF stats
+*
+SPFMEM   DS    CL8                     Member name
+SPFTTR   DS    CL3                     TTR
+SPFC     DS    C                          C
+SPFUSER  EQU   *                       ISPF/RPF user data
+SPFVERS  DS    X                       ISPF/RPF version
+SPFMOD   DS    X                           Mofification number
+SPFFLGS  DS    X                           Flags
+SPFEXT   EQU   32                          Extended section exists
+SPFSECU  DS    PL1                         Seconds of time last upd
+SPFDATEI DS    PL4                         Date created           @2000
+SPFDATEU DS    PL4                         Date updated
+SPFTIME  DS    XL2                         Time last update
+SPFRECU  DS    XL2                         Current number of lines
+SPFRECI  DS    XL2                         Initial number of lines
+SPFRECM  DS    XL2                         Records modified
+SPFUID   DS    CL7                         Userid
+         DS    CL1                         Always blank
+SPFERECU DS    CL4
+SPFERECI DS    CL4
+SPFERECM DS    CL4
+*
+MEMBAREA DSECT                         ENTRY IN GETMAIN AREA
+PREFIX   DS    CL8
+OPER     DS    C                       See MSGTBLE for the
+*                                      description of OPER
+         DS    C
+MEMBR    DS    CL8                     Member name
+         DS    C
+ALIAS    DS    C                       Alias indicator
+INPTTR   DS    CL3
+INPSTATS DS    0CL63
+INPUID   DS    CL8                     RPF/ISPF stats: userid
+INPDATE  DS    CL8                     RPF/ISPF date updated
+INPTIME  DS    CL6                     RPF/ISPF time updated
+INPLINEC DS    CL8
+INPLINEI DS    CL8                     RPF/ISPF initial # records
+INPLINEM DS    CL8                     RPF/ISPF modified # records
+         DS    C
+INPVERS  DS    CL2                     RPF/ISPF vv
+INPERIOD DS    CL1
+INPMOD   DS    CL2                     RPF/ISPF mm
+         DS    C
+INPDATC  DS    CL8                     RPF/ISPF creation date
+INPVM    DS    CL2                     ISPF/RPF vv.mm in binary
+*
+INPHL    DS    C                       Highlight char (X'F1' non hilite
+*                                      and x'F9' highlight MDT on)
+         ORG   INPUID
+INPC     DS    CL2
+         DS    C
+INPSIZE  DS    CL6                     Size of load module         @rp4
+         DS    C                                                   @rp4
+INPALIAS DS    CL8                     True name if alias          @rp4
+         DS    C                                                   @rp4
+INPAPF   DS    CL2                     Load module = AC=1          @rp4
+         DS    C                                                   @rp4
+INPAM    DS    CL3                     Load module Addressing mode @rp4
+         DS    C                                                   @rp4
+INPRM    DS    CL3                     Load module Residenty mode  @rp4
+         DS    C                                                   @rp4
+INPRENT  DS    CL2                     Load module = reentrant     @rp4
+         DS    C                                                   @rp4
+INPREUS  DS    CL2                     Load module = re-usable     @rp4
+         DS    C                                                   @rp4
+INPREFR  DS    CL2                     Load module = refreshable
+         DS    C                                                   @rp4
+INPSC    DS    CL2                     Scatter load                @rp4
+         DS    C                                                   @rp4
+INPOV    DS    CL2                     Load module = in overlay
+         DS    C
+INPNX    DS    CL2                     Load module = not executable
+         DS    C
+INPEP0   DS    CL3                     Entry Point = zero          @rp4
+         ORG   ,
+MEMBEND  EQU   *
+         SPACE 3
+ALLOCLST DSECT                         See BUFDSFL and BUFDSTL
+ADCB     DS    F                       DCB address FROM or TO
+ADSNL    DS    CL2                     Real length ADSN
+ADSN     DS    CL46                    Data set to be allocated
+AVOL     DS    CL6                     Volume if any
+ADDN     DS    CL8                     Ddname to use for allocation
+ADSORG   DS    C                       DSORG to return
+ARECFM   DS    C                       Record format to return
+ALRECL   DS    CL2                     LRECL to return
+ABLK     DS    CL2                     BLKSIZE to return
+         SPACE 3
+*
+SCREEN   DSECT
+SCRCMD   DS    CL24                    Command area, followed by max.
+*                                      96 * 17 bytes
+*
+SCRENTRY DSECT                         Line on screen (mapped by LNE5)
+SCRESBA  DS    CL3
+SCREATT1 DS    CL2
+SCREOPER DS    C
+SCREATT2 DS    C
+SCREHL   DS    C
+SCRECOL2 DS    CL3
+SCREMEM  DS    CL8
+SCREATT3 DS    CL2
+SCRENEWN DS    CL8
+SCREATT4 DS    CL2
+SCRECOLR DS    CL3
+SCRETTR  DS    CL6
+         DS    C
+SCREAREA DS    0CL52
+SCREUID  DS    CL8                     User(ID) on screen
+         DS    C
+SCREVERS DS    CL5                     VV.MM on screen
+         DS    C
+SCREDATC DS    CL10                    Date created on screen
+         DS    C
+SCREDATE DS    CL10                    Date updated on screen
+         DS    C
+SCRETIME DS    CL5                     Time updated on screen
+         DS    C
+SCRELINE DS    CL8                     Current #lines on screen
+         DS    CL1                     This makes a width of 80 bytes
+         ORG   SCREAREA
+SCRELINK DS    CL52
+         ORG   ,
+SCRENT   EQU   *-SCRENTRY
+*
+COMMAREA RPFCOMM
+         IHAPDS PDSBLDL=NO                                         @rp4
+         IKJCPPL
+         IKJDAPL
+         IKJDAP08
+         IKJDAP18
+         CVT   DSECT=YES,LIST=NO
+         PRINT NOGEN
+         DCBD  DSORG=(PS,PO),DEVD=DA
+         AIF   (&SVS).SCB
+         IKJTCB DSECT=YES,LIST=NO
+         IHASDWA
+         IEZDEB
+         IEZJSCB
+         IHAPSA
+         AGO   .NOSCB
+.SCB     ANOP
+SCB      DSECT                         STAE workarea (104 bytes)
+SCBPARM  DS    F                       Parameter from STAE macro
+SCBCMP   DS    F                       Completion code
+SCBPSW   DS    2F                      PSW at time of abend
+SCBPSWA  DS    2F                      P/P PSW beform abend
+SCBGR0   DS    F                       Register 0
+SCBGR1   DS    F                       Register 1
+SCBGR2   DS    F                       Register 2
+SCBGR3   DS    F                       Register 3
+SCBGR4   DS    F                       Register 4
+SCBGR5   DS    F                       Register 5
+SCBGR6   DS    F                       Register 6
+SCBGR7   DS    F                       Register 7
+SCBGR8   DS    F                       Register 8
+SCBGR9   DS    F                       Register 9
+SCBGR10  DS    F                       Register 10
+SCBGR11  DS    F                       Register 11
+SCBGR12  DS    F                       Register 12
+SCBGR13  DS    F                       Register 13
+SCBGR14  DS    F                       Register 14
+SCBGR15  DS    F                       Register 15
+.NOSCB   ANOP
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END

@@ -1,0 +1,2003 @@
+RPFDEF   TITLE 'CHANGE SESSION DEFAULTS MODULE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFDEF.                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFMAIN (option 0).                           *
+*                                                                     *
+*        Function:      Change session defaults, allocations and      *
+*                       PFK settings.                                 *
+*                       You can change:                               *
+*                       01. Size of EDIT workspace                    *
+*                       02. LOGGING YES or NO.                        *
+*                       03. NULLS   YES or NO.                        *
+*                       04. AUTOSAVE Y or N                        @rp1
+*                       05. Replace like members or not in 3.3     @rp3
+*                       06. Default prefix in data set list (3.4)  @rp4
+*                       07. Default SYSOUT class for "PRINT"          *
+*                       08. Default Cols (scale line in EDIT)         *
+*                       09. Default Confirm member delete             *
+*                       10. Default CAPS (ON, OFF or AUT)             *
+*                       11. Default allocation DSName                 *
+*                       12. Default allocation Volume                 *
+*                       13. Default allocation Member name            *
+*                       14. Default Librarian module.                 *
+*                       15. Default Librarian Master file.            *
+*                       16. Default Librarian Master file volume.     *
+*                       17. Default Archiver archive VSAM cluster     *
+*                       18. Default PFK settings                      *
+*                       19. Default Assembler program              @rp5
+*                       20. Default Assembler Maclibs (6)             *
+*                       21. Default Assembler PARM                    *
+*                       22. Default Linkage Editor PARM               *
+*                       23. Default Linkage Editor control            *
+*                           statements (6).                           *
+*                                                                     *
+*                       All the modifications will be written onto    *
+*                       The RPF Profile partitioned data set with     *
+*                       DD-name ISPPROF. The member name = @RPFPROF.  *
+*                                                                     *
+*        Registers:     Registers 12 and 10 are the base registers.   *
+*                       Register 13 points to our working storage.    *
+*                       Register 11 points to the RPFCOMM area.       *
+*                       Register 9 points to the screen mapped by     *
+*                       the SCREENS CSECT.                            *
+*                                                                     *
+*        Return codes set in register 15:                             *
+*                       00 Execution without problems                 *
+*                       04 Open error RPF Profile data set            *
+*                       08 No member found in RPF Profile data set    *
+*                       20 No RPF profile used (caused by error in    *
+*                          RPFINIT).                                  *
+*                       24 Freemain failed for some reason         @rp6
+*                                                                     *
+*        Change log:                                                  *
+*        Jul 05,2002 RPr: Recover from GETMAIN error                  *
+*        Oct 20,2002 RPr: AUTOSAVE parameter added                 @rp1
+*        Jan 24,2004 RPr: Option Replace added                     @rp3
+*        Mar 19,2006 RPr: Default prefix added                     @rp4
+*        Mar 20,2006 RPr: Default assembler program added          @rp5
+*        Dec 14,2018 RPr: Make RPF suitable for mvs/380 and up   @rpa01
+*        Jan 02,2019 RPr: Freemain failed corrected if routine     @rp6
+*                         SESDEF is entered more than 1 time       @rp6
+*        Jan 03,2019 RPr: Allocations screen in 7 colors           @rp7
+*        Jan 31,2019 RPr: RPFDEF optimized for 3270 models 3 and 4 @rp8
+*        Apr 17,2019 RPr: Menu supports all kinds of 3270 screens     *
+*                         up to 62 lines x 160 columns (3290)         *
+*        May 19,2019 RPr: Default Cols added (scale line in EDIT)     *
+*        Feb 09,2020 RPr: APPEND attribute deleted                    *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Jul 02,2020 RPr: Add default Archiver cluster                *
+*        Sep 28,2020 RPr: Remove option Upper Case                    *
+*        Nov 30,2020 RPr: Remove option Line numbers                  *
+*        May 23,2021 Rpr: Allocation of Profile deleted. //RPFPROF    *
+*                         should be in the TSO logon procedure.       *
+*        Aug 17,2021 Rpr: Fix setting return code.                    *
+*        Dec 06,2021 Rpr: RPFDEF made re-entrant and re-usable.       *
+*        Jul 27,2022 Rpr: Test validity AUTOSAVE field.               *
+*        Sep 17,2022 Rpr: Assembler program name moved to option 4    *
+*                         (ASMDEF).                                   *
+*        Jan 01,2024 Rpr: Default 'Confirm member delete' added in    *
+*                         option 1 (session defaults)                 *
+*        Mar 03,2024 RPr: Do not display 'Invalid option' if no data  *
+*                         entered.                                    *
+*        Jun 02,2024 Rpr: Default 'CAPS = ON/OFF/AUT' added in        *
+*                         option 1 (session defaults)                 *
+*        Dec 06,2024 Rpr: Use TSO data set name conventions in        *
+*                         Allocation and Assembler defaults.          *
+*        Dec 22,2024 Rpr: Profile VSAM cluster replaced by ISPPROF    *
+*                         partitioned data set                        *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFDEF   AMODE 31                                                @rpa01
+RPFDEF   RMODE 24                                                @rpa01
+RPFDEF   CSECT
+         COPY  SYSVARS
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFDEF,R12,R10          Make RPFDEF addressable
+         L     R11,0(,R1)              Pickup RPFCOMM area
+         USING COMMAREA,R11
+         GETMAIN R,LV=WORKL            Getmain working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(0,R13)             Forward pointer
+         LR    R13,R1                  Our working storage
+         USING WORKAREA,R13            Make working storage addressable
+         B     START
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         LA    R10,2048(,R12)          Second base
+         LA    R10,2048(,R10)                register
+         ST    R11,ADDRCOMM            Save address RPFCOMM
+         GETMAIN R,LV=SCREENSL         Obtain space for the screens
+         LR    R9,R1                   Save its address
+         LR    R0,R1                   Output
+         LA    R1,SCREENSL             Length of ...
+         LR    R3,R1                             both operands
+         L     R2,=V(SCREENS)          Input
+         MVCL  R0,R2                   and move
+         USING SCREENS,R9              Make the screens addressable
+         MVC   SCR1TXT(1),COMMCMD      Move EW/EWA in data stream
+         MVC   SCR3TXT(1),COMMCMD      Move EW/EWA in data stream
+         MVC   SCR4TXT(1),COMMCMD      Move EW/EWA in data stream
+         MVC   SCR6TXT(1),COMMCMD      Move EW/EWA in data stream
+         MVC   SCR1UID,COMMUSER
+         MVC   BUFCONF,CCONFIRM        Copy Confirm
+         MVC   BUFREPL,COMMREPL        Copy REPLACE
+         MVC   BUFNULL,COMMNUL         Copy NULLS
+         MVC   BUFAUTO,COMMAUTO        Copy Autosave
+         MVC   BUFCAPS,COMMCAPS        Copy CAPS
+         MVC   BUFOUTCL,COMOUTCL       Copy Output class
+         MVC   RPFPROF,MDLPROF         Copy DCB to working storage
+         XC    RC,RC                   Initialize return code
+         XC    READBUF,READBUF         Contains address of I/O area
+         MVC   BLDLLIST(4),=X'0001000E' Initialize BLDL list
+         XC    DECBR(DECBLENR),DECBR
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         LM    R4,R5,COMMSIZE          Pickup lines
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1TXT+3          In menu
+         STCM  R0,3,SCR3TXT+3          In allocations screen
+         STCM  R0,3,SCR4TXT+3          In sessions default screen
+         STCM  R0,3,SCR6TXT+3          In ASM defaults screen
+*
+         LA    R0,1                    Row 1
+         LA    R1,56                   Column 56
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S3R1C56+1          In Allocation screen
+         STCM  R0,3,S4R1C56+1          In session defaults screen
+         STCM  R0,3,S6R1C56+1          In ASM defaults screen
+*
+         LA    R0,2                    Row 2
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R2C1+1             In menu
+*
+         LA    R0,3                    Row 3
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S6R3C1+1           In ASM defaults screen
+*
+         LA    R0,3                    Row 3
+         LA    R1,62                   Column 62+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R3C62+1            In menu
+*
+         LA    R0,4                    Row 4
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S3R4C1+1           In allocations screen
+*
+         LA    R3,R4C4                 Point to 1st menu entry
+         LA    R4,4                    First data line is line4
+         LA    R5,6                    6 menu-items
+SCR01    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,4                    Parameter column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+*
+         LA    R4,2(,R4)               Increase line number + 1 blank
+         LA    R3,R4C4L(,R3)           Next line in screen
+         BCT   R5,SCR01                And do complete screen
+*
+         LA    R0,4                    Row 4
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4R4C2+1           In session defaults screen
+*
+         LA    R0,4                    Row 4
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S6R4C1+1           In ASM defaults screen
+*
+         LA    R0,5                    Row 5
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S3R5C1+1           In allocations screen
+*
+         LA    R0,6                    Row 6
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4R6C1+1           In ASM defaults screen
+         STCM  R0,3,S3R6C1+1           In allocations screen
+         STCM  R0,3,S6R6C1+1           In ASM defaults screen
+*
+         LA    R0,6                    Row 6
+         LA    R1,33                   Column 33+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4R6C33+1          In ASM defaults screen
+*
+         LA    R3,S4R7C1               Point to 1st menu entry
+         LA    R4,7                    First data line is line7
+         LA    R5,9                    Last data is line 15
+SCR03    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+*
+         LA    R6,S4R7L1(,R3)          Point to column 33+
+         LR    R0,R4                   Parameter line
+         LA    R1,33                   Parameter column 33+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R6)              In session defaults screen
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,S4R7L2(,R3)          Next line in screen
+         BCT   R5,SCR03                And do complete screen
+*
+         LA    R0,8                    Row 8
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S3R8C1+1           In allocations screen
+*
+         LA    R0,9                    Row 09
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S3R9C1+1           In allocations screen
+*
+         LA    R0,10                   Row 10
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S3R10C1+1          In allocations screen
+*
+         LA    R0,12                   Row 10
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S3R12C1+1          In allocations screen
+*
+         LA    R0,13                   Row 13
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S6R13C1+1          In ASM defaults screen
+         STCM  R0,3,S3R13C1+1          In allocations screen
+*
+         LA    R0,14                   Row 14
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S6R14C1+1          In ASM defaults screen
+*
+         LA    R0,16                   Row 16
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4R16C1+1          In session default screen
+*
+         LA    R0,16                   Row 16
+         LA    R1,33                   Column 33+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4R16C33+1         In session defaults screen
+*
+         LA    R0,16                   Row 16
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S6R16C1+1          In ASM defaults screen
+*
+         L     R0,COMMSIZE             Row last
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC2+1          In menu
+*
+         L     R0,COMMSIZE             Row Last
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4LST+1            In session defaults screen
+         STCM  R0,3,S3LST+1            In allocations screen
+         STCM  R0,3,S6LST+1            In ASM defaults screen
+*
+         L     R0,COMMSIZE             Row Last
+         BCTR  R0,0                    Last -1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4LST1+1           In session defaults screen
+         STCM  R0,3,S3LST1+1           In allocations screen
+         STCM  R0,3,S6LST1+1           In ASM defaults screen
+*
+         LA    R3,S6R7C1               Point to 2nd Maclib in screen 6
+         LA    R4,7                    First data line is line 7
+         LA    R5,5                    Last data is line 11
+SCR05    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,S6R7L(,R3)           Next line in screen
+         BCT   R5,SCR05                In ASM defaults screen
+*
+         LA    R3,S6R17C1              Point to 1st Control statement
+         LA    R4,17                   First data line is line17
+         LA    R5,6                    Last data is line 22
+SCR07    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,S6R17L(,R3)          Next line in screen
+         BCT   R5,SCR07                In ASM defaults screen
+*
+*        End of Menu screen setup
+*
+         USING DBAREA,R8               Defaults
+         MVC   NEWSIZE,COMWRKLN        Save length of workspace    @rp6
+         TM    COMMFLG1,$COMNODB       Is the profile data set present?
+         BO    PUT1                    No: bypass OPEN
+         MVI   COMOPN,128              This is the first and last DCB
+         OPEN  RPFPROF,MF=(E,COMOPN)
+         TM    RPFPROF+DCBOFLGS-IHADCB,DCBOFOPN  Does the OPEN succeed?
+         BNO   OPENNOK                 No: error
+         LH    R0,RPFPROF+DCBBLKSI-IHADCB
+         ST    R0,BLKSIZE              Save block size
+         MVC   BLDLNAME,=CL8'@RPFPROF' Member name
+         BLDL  RPFPROF,BLDLLIST        Try to find the member
+         LTR   R15,R15                 Member found?
+         BZ    BLDLOK                  Yes: good
+OPENNOK  MVC   RC,=F'8'                Return code 8 (open failed)
+         OI    COMMFLG1,$COMNODB       Flag profile not present.
+         B     PUT1                    GETMAIN buffer process menu
+*
+*        Take defaults from @RPFPROF
+*
+BLDLOK   DS    0H
+         L     R0,=A(12000)            About 2X largest profile member
+         ST    R0,BUFLV                Save
+         CLC   BLKSIZE,BUFLV           Is BLKSIZE larger?
+         BL    *+10                    No:
+         MVC   BUFLV,BLKSIZE
+         L     R0,BUFLV                Pickup the length
+         GETMAIN R,LV=(0)
+         ST    R1,READBUF              And save
+         LR    R8,R1                   Base for I/O area
+         RPFSA24
+         FIND  RPFPROF,TTR,C           Point to member to read
+         LR    R2,R8                   I/O buffer
+         XR    R3,R3
+PROF002  DS    0H
+         READ  DECBR,SF,RPFPROF,(2),'S',MF=E read a block
+         CHECK DECBR                   and wait for completion
+         L     R14,BLKSIZE             BLKSIZE at time of read
+         L     R1,DECBR+16             Status area address
+         SH    R14,14(R1)              Subtract residual count
+         LA    R3,0(R14,R3)            Add number of read bytes
+         C     R3,=A(DBLEN)            All records read?
+         BNL   PROF003                 Yes: done
+         LA    R2,0(R14,R2)            Next portion
+         B     PROF002                 Read next part
+PROF003  DS    0H
+         RPFSA31                       Restore addressing mode
+         MVI   COMCLS,128              The first and last DCB
+         CLOSE RPFPROF,MF=(E,COMCLS)
+         TITLE 'PROCESS THE COMMANDS'
+PUT1     DS    0H
+         TM    COMMFLG2,$COMRTRN       Is RETURN indicator on ?
+         BO    MAIN                    Yes: return to RPFMAIN
+         CLI   COMDEFPT,C' '           Option already sel. in MAIN ?
+         BE    PUT1O                   No: branch
+         MVC   BUFFER(1),COMDEFPT      Move option from RPFCOMM
+         MVI   COMDEFPT,C' '           and blank the field
+         OI    COMMFLG2,$COMRTRN       Set return indicator in RPFCOMM
+         B     FUNC0                   Scan the option directly
+PUT1O    DS    0H
+         LA    R1,SCR1TXT              Parameter TPUTS (address screen)
+         LA    R0,SCR1LEN              Parameter TPUTS (length)
+         L     R15,=V(TPUTS)
+         BALR  R14,R15                 Write screen
+         MVI   MSG1,C'-'
+         MVC   MSG1+1(24),MSG1
+GET1     BAL   R14,CONV                Read screen
+         B     *+4(R15)                Initiate branch list
+         B     GET1A                   RC = 0, good, continue
+         B     MAIN                    PFK or PFK15 pressed
+         B     PUT1                    Other key pressed
+GET1A    LTR   R1,R1                   Nothing received ?
+         BZ    PUT1                    Yes: branch
+         TR    BUFFER(5),COMTCAPS      Xlate to upper
+         MVI   BUFFER+5,C' '           Blank TGET buffer ...
+         MVC   BUFFER+6(4),BUFFER      ... overflow area
+         LA    R1,5                    Max length of BUFFER
+         LA    R2,BUFFER               Address of receive buffer
+GET1B    DS    0H
+         CLI   0(R2),X'40'             Blank?
+         BNE   GET1C                   No: option found in BUFFER
+         LA    R2,1(,R2)               Next byte in BUFFER
+         BCT   R1,GET1B                Loop until option found
+         B     PUT1                    No options entered, redisplay
+GET1C    DS    0H
+         MVC   BUFFER(5),0(R2)         Move option(s) to start buffer
+         CLI   BUFFER,C'?'
+         BE    PUT1
+FUNC0    CLI   BUFFER,C'0'             Option 0 - display RPF status?
+         BNE   FUNC1
+         RPFSA24                       Switch to amode 24        @rpa01
+         LA    R1,ADDRCOMM             Adress RPFCOMM
+         LINK  EP=RPFSTAT                                        @rpa01
+         RPFSA31                       Restore addressing mode
+         B     PUT1
+FUNC1    CLI   BUFFER,C'1'             Change workspace & options
+         BNE   FUNC2
+         BAL   R14,SESDEF
+         B     PUT1
+FUNC2    CLI   BUFFER,C'2'             Alter default allocations
+         BNE   FUNC3
+         BAL   R14,ALLOC
+         B     PUT1
+FUNC3    CLI   BUFFER,C'3'             Alter default PFK settings
+         BNE   FUNC4
+         L     R15,EPPFK               Pick entry point          @rpa01
+         LA    R1,ADDRCOMM             RPFCOMM as parameter
+         CALL  (15)                    Invoke RPFPFK
+         TM    COMMFLG1,$COMNODB       Profile present?
+         BO    FUNC3A                  No: don't update
+         MVC   DBPFK01(78),COMPFK01    Move
+         MVC   DBPFK04(78),COMPFK04         PFKS
+         MVC   DBPFK07(78),COMPFK07              into
+         MVC   DBPFK10(78),COMPFK10
+         MVC   DBPFK13(78),COMPFK13                   profile
+         MVC   DBPFK16(78),COMPFK16
+         MVC   DBPFK19(78),COMPFK19                          record
+         MVC   DBPFK22(78),COMPFK22
+*
+FUNC3A   DS    0H
+         MVC   MSG1,MSG1TXT            Move text 'updated' to user
+         B     PUT1
+FUNC4    CLI   BUFFER,C'4'
+         BNE   FUNCX                   No: branch
+         BAL   R14,ASMDEF              link to assembler defaults
+         B     PUT1
+FUNCX    CLI   BUFFER,C'X'             Option 'X' selected?
+         BE    MAIN                    Yes: return
+ERR1     DS    0H
+         MVC   MSG1,ERR1TXT            Msg: invalid option         @rp8
+         NI    COMMFLG2,255-$COMRTRN   Reset return indicator
+         B     PUT1
+ERR4     DS    0H                                                @rpa01
+         NI    COMMFLG2,255-$COMRTRN   Reset return indicator
+         MVC   MSG1,ERR4TXT Getmain failed, retry
+         B     PUT1
+         TITLE 'Process the GETMAIN and write defaults on profile'
+MAIN     DS    0H
+         CLC   COMWRKLN,NEWSIZE        Length workspace changed?   @rp6
+         BE    RETURN                  No: exit                    @rp6
+         TM    COMMFLG2,$COMNOGO       No workspace available?
+         BO    GETMAIN                 Yes: skip FREEMAIN          @rp6
+         L     R1,COMWSTRT             No: getmain new workspc   @rpa01
+         ICM   R2,B'1111',COMWRKLN     Load workspace size
+         BZ    GETMAIN                 Zero: GETMAIN only
+         AIF   (&SVS).SVS1
+         FREEMAIN RC,LV=(2),A=(1)      FREEMAIN old EDIT workspace
+         AGO   .NOSVS1
+.SVS1    ANOP
+         FREEMAIN R,LV=(2),A=(1)       FREEMAIN old EDIT workspace
+.NOSVS1  ANOP
+         LTR   R15,R15
+         BNZ   FREEMERR
+         OI    COMMFLG2,$COMNOGO       Set NOGO (will be reset     @rp6
+*                                      after successful GETMAIN)   @rp6
+GETMAIN  DS    0H
+         XC    COMWSTRT,COMWSTRT       Invalidate
+         XC    COMMLAST,COMMLAST          the
+         XC    COMMFSCR,COMMFSCR             workspace fields
+         MVC   COMWRKND,=F'-1'         Clear end addr. workspace   @rp6
+         XC    COMWRKLN,COMWRKLN       Invalidate length           @rp6
+         L     R2,NEWSIZE              New length of workspace     @rp6
+         AIF   (&SVS).SVS2
+         GETMAIN RC,LV=(2),LOC=ANY     Getmain new workspace size@rpa01
+         AGO   .NOSVS2
+.SVS2    ANOP
+         GETMAIN R,LV=(2)              Getmain new workspace size
+.NOSVS2  ANOP
+         LTR   R15,R15                 Test completion
+         BNZ   ERR4                    Error if GETMAIN failed
+         LTR   R1,R1                   Is there a length in R1?
+         BZ    ERR4                    Error: do not leave RPFDEF
+         NI    COMMFLG2,255-$COMNOGO   Reset nogo switch           @rp6
+         ST    R1,COMWSTRT             Start of EDIT workspace
+         L     R2,NEWSIZE              workspace with new length   @rp6
+         ST    R2,COMWRKLN             Save this in RPFCOMM area   @rp6
+         LA    R2,0(R1,R2)             End of EDIT workspace
+         SL    R2,=A(3*NEXTENT)        Minus 3 entries (264 bytes)
+*
+* Set end of workspace 3 lines before, because a 255 length record
+* + prefix of 8 bytes (=263 bytes) should fit in the last line of
+* the workspace to prevent an ABEND0C4 if try to EDIT a data set
+* with a LRECL=255 and does not fit in the workspace
+*
+         ST    R2,COMWRKND             New end of workspace
+         B     RETURN                  Finished
+FREEMERR DS    0H                                                @rpa01
+         MVC   MSG1,ERR7TXT            Msg: Freemain failed stop.
+         LA    R1,SCR1TXT              Parameter TPUTS (address screen)
+         LA    R0,SCR1LEN              Parameter TPUTS (length)
+         L     R15,=V(TPUTS)
+         BALR  R14,R15                 Write screen
+         NI    COMMFLG2,255-$COMRTRN   Reset return indicator
+         LA    R1,BUFFER               Area address
+         LA    R0,L'BUFFER             Length
+         ICM   R1,8,=B'10000000'       Indicate TGET
+         TGET  (1),(0),R
+         MVC   RC,=F'24'               Disastrous return code      @rp6
+         B     RETURN
+RETURN   DS    0H
+         TM    COMMFLG1,$COMNODB       Profile bypassed?
+         BZ    RETURN1                 Yes: bypass write and FREEMAIN's
+         MVC   RC,=F'20'               No profile data set
+         MVC   MSG1,ERR2TXT            Msg: no profile data set
+         B     RETURN2
+RETURN1  DS    0H
+         CLC   RC,=F'8'                Open error ISPPROF/RPFPROF?
+         BE    RETURN2
+         BAL   R14,WRITEMBR            Write the @RPFPROF member
+RETURN2  DS    0H
+         ICM   R3,15,READBUF           Is there an I/O area?
+         BZ    RETURN3                 No: do not free
+         L     R0,BUFLV                Pickup the length
+         FREEMAIN R,LV=(0),A=(3)       Get rid of I/O buffer
+RETURN3  DS    0H
+         TM    RPFPROF+DCBOFLGS-IHADCB,DCBOFOPN Is this DCB opened?
+         BNO   RETURN4                 No:
+         MVI   COMCLS,128              This is the only and last DCB
+         CLOSE RPFPROF,MF=(E,COMCLS)   DCB of Profile PDS ISPPROF
+RETURN4  DS    0H
+         FREEMAIN R,LV=SCREENSL,A=(9)  Release screen output area
+         LR    R3,R13                  Our working storage
+         L     R2,RC                   Save return code
+         L     R13,4(,R13)             Callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Free our working storage
+         LR    R15,R2                  Restore return code
+         RETURN (14,12),RC=(15)
+*
+         TITLE 'Change session defaults'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        S E S D E F - Set session default options like:              *
+*                      1. Workspace size, min=500, max=1,000,000 lines*
+*                      2. Output class, A thru Z or 0 thru 9.         *
+*                      3. Printer name.                               *
+*                      4. Logging = YES or NO (for future use).       *
+*                      5. Nulls = YES or NO (append nulls in EDIT)    *
+*                      6. Autosave = Y or N (automatic SAVE in EDIT)  *
+*                      7. ASM prog name (name of Assembler program)   *
+*                      8. Replace = YES or NO in Move/Copy            *
+*                      9. Cols = Y or N for scale line in EDIT.       *
+*                     10. Confirm = / or <blank> for 'Confirm member  *
+*                         or item delete' in Library Functions        *
+*                         (opt 3.1) and Archiver (opt. 3.9).          *
+*                     11. CAPS = ON/OFF/AUT for CAPS in EDIT.         *
+*                         ON and OFF is clear. AUT = CAPS=ON or OFF   *
+*                         will be detected in EDIT.
+*                     12. Dft pfx = default prefix in option 3.4.     *
+*                                                                     *
+*                      Input:  SCR4TXT                                *
+*                      Output: SCR4TXT                                *
+*                              RPFCOMM                                *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SESDEF   ST    R14,SAVE14
+         MVC   MSG4,MSG2TXT            Warning into screen
+SESDEF00 DS    0H
+         L     R5,NEWSIZE              Length of workspace         @rp6
+         SL    R5,=A(2*NEXTENT)        Minus 2 entries
+         XR    R4,R4                   Clear even reg for divide
+         D     R4,=A(NEXTENT)          # chars /NEXTENT value
+         CVD   R5,DBW                  convert # lines  to packed
+         UNPK  SCR4WSS(7),DBW          Convert to display
+         OI    SCR4WSS+6,X'F0'         and clear sign
+         MVC   SCR4OUT(1),BUFOUTCL     Populate
+         MVC   SCR4PRT(8),COMMPRT             the
+         MVC   SCR4LOG(3),COMMLOG               screen
+         MVC   SCR4NUL(3),BUFNULL      NULLS = Yes or No
+         MVC   SCR4COLS,CCOLS          COLS = Y or N
+         MVC   SCR4CONF,BUFCONF        Confirm member delete = '/'
+*                                      or <blank>
+         MVC   SCR4AUTO,BUFAUTO        AUTOSAVE = Y or N
+         MVC   SCR4CAPS,BUFCAPS        CAPS = AUT, ON or OFF
+         MVC   SCR4REP,BUFREPL         REPLACE = YES or NO
+         MVC   SCR4PFX,COMMPFX                                     @rp4
+         LA    R1,SCR4TXT              Parameter TPUTS (address screen)
+         LA    R0,SCR4LEN              Parameter TPUTS (length)
+         L     R15,=V(TPUTS)
+         BALR  R14,R15                 Write screen
+         MVI   MSG4,C'-'               Clear
+         MVC   MSG4+1(21),MSG4              message
+         BAL   R14,CONV                Read and convert the screen
+         B     SESDEF01(R15)           Initiate branchlist
+SESDEF01 B     SESDEF02                Continue processing
+         B     SESDEF99                Cancel changes
+         B     SESDEF00                Redisplay screen
+SESDEF02 LA    R5,BUFFER               Point to beginning of buffer
+         LR    R6,R1                   Load max length of buffer
+SESDEF03 DS    0H
+         CLC   S4WS,0(R5)              Search for ws-size
+         BE    SESDEF05                Found: process logging
+         LA    R5,1(,R5)               Next byte
+         BCT   R6,SESDEF03             Examine next bytes
+         B     SESDEF00                CLEAR key pressed.
+SESDEF05 LA    R5,L'S4WS(,R5)          Point after 'WS-Size  ='
+         SH    R6,=AL2(L'S4WS)         Decrease BCT value
+         MVI   NUMFLD,C' '             Blank ...
+         MVC   NUMFLD+1(7),NUMFLD            NUMFLD first
+         LA    R4,NUMFLD               Point to work field
+*
+SESDEF06 CLC   S4OUT,0(R5)
+         BE    SESDEF07                Found: process workspace size
+         MVC   0(1,R4),0(R5)       Move 1 char. WS-Size into NUMFLD
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SESDEF06             Examine next bytes
+         B     SESDEF00                CLEAR key pressed
+SESDEF07 ST    R5,SAVE5
+         BAL   R14,SHIFT           Rep trailing space with leading zero
+         BAL   R14,NUMTST              Numeric test
+         LTR   R15,R15                 Is new size numeric?
+         BNZ   SESDEF09                No: invalid workspace size
+SESDEF08 CLC   NUMFLD,=C'00000500'     Less than 500 lines?      @rpa01
+         BL    SESDEF09                Yes: to low, invalid
+         CLC   NUMFLD,=C'01000000'     More than 1 million lines @rpa01
+         BL    SESDEF10                Low: OK.
+SESDEF09 MVC   MSG4,ERR8TXT            Msg: Invalid workspace size
+         B     SESDEF00                Inform programmer
+SESDEF10 PACK  DBW,NUMFLD              Pack new workspace size
+         XR    R4,R4
+         CVB   R5,DBW                  Make new # lines binary
+         M     R4,=A(NEXTENT)          Compute size to be getmained
+         LA    R5,2*NEXTENT(,R5)       + 2 entries
+         ST    R5,NEWSIZE              Save length
+SESDEF11 DS    0H
+         L     R5,SAVE5
+         LA    R5,L'S4OUT(,R5)         Point after 'Out Class= '
+         SH    R6,=AL2(L'S4OUT)        Decrease BCT value
+         LA    R4,BUFOUTCL             Point to copy of COMOUTCL
+*
+SESDEF12 DS    0H
+         CLC   S4PRT,0(R5)             Search for printer
+         BE    SESDEF13                Found: process printer name
+         MVC   0(1,R4),0(R5)       Move 1 char. OUTCLASS into BUFOUTCL
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next char.
+         LA    R4,1(,R4)               Next char.
+         BCT   R6,SESDEF12             Examine next bytes
+         B     SESDEF00                CLEAR key pressed
+SESDEF13 DS    0H
+         LA    R7,CHARSTXT             First operand             (BXLE)
+         LA    R2,1                    Index            @rpa01   (BXLE)
+         LA    R3,35(,R7)              Comparant        @rpa01   (BXLE)
+SESDEFBX CLC   0(1,R7),BUFOUTCL        SYSOUT class valid?
+         BE    SESDEF14                Yes: move logging
+         BXLE  R7,R2,SESDEFBX          No: try next char         @rpa01
+         MVC   MSG4,ERR9TXT            Msg: Invalid SYSOUT class
+         B     SESDEF00                Display screen
+SESDEF14 DS    0H
+         LA    R5,L'S4PRT(R5)          Point after 'Printer  ='
+         SH    R6,=AL2(L'S4PRT)        Decrease BCT value
+         LA    R4,COMMPRT              Point to default printer
+         MVI   COMMPRT,C' '            Blank ...
+         MVC   COMMPRT+1(7),COMMPRT          target
+*
+SESDEF15 DS    0H
+         CLC   S4LOG,0(R5)             Search for logging
+         BE    SESDEF16                Found: process logging YES/NO
+         MVC   0(1,R4),0(R5)       Move 1 char. printer into COMMPRT
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next char.
+         LA    R4,1(,R4)               Next char.
+         BCT   R6,SESDEF15             Examine next bytes
+         B     SESDEF00                Clear key pressed
+SESDEF16 DS    0H
+         LA    R5,L'S4LOG(,R5)         Point after 'Logging  ='
+         SH    R6,=AL2(L'S4LOG)        Decrease BCT value
+         LA    R4,COMMLOG              Point to COMMLOG
+*
+SESDEF17 DS    0H
+         CLC   S4NUL,0(R5)             Search for nulls
+         BE    SESDEF18                Found: process NULLS=
+         MVC   0(1,R4),0(R5)       Move 1 char. logging into COMMLOG
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next char.
+         LA    R4,1(,R4)               Next char.
+         BCT   R6,SESDEF17             Examine next bytes
+         B     SESDEF00                CLEAR key pressed
+SESDEF18 DS    0H
+         LA    R5,L'S4NUL(,R5)         Point after 'Nulls    ='
+         SH    R6,=AL2(L'S4NUL)        Decrease BCT value
+         LA    R4,BUFNULL              Point to NULLS
+SESDEF19 DS    0H
+         CLC   S4AUTO,0(R5)            Search for Autosave         @rp1
+         BE    SESDEF20                Found: process AUTOSAVE=Y/N
+         MVC   0(1,R4),0(R5)           Move 1 char. nulls into BUFNULL
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next char.                  @rp1
+         LA    R4,1(,R4)               Next char.                  @rp1
+         BCT   R6,SESDEF19             Examine next bytes          @rp1
+         B     SESDEF00                CLEAR key pressed           @rp1
+SESDEF20 DS    0H
+         LA    R5,L'S4AUTO(,R5)        Point after 'Autosave= '
+         SH    R6,=AL2(L'S4AUTO)       Decrease BCT value
+         LA    R4,BUFAUTO              Point to AUTOSAVE
+*
+SESDEF25 DS    0H
+         CLC   S4REP,0(R5)             Search Replace like members @rp5
+         BE    SESDEF26                Found: process REPLACE=YES/NO
+         MVC   0(1,R4),0(R5)       Move 1 char. Autosave in BUFAUTO
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character              @rp5
+         LA    R4,1(,R4)               Next character              @rp5
+         BCT   R6,SESDEF25             examine next bytes          @rp5
+         B     SESDEF00                clear key pressed           @rp5
+SESDEF26 DS    0H
+         LA    R5,L'S4REP(,R5)         Point after 'REPLACE  ='    @rp5
+         SH    R6,=AL2(L'S4REP)        Decrease BCT value
+         LA    R4,BUFREPL              Point to Copy of REPLACE
+*
+SESDEF27 DS    0H
+         CLC   S4COLS,0(R5)            Search COLS (scale line)
+         BE    SESDEF28                Found: process COLS=Y/N
+         MVC   0(1,R4),0(R5)           Move 1 char. REPLACE
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character              @rp5
+         LA    R4,1(,R4)               Next character              @rp5
+         BCT   R6,SESDEF27             examine next bytes          @rp5
+         B     SESDEF00                clear key pressed           @rp5
+SESDEF28 DS    0H
+         LA    R5,L'S4COLS(,R5)        Point after 'COLS     ='    @rp5
+         SH    R6,=AL2(L'S4COLS)       Decrease BCT value
+         LA    R4,CCOLS                Point to CCOLS              @rp5
+*
+SESDEF29 DS    0H
+         CLC   S4CONFI,0(R5)           Search for 'Confirm'
+         BE    SESDEF30                Found: process Confirm=Y/N
+         MVC   0(1,R4),0(R5)           Move 1 char. into CCOLS
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next char.
+         LA    R4,1(,R4)               Next char.
+         BCT   R6,SESDEF29             Examine next bytes
+         B     SESDEF00                CLEAR key pressed
+SESDEF30 DS    0H
+         LA    R5,L'S4CONFI(,R5)       Point after 'Confirm= '
+         SH    R6,=AL2(L'S4CONFI)      Decrease BCT value
+         LA    R4,BUFCONF              Point to Confirm
+*
+SESDEF31 DS    0H
+         CLC   S4CAPS,0(R5)            Search for 'CAPS'
+         BE    SESDEF32                Found: process Confirm=Y/N
+         MVC   0(1,R4),0(R5)           Move 1 char. into Confirm
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next char.
+         LA    R4,1(,R4)               Next char.
+         BCT   R6,SESDEF31             Examine next bytes
+         B     SESDEF00                CLEAR key pressed
+SESDEF32 DS    0H
+         LA    R5,L'S4CAPS(,R5)        Point after 'CAPS   = '
+         SH    R6,=AL2(L'S4CAPS)       Decrease BCT value
+         LA    R4,BUFCAPS              Point to CAPS
+*
+SESDEF33 DS    0H
+         CLC   S4PFX,0(R5)             SEARCH Default Prefix       @rp5
+         BE    SESDEF34                Found: process PREFIX=      @rp5
+         MVC   0(1,R4),0(R5)           Move 1 char. BUFCAPS
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character              @rp4
+         LA    R4,1(,R4)               Next character              @rp4
+         BCT   R6,SESDEF33             Examine next bytes          @rp5
+         B     SESDEF00                CLEAR key pressed           @rp3
+SESDEF34 DS    0H                                                  @rp5
+         LA    R5,L'S4PFX(,R5)         Point after 'PREFIX   ='    @rp5
+         SH    R6,=AL2(L'S4PFX)        Decrease BCT value
+         BNP   SESDEF38                Yes: finish scan (field erased)
+         LA    R4,COMMPFX
+SESDEF36 DS    0H                                                  @rp5
+         MVC   0(1,R4),0(R5)           Move 1 char. Prefix
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character              @rp4
+         LA    R4,1(,R4)               Next character              @rp4
+         BCT   R6,SESDEF36             Examine next bytes          @rp5
+SESDEF38 DS    0H                                                  @rp5
+         MVC   COMOUTCL,BUFOUTCL      BUFOUTCL into COMOUTCL in RPFCOMM
+         CLC   BUFNULL(3),=C'YES'      Null's is YES?
+         BE    SESDEF40                OK: branch                  @rp5
+         CLC   BUFNULL(2),=C'NO'       Null's is NO?
+         BE    SESDEF40                OK: Branch                  @rp5
+         MVC   MSG4,ERR3TXT            Msg: Nulls not YES or NO
+         MVC   MSG4+3(8),=C'-- Nulls'
+         B     SESDEF00
+SESDEF40 DS    0H                                                  @rp5
+         MVC   COMMNUL,BUFNULL         Move the good value
+         CLI   BUFAUTO,C'Y'            Autosave = Y?
+         BE    SESDEF42                Yes: good
+         CLI   BUFAUTO,C'N'            Autosave = N?
+         BE    SESDEF42                Yes: also good
+         MVC   MSG4,ERR5TXT            Msg: Autosave not Y or N
+         B     SESDEF00                                            @rp3
+SESDEF42 DS    0H
+         MVC   COMMAUTO,BUFAUTO        Move the good value
+         CLI   CCOLS,C'Y'              COLS = Y?
+         BE    SESDEF44                Yes: good
+         CLI   CCOLS,C'N'              COLS = N?
+         BE    SESDEF44                Yes: also good
+         MVC   MSG4,ERRBTXT            Msg: COLS not Y or N
+         B     SESDEF00
+SESDEF44 DS    0H
+         CLI   BUFCONF,C'/'            Confirm?
+         BE    SESDEF55                Yes: good
+         CLI   BUFCONF,C' '            Confirm  = N?
+         BE    SESDEF55                Yes: also good
+         MVC   MSG4,ERRATXT            Msg: Confirm not blank or /
+         B     SESDEF00
+SESDEF55 DS    0H
+         MVC   CCONFIRM,BUFCONF        Move the good value
+         CLC   BUFREPL(3),=C'YES'      Replace = Yes ?             @rp3
+         BE    SESDEF57                Yes: good                   @rp3
+         CLC   BUFREPL(3),=C'NO '      Replace = NO ?              @rp3
+         BE    SESDEF57                Yes: also good              @rp3
+         MVC   MSG4,ERR3TXT            Msg: Replace not YES or NO
+         MVC   MSG4+3(8),=C' Replace'
+         B     SESDEF00                                            @rp3
+SESDEF57 DS    0H                                                  @rp3
+         MVC   COMMREPL,BUFREPL        Move the good value
+         CLC   BUFCAPS(3),=C'AUT'      CAPS= automatic?
+         BE    SESDEF59                Yes: good
+         CLC   BUFCAPS(3),=C'ON '      CAPS= ON?
+         BE    SESDEF59                Yes: good
+         CLC   BUFCAPS(3),=C'OFF'      CAPS= OFF (Asis mode)?
+         BE    SESDEF59                Yes: good
+         MVC   MSG4,ERR6TXT            Msg: CAPS not AUT,ON or OFF
+         B     SESDEF00                                            @rp3
+SESDEF59 DS    0H                                                  @rp3
+         MVC   COMMCAPS,BUFCAPS        Move the good value in RPFCOMM
+         TM    COMMFLG1,$COMNODB       Profile present?
+         BO    SESDEF61                No: don't update
+         MVC   DBLOG,COMMLOG           Default Logging
+         MVC   DBNULL,COMMNUL      Move default NULLS in DB/profile
+         MVC   DBAUTO,COMMAUTO     Move default autosave in prof.  @rp1
+         MVC   DBCAPS,COMMCAPS     Move default CAPS in profile
+         MVC   DBREPL,COMMREPL     Move default Replace  in prof.  @rp3
+         MVC   DBPFX,COMMPFX           Move default Prefix in prof
+         MVC   DBCLS,COMOUTCL      Move default SYSOUT class in Profile
+         MVC   DBPRT,COMMPRT       Move default Printer in Profile
+         MVC   DBCOLS,CCOLS            Move default COLS (scale line)
+         MVC   DBCONFIR,CCONFIRM       Move default Confirm member del
+         MVC   DBSIZE,NEWSIZE          Move default ws-size        @rp6
+SESDEF61 DS    0H                                                  @rp3
+         MVC   MSG1,MSG1TXT            Move text 'updated' to user
+         NI    COMMFLG1,255-$COMCOLS   Reset scale line flag
+         CLI   CCOLS,C'Y'              Cols set to Y?
+         BNE   SESDEF99                No: no scale line used in EDIT
+         OI    COMMFLG1,$COMCOLS       Yes: scale line present in EDIT
+*
+SESDEF99 DS    0H
+         L     R14,SAVE14
+         BR    R14
+         TITLE 'CHANGE ASSEMBLER MACLIBS, PARMS + CONTROL STATEMENTS'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        A S M D E F - SET ASSEMBLER DEFAULTS                         *
+*                                                                     *
+*                      INPUT:  SCR6TXT                                *
+*                      OUTPUT: SCR6TXT                                *
+*                              RPFCOMM                                *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+ASMDEF   DS    0H
+         ST    R14,SAVE14              save return reg.
+         LA    R4,ASMBUF               Output buffer ASM/LKED items
+         LA    R5,ASMBL                Length of this buffer
+         LR    R6,R4                   Copy for MVCL
+         IC    R7,=X'40'               Blank
+         SLL   R7,24                   Promote to high-order
+         MVCL  R4,R6                   Blank out this area
+ASMDEF00 DS    0H
+         L     R3,COMASMPT             Point to RPFASM section
+         USING COMMASMD,R3             Provide addressability
+         MVC   SCR6ASM,COMMASM                                     @rp5
+         CLI   SCR6ASM,X'40'           Nothing filled in ?         @rp5
+         BNE   ASMDEF0A                Yes: branch                 @rp5
+         MVC   SCR6ASM,=CL8'IFOX00'    Default assembler program   @rp5
+ASMDEF0A DS    0H                                                  @rp5
+         MVI   SCR6MAC1,C' '           Blank field
+         MVC   SCR6MAC1+1(L'SCR6MAC1-1),SCR6MAC1
+         MVC   SCR6MAC2,SCR6MAC1       Blank
+         MVC   SCR6MAC3,SCR6MAC1            Maclib
+         MVC   SCR6MAC4,SCR6MAC1                  fields
+         MVC   SCR6MAC5,SCR6MAC1
+         MVC   SCR6MAC6,SCR6MAC1
+         MVC   SCR6MAC1,COMMMAC1       Macro
+         MVC   SCR6MAC2,COMMMAC2       Macro
+         MVC   SCR6MAC3,COMMMAC3       Macro
+         MVC   SCR6MAC4,COMMMAC4       Macro
+         MVC   SCR6MAC5,COMMMAC5       Macro
+         MVC   SCR6MAC6,COMMMAC6       Macro
+         MVC   SCR6APRM(30),COMMASPA   Clear
+         MVC   SCR6BPRM(30),COMMLKPA         other
+         MVC   STMNT1+2(69),COMMLK1                fields
+         MVC   STMNT2+2(69),COMMLK2                       from
+         MVC   STMNT3+2(69),COMMLK3
+         MVC   STMNT4+2(69),COMMLK4
+         MVC   STMNT5+2(69),COMMLK5
+         MVC   STMNT6+2(69),COMMLK6                      RPFCOMM
+         DROP  R3                      COMMASMD
+         LA    R1,SCR6TXT              Parameter TPUTS (address screen)
+         LA    R0,SCR6LEN              Parameter TPUTS (length)
+         L     R15,=V(TPUTS)
+         BALR  R14,R15                 Write screen
+         MVI   MSG6,C'-'               Clear msg ...
+         MVC   MSG6+1(21),MSG6                   field
+         BAL   14,CONV                 Do a TGET asis
+         B     ASMDEF01(R15)           Initiate branchlist
+ASMDEF01 B     ASMDEF02                Continue processing
+         B     ASMDEF99                CANCEL changes
+         B     ASMDEF00                Re-display screen
+ASMDEF02 DS    0H
+         LA    R5,BUFFER               Point to beginning of Buffer
+         LR    R6,R1                   Maximum length of Buffer
+ASMDEF3A DS    0H
+         CLC   CASMNAME,0(R5)          Assembler program name reached?
+         BE    ASMDEF3B                Yes: Found, scan next field
+         LA    R5,1(,R5)               Next byte of buffer
+         BCT   R6,ASMDEF3A             Loop
+         B     ASMDEF00                Display screen
+ASMDEF3B DS    0H
+         LA    R5,L'CASMNAME(,R5)      Point after Maclib1
+         SH    R6,=AL2(L'CASMNAME)     Skip bytes in 'BUFFER'
+         LA    R3,BUFASM               Assembler name field
+ASMDEF03 DS    0H
+         CLC   CMAC1,0(R5)             1st Maclib reached?
+         BE    ASMDEF05                Yes: Found, scan next field
+         MVC   0(1,R3),0(R5)           Move byte assembler name field
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte of buffer
+         LA    R3,1(,R3)               Next byte assembler name field
+         BCT   R6,ASMDEF03             Loop
+         B     ASMDEF00                Display screen
+ASMDEF05 DS    0H
+         LA    R5,L'CMAC1(,R5)         Point after Maclib1
+         SH    R6,=AL2(L'CMAC1)        Skip bytes in 'BUFFER'
+         LA    R3,BUFMAC1              First Maclib field
+ASMDEF07 DS    0H
+         CLC   CMAC2,0(R5)             2nd Maclib reached?
+         BE    ASMDEF09                Yes: found
+         MVC   0(1,R3),0(R5)           Move byte 1st Maclib field
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 1st Maclib field
+         BCT   R6,ASMDEF07             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF09 DS    0H
+         LA    R5,L'CMAC2(,R5)         Point after Maclib2
+         SH    R6,=AL2(L'CMAC2)        Skip bytes in 'BUFFER'
+         LA    R3,BUFMAC2              2nd Maclib field
+ASMDEF11 DS    0H
+         CLC   CMAC3,0(R5)             3rd Maclib reached?
+         BE    ASMDEF13                Yes: found
+         MVC   0(1,R3),0(R5)           Move byte 2nd Maclib field
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 2nd Maclib field
+         BCT   R6,ASMDEF11             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF13 DS    0H
+         LA    R5,L'CMAC3(,R5)         Point after Maclib3
+         SH    R6,=AL2(L'CMAC3)        Skip bytes in 'BUFFER'
+         LA    R3,BUFMAC3              3rd Maclib field
+ASMDEF15 DS    0H
+         CLC   CMAC4,0(R5)             4th Maclib reached?
+         BE    ASMDEF17                Yes: found
+         MVC   0(1,R3),0(R5)           Move byte 3rd Maclib field
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 3rd Maclib field
+         BCT   R6,ASMDEF15             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF17 DS    0H
+         LA    R5,L'CMAC4(,R5)         Point after Maclib4
+         SH    R6,=AL2(L'CMAC4)        Skip bytes in 'BUFFER'
+         LA    R3,BUFMAC4              4th Maclib field
+ASMDEF19 DS    0H
+         CLC   CMAC5,0(R5)             5th Maclib reached?
+         BE    ASMDEF21                Yes: found
+         MVC   0(1,R3),0(R5)           Move byte 4th Maclib field
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 4th Maclib field
+         BCT   R6,ASMDEF19             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF21 DS    0H
+         LA    R5,L'CMAC5(,R5)         Point after Maclib5
+         SH    R6,=AL2(L'CMAC5)        Skip bytes in 'BUFFER'
+         LA    R3,BUFMAC5              5th Maclib field
+ASMDEF23 DS    0H
+         CLC   CMAC6,0(R5)             6th Maclib reached?
+         BE    ASMDEF25                Yes: found
+         MVC   0(1,R3),0(R5)           Move byte 5th Maclib field
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 5th Maclib field
+         BCT   R6,ASMDEF23             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF25 DS    0H
+         LA    R5,L'CMAC6(,R5)         Point after Maclib6
+         SH    R6,=AL2(L'CMAC6)        Skip bytes in 'BUFFER'
+         LA    R3,BUFMAC6              6th Maclib field
+ASMDEF27 DS    0H
+         CLC   CAPRM,0(R5)             Assembler Parm field ?
+         BE    ASMDEF29                Yes: found
+         MVC   0(1,R3),0(R5)           Move byte 6th Maclib field
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 6th Maclib field
+         BCT   R6,ASMDEF27             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF29 DS    0H
+         LA    R5,L'CAPRM(,R5)         Point after Assembler parm
+         SH    R6,=AL2(L'CAPRM)        Skip 12 bytes in 'BUFFER'
+         LA    R3,BUFAPRM              Assembler parm field
+ASMDEF31 DS    0H
+         CLC   CLPRM,0(R5)             Linkage Editor parm?
+         BE    ASMDEF33                Yes: found.
+         MVC   0(1,R3),0(R5)           Move byte ASM parm field
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte Asm parm FIELD
+         BCT   R6,ASMDEF31             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF33 DS    0H
+         LA    R5,L'CLPRM(,R5)         Point after LKED parm
+         SH    R6,=AL2(L'CLPRM)        Skip 12 bytes in 'BUFFER'
+         LA    R3,BUFLPRM              Linkage editor parm field
+ASMDEF35 DS    0H
+         CLC   C1,0(R5)                1st control statement field?
+         BE    ASMDEF37                Yes: found.
+         MVC   0(1,R3),0(R5)           Move byte LKED Parm field
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte LKED Parm field
+         BCT   R6,ASMDEF35             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF37 DS    0H
+         LA    R5,L'C1(,R5)            Point after 1>
+         SH    R6,=AL2(L'C1)           Skip   bytes in 'BUFFER'
+         LA    R3,BUFC1                1st LKED control statement
+ASMDEF39 DS    0H
+         CLC   C2,0(R5)                2nd control statement field?
+         BE    ASMDEF41                Yes: found.
+         MVC   0(1,R3),0(R5)           Move byte 1st control statement
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 1st control statement
+         BCT   R6,ASMDEF39             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF41 DS    0H
+         LA    R5,L'C2(,R5)            Point after 2>
+         SH    R6,=AL2(L'C2)           Skip   bytes in 'BUFFER'
+         LA    R3,BUFC2                2nd LKED control statement
+ASMDEF43 DS    0H
+         CLC   C3,0(R5)                3rd control statement field?
+         BE    ASMDEF45                Yes: found
+         MVC   0(1,R3),0(R5)           Move byte 2nd control statement
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 2nd control statement
+         BCT   R6,ASMDEF43             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF45 DS    0H
+         LA    R5,L'C3(,R5)            Point after 3>
+         SH    R6,=AL2(L'C3)           Skip   bytes in 'BUFFER'
+         LA    R3,BUFC3                3rd LKED control statement
+ASMDEF47 DS    0H
+         CLC   C4,0(R5)                4th control statement field?
+         BE    ASMDEF49                Yes: found
+         MVC   0(1,R3),0(R5)           Move byte 3rd control statement
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 3rd control statement
+         BCT   R6,ASMDEF47             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF49 DS    0H
+         LA    R5,L'C4(,R5)            Point after 4>
+         SH    R6,=AL2(L'C4)           Skip   bytes in 'BUFFER'
+         LA    R3,BUFC4                4th LKED control statement
+ASMDEF51 DS    0H
+         CLC   C5,0(R5)                5th control statement field?
+         BE    ASMDEF53                Yes: found
+         MVC   0(1,R3),0(R5)           Move byte 4th control statement
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 4th control statement
+         BCT   R6,ASMDEF51             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF53 DS    0H
+         LA    R5,L'C5(,R5)            Point after 5>
+         SH    R6,=AL2(L'C5)           Skip   bytes in 'BUFFER'
+         LA    R3,BUFC5                5th LKED control statement
+ASMDEF55 DS    0H
+         CLC   C6,0(R5)                6th control statement field?
+         BE    ASMDEF57                Yes: found
+         MVC   0(1,R3),0(R5)           Move byte 5th control statement
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 5th control statement
+         BCT   R6,ASMDEF55             Test next byte
+         B     ASMDEF00                Display screen
+ASMDEF57 DS    0H
+         LA    R5,L'C6(,R5)            Point after 6>
+         SH    R6,=AL2(L'C6)           Skip   bytes in 'BUFFER'
+         BNP   ASMDEF70                Yes: end of scan
+         LA    R3,BUFC6                6th LKED control statement
+ASMDEF59 DS    0H
+         MVC   0(1,R3),0(R5)           Move byte 6th control statement
+         OI    0(R3),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 6th control statement
+         BCT   R6,ASMDEF59             Move next byte
+ASMDEF70 DS    0H
+         TM    COMMFLG1,$COMNODB       Profile present?
+         BO    ASMDEF72                No: don't update
+         L     R2,COMASMPT             Point to RPFASM section
+         USING COMMASMD,R2             Provide addressability
+         MVC   COMMASM,BUFASM          Assembler program name
+         MVC   COMMMAC1,BUFMAC1        Move
+         MVC   COMMMAC2,BUFMAC2             the
+         MVC   COMMMAC3,BUFMAC3                 Mac
+         MVC   COMMMAC4,BUFMAC4                     libs
+         MVC   COMMMAC5,BUFMAC5
+         MVC   COMMMAC6,BUFMAC6
+         MVC   COMMASPA,BUFAPRM        Move Assembler parm to RPFCOMM
+         MVC   COMMLKPA,BUFLPRM        Move LKED   parm to RPFCOMM
+         MVC   COMMLK1,BUFC1           Move 1st c-stmnt to RPFCOMM
+         MVC   COMMLK2,BUFC2           Move 2nd c-stmnt to RPFCOMM
+         MVC   COMMLK3,BUFC3           Move 3rd c-stmnt to RPFCOMM
+         MVC   COMMLK4,BUFC4           Move 4th c-stmnt to RPFCOMM
+         MVC   COMMLK5,BUFC5           Move 5th c-stmnt to RPFCOMM
+         MVC   COMMLK6,BUFC6           Move 6th c-stmnt to RPFCOMM
+         MVC   DBASM,COMMASM           Move default asm prog in prof.
+         MVC   DBMAC1,COMMMAC1         move
+         MVC   DBMAC2,COMMMAC2
+         MVC   DBMAC3,COMMMAC3
+         MVC   DBMAC4,COMMMAC4               to
+         MVC   DBMAC5,COMMMAC5
+         MVC   DBMAC6,COMMMAC6
+         MVC   DBASPA,COMMASPA                     the
+         MVC   DBLKPA,COMMLKPA
+         MVC   DBLK1,COMMLK1
+         MVC   DBLK2,COMMLK2
+         MVC   DBLK3,COMMLK3                           profile
+         MVC   DBLK4,COMMLK4
+         MVC   DBLK5,COMMLK5
+         MVC   DBLK6,COMMLK6                                   PDS
+ASMDEF72 DS    0H
+         MVC   MSG1,MSG1TXT            Msg: Updated
+         DROP  R2                      COMMASMD
+ASMDEF99 DS    0H
+         L     R14,SAVE14              restore return reg.
+         BR    R14                     and return
+         TITLE 'CHANGE DEFAULT ALLOCATIONS'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        A L L O C - SET DEFAULT ALLOCATIONS                          *
+*                                                                     *
+*                    1. OS member, data set and volume                *
+*                    2. LIBRARIAN module, masterfile and volume       *
+*                    3. ARCHIVER archive VSAM cluster                 *
+*                                                                     *
+*                    Input:  SCR3TXT                                  *
+*                            JFCB                                     *
+*                    Output: SCR3TXT                                  *
+*                            RPFCOMM                                  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+ALLOC    DS    0H
+         ST    R14,SAVE14
+ALLOC00  DS    0H
+         MVI   ALLOCBUF,X'40'          Blank ...
+         MVC   ALLOCBUF+1(L'ALLOCBUF-1),ALLOCBUF  buffer
+         MVC   SCR3VOL(6),COMMVOL      Volume into screen
+         MVI   SCR3DSN,C' '            Blank data set name in screen
+         MVC   SCR3DSN+1(L'SCR3DSN-1),SCR3DSN
+         MVC   SCR3MSTR,SCR3DSN        Blank master file in screen
+         MVC   SCR3ARCH,SCR3DSN        Blank Archive cluster in screen
+         MVC   SCR3DSN,COMMDSN         DSNAME in screen
+         MVC   SCR3MSTR,COMMSTR        Librarian master file in screen
+         MVC   SCR3ARCH,COMMARCH       Librarian master file in screen
+         MVC   SCR3MEM(8),COMMBR       Member into screen
+         MVC   SCR3MSTV(6),COMMSVOL    LIBRARIAN Volume
+         MVC   SCR3MOD(8),COMMMOD      LIBRARIAN Module
+         LA    R1,SCR3TXT              Parameter TPUTS (address screen)
+         LA    R0,SCR3LEN              Parameter TPUTS (length)
+         L     R15,=V(TPUTS)
+         BALR  R14,R15                 Write screen
+         BAL   R14,CONV                Read the screen
+         B     ALLOC01A(R15)           Initiate branchlist
+ALLOC01A B     ALLOC02                 Continue processing
+         B     ALLOC99                 Cancel changes
+         B     ALLOC00                 Redisplay screen
+ALLOC02  DS    0H
+         MVI   COMMDSN,C' '            Clear ...
+         MVC   COMMDSN+1(L'COMMDSN-1),COMMDSN   DSName
+         MVC   COMMARCH,COMMDSN        Clear Archiver VSAM cluster
+         MVC   COMMSVOL,COMMDSN        Clear MASTERFILE volume
+         MVC   COMMVOL,COMMDSN         Clear VOLUME
+         MVC   COMMBR,COMMDSN          Clear MEMBER
+         MVC   COMMMOD,COMMDSN         Clear MASTERFILE module
+         MVC   COMMSTR,COMMDSN         Clear MASTERFILE
+         LA    R5,BUFFER               Point to beginning of buffer
+         LR    R6,R1                   Load max length of buffer
+*
+ALLOC15  DS    0H
+         CLC   S3MEM,0(R5)             Search for MEMBER=
+         BE    ALLOC17                 Found: process Member
+         MVC   0(1,R4),0(R5)           Move 1 char. Option
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,ALLOC15              Examine next bytes
+         B     ALLOC00                 CLEAR key pressed
+ALLOC17  DS    0H
+         LA    R5,L'S3MEM(,R5)         Point after 'MEMBER='
+         SH    R6,=AL2(L'S3MEM)        Discount BCT register
+         LA    R4,COMMBR               Point to member in RPFCOMM
+*
+ALLOC19  DS    0H
+         CLC   S3DSN,0(R5)             Search for DSNAME=
+         BE    ALLOC21                 Found: process DSNAME
+         MVC   0(1,R4),0(R5)       Move 1 char. MEMBER into RPFCOMM
+         TR    0(1,R4),COMTCAPS        Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,ALLOC19              Examine next bytes
+         B     ALLOC00                 CLEAR key pressed
+ALLOC21  DS    0H
+         LA    R5,L'S3DSN(,R5)         Point after ',DSNAME='
+         SH    R6,=AL2(L'S3DSN)        Discount BCT register
+         LA    R4,BUFDSN               Point to DSNAME in
+*
+ALLOC23  DS    0H
+         CLC   S3VOL,0(R5)             Search for VOLUME=
+         BE    ALLOC25                 Found: process volume
+         MVC   0(1,R4),0(R5)       Move 1 char. DSNAME into RPFCOMM
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,ALLOC23              Examine next bytes
+         B     ALLOC00                 CLEAR key pressed
+ALLOC25  DS    0H
+         LA    R5,L'S3VOL(,R5)         Point after 'VOLUME='
+         SH    R6,=AL2(L'S3VOL)        Discount BCT register
+         LA    R4,COMMVOL              Point to VOLUME in RPFCOMM
+*
+ALLOC26  DS    0H
+         CLC   S3MOD,0(R5)             Search for LIBRARIAN module
+         BE    ALLOC27                 Found: process LIBRARIAN mod.
+         MVC   0(1,R4),0(R5)       Move 1 char. VOLUME into RPFCOMM
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,ALLOC26              Examine next bytes
+         B     ALLOC00                 Clear key pressed
+ALLOC27  DS    0H
+         LA    R5,L'S3MOD(,R5)         Point after 'MODULE='
+         SH    R6,=AL2(L'S3MOD)        Discount BCT register
+         LA    R4,COMMMOD          Point to LIB module in RPFCOMM
+*
+ALLOC29  DS    0H
+         CLC   S3MSTR,0(R5)            Search for ',MASTER='
+         BE    ALLOC31                 Found: process MASTER file
+         MVC   0(1,R4),0(R5)       Move 1 char. LIBR.MODULE to RPFCOMM
+         TR    0(1,R4),COMTCAPS        Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   6,ALLOC29               Examine next bytes
+         B     ALLOC00                 CLEAR key pressed
+ALLOC31  DS    0H
+         LA    R5,L'S3MSTR(,R5)        Poin after ',MASTER='
+         SH    R6,=AL2(L'S3MSTR)       Discount BCT register
+         LA    R4,BUFMSTR              Point to MASTERFILE
+*
+ALLOC33  DS    0H
+         CLC   S3MSTV,0(R5)            Search for 'VOLUME=' (LIBR.)
+         BE    ALLOC35                 Found: process VOLUME (LIBR.)
+         MVC   0(1,R4),0(R5)       Move 1 char. MASTFILE in RPFCOMM
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,ALLOC33              Examine next bytes
+         B     ALLOC00                 CLEAR key pressed
+ALLOC35  DS    0H
+         LA    R5,L'S3MSTV(,R5)        Point after 'VOLUME='
+         SH    R6,=AL2(L'S3MSTV)       Discount BCT register
+         LA    R4,COMMSVOL             Point to LIBR.volume in RPFCOMM
+*
+ALLOC49  DS    0H
+         CLC   S3ARCH,0(R5)            Search for ARCHIVER archive
+         BE    ALLOC51                 Found: process
+         MVC   0(1,R4),0(R5)       Move 1 char. volume in RPFCOMM
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,ALLOC49              Examine next bytes
+         B     ALLOC00                 CLEAR key pressed
+ALLOC51  DS    0H
+         LA    R5,L'S3ARCH(,R5)        Point after 'Archive='
+         SH    R6,=AL2(L'S3ARCH)       Discount BCT register
+         BNP   ALLOC55                 Yes: finish scan (field erased)
+         LA    R4,BUFARCH              Point to Archive DSN
+*
+ALLOC53  DS    0H
+         MVC   0(1,R4),0(R5)       Move 1 char. Archive in RPFCOMM
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,ALLOC53              Examine next bytes
+ALLOC55  DS    0H
+         TM    COMMFLG1,$COMNODB       Profile present?
+         BO    ASMDEF57                No: don't update
+         MVC   COMMDSN,BUFDSN          Data set name in RPFCOMM
+         MVC   COMMSTR,BUFMSTR         Librarian masterfile in RPFCOMM
+         MVC   COMMARCH,BUFARCH        Archiver cluster in RPFCOMM
+         MVC   DBDSN,COMMDSN           Move default DSNAME
+         MVC   DBMEM,COMMBR            Move 'MEMBER' field
+         MVC   DBVOL,COMMVOL           Move 'VOLUME' field
+         MVC   DBMSTR,COMMSTR          Move 'MASTERFILE' field
+         MVC   DBMSVOL,COMMSVOL        Move 'MASTERFILE VOL' field
+         MVC   DBMOD,COMMMOD           Move 'MASTERFILE MOD' field
+         MVC   DBARCH,COMMARCH         Move ARCHIVE archive DSN
+ALLOC57  DS    0H
+         MVC   MSG1,MSG1TXT            Move text 'updated' to user
+ALLOC99  DS    0H
+         L     R14,SAVE14
+         BR    R14
+         TITLE 'Convert screen routine'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        C O N V.   Convert the menu, session default screen,         *
+*                   allocation screen and Assembler defaults screen.  *
+*                   Do a TGET ASIS to obtain the AID byte to          *
+*                   test if 'ENTER' is used or PFK03 or PFK15.        *
+*                   After this test remove all de unnecesary SBA's.   *
+*                                                                     *
+*        Returncodes: 00 - screen converted. Enter key is used        *
+*                          Reg 1 contains the length of the screen    *
+*                     04 - Screen not converted. PFK03/PFK14 key used *
+*                     08 - Screen not converted. Other key is used    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+CONV     DS    0H
+         ST    R14,R14CONV             Save register 14
+         LA    R5,BUFFER               Output formatted buffer
+         L     R3,COMMSCR              Load output buffer
+         LR    R1,R3                   Area address
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         LA    R0,1240                 Length
+         TGET  (1),(0),R
+         LR    R4,R1                   Save length
+         CLI   0(R3),X'F3'             PF03 (end) pressed?
+         BE    CONV051                 Yes: exit
+         CLI   0(R3),X'C3'             PF15 (end) pressed?
+         BE    CONV051                 Yes: exit
+         CLI   0(R3),X'7D'             'ENTER' pressed
+         BNE   CONV053                 No: end with rc = 8
+         XR    R2,R2                   Init output length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   CONV053                 Branch if zero or less
+         LA    R3,3(,R3)
+*
+*        Input screen is pointed to by register 3
+*        Output screen is pointed to by register 5
+*        The next section will remove all the SBA's
+*
+CONV001  CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV055                 Conversion ready
+CONV003  LA    R3,3(,R3)               Skip 3 bytes input
+         SH    R4,=H'2'                Discount with 2
+         BNP   CONV055                 <=0: end of conversion
+         BCT   R4,CONV001              Test next byte
+         B     CONV055
+CONV051  DS    0H                      PF03/15 pressed
+         LA    R15,4                   Rc = 4
+         B     CONV099
+CONV053  DS    0H                      Unknown key pressed
+         LA    R15,8                   Rc = 8
+         B     CONV099
+CONV055  DS    0H                      Successful end
+         XR    R15,R15                 Rc = 0
+CONV099  LR    R1,R2                   Output length in register 1
+         L     R14,R14CONV             Restore register 14
+         BR    R14                     Return
+         TITLE 'Numeric test routine'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        N U M T S T - Subroutine, numeric test of a 8 char field.    *
+*                                                                     *
+*                    Input:  NUMFLD, field contains chars to test     *
+*                    Output: NUMFLD, remains unchanged                *
+*                            Reg.15, return code 0 - numeric          *
+*                                                8 - not numeric      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+NUMTST   DS    0H
+         LA    R1,8                    Lenght of NUMFLD
+         LA    R4,NUMFLD               Field to be tested
+NUMTST01 CLI   0(R4),X'F0'             <0?
+         BL    NUMTST03                Yes: not numeric
+         CLI   0(R4),X'F9'             >9?
+         BH    NUMTST03                Yes: not numeric
+         LA    R4,1(,R4)               Next character
+         BCT   R1,NUMTST01             Loop until all bytes tested
+         XR    R15,R15                 Rc = 0, numeric
+         B     NUMTST99                Exit
+NUMTST03 LA    R15,8                   RC = 8, not numeric
+NUMTST99 DS    0H
+         BR    R14                     Return
+         TITLE 'REGULATE LINE NUMBERS'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        S H I F T - Subroutine, chop off trailing spaces and replace *
+*                    them with leading zeroes.                        *
+*                                                                     *
+*                    INPUT:  NUMFLD, field to be shifted, max 8 char, *
+*                    OUTPUT: NUMFLD, Trailing spaces replaced with    *
+*                                    Leading FILLCHAR                 *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SHIFT    DS    0H
+         LA    R1,8                    Maximum 8 characters
+SHIFT01  CLI   NUMFLD+7,X'40'          Last character is a space?
+         BNE   SHIFT99                 No: exit
+         MVC   WRKFLD+1(7),NUMFLD      Move first 7 chars into WRKFLD+1
+         MVI   WRKFLD,X'F0'            Insert leading zero
+         MVC   NUMFLD,WRKFLD           Restore NUMFLD
+         BCT   R1,SHIFT01              Shift max 8 times
+SHIFT99  DS    0H
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:   WRITEMBR                                          *
+*        Function:  Write the @RPFPROF member in the partitioned      *
+*                   data set with DD-name = ISPPROF                   *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+WRITEMBR DS    0H
+         ST    R14,R14WRITE            Save return register
+         L     R3,=A(DBLEN)            Mac length
+         L     R2,READBUF              Max length
+         L     R4,BLKSIZE              Max blocksize
+         MVI   COMOPN,128
+         OPEN  (RPFPROF,(UPDAT)),MF=(E,COMCLS)  Re-open
+         RPFSA24                       Enter AMODE24
+         L     R0,BLKSIZE              Current BLKSIZE
+         GETMAIN R,LV=(0)
+         LR    R5,R1                   Save address temporary buffer
+         FIND  RPFPROF,TTR,C           Point to member to write
+WRITE1   DS    0H
+         READ  DECBR,SF,RPFPROF,(5),'S',MF=E Read the block
+         CHECK DECBR                   and wait for completion
+         WRITE DECBR,SF,RPFPROF,(2),'S',MF=E write the new block
+         CHECK DECBR                   and wait for completion
+         SR    R3,R4                   Subtract BLKSIZE
+         AR    R2,R4                   Next in profile
+         LTR   R3,R3                   More to read?
+         BP    WRITE1                  Yes.
+WRITE3   RPFSA31                       Restore addressing mode
+         FREEMAIN R,LV=(4),A=(5)
+         L     R14,R14WRITE            Restore return register
+         BR    R14                     Return
+*
+*
+ERR1TXT  DC    CL25'---------- Invalid option'
+ERR2TXT  DC    CL25'----- No profile data set'
+ERR3TXT  DC    CL25'----------- not YES or NO'
+ERR4TXT  DC    CL25'--- GETMAIN failed, Retry'
+ERR5TXT  DC    CL25'----- AUTOSAVE not Y or N'
+ERR6TXT  DC    CL25'-- CAPS not AUT,ON or OFF'
+ERR7TXT  DC    CL25'--- Freemain failed, Stop'
+ERR8TXT  DC    CL25'-- Invalid workspace size'
+ERR9TXT  DC    CL25'---- Invalid SYSOUT class'
+ERRATXT  DC    CL25'---- Confirm not '' '' or /'
+ERRBTXT  DC    CL25'--------- COLS not Y or N'
+MSG1TXT  DC    CL25'----------------- Updated'
+MSG2TXT  DC    CL25'--- Upd. size destroys ws'
+*
+MDLPROF  DCB   DDNAME=ISPPROF,LRECL=80,MACRF=(R,W),DSORG=PO
+MDLPROFL EQU   *-MDLPROF
+*
+CHARSTXT DC    C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+         LTORG
+         DROP
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+         TITLE 'SCREEN FORMATS'
+SCREENS  CSECT
+SCR1TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR1TXT  DC    X'00C21100001DF8'       EW of EWA in data stream r1,c1+
+SCR1LNE  DC    CL79'--------------------------- RPF Defaults ----------C
+               ----------------------------'
+         ORG   SCR1LNE+54
+MSG1     DS    CL25
+         ORG   ,
+R2C1     DC    X'110000',X'1DF8',C'Option  ===>',X'1DC113'         @rp1
+         DC    C'     ',X'1DF0'                                    @rp1
+R3C62    DC    X'110000',AL3(GREEN),C'User ID - ',AL3(TURQ) r03,c62+
+SCR1UID  DS    CL7
+R4C4     DC    X'110000',AL3(WHITE),C'0  '  r4,c4+
+         DC    AL3(TURQ)
+         DC    CL13'STATUS'
+         DC    AL3(GREEN)
+         DC    CL40'Display current RPF status'
+R4C4L    EQU   *-R4C4
+*
+         DC    X'110000',AL3(WHITE),C'1  '  r4,c4+
+         DC    AL3(TURQ)
+         DC    CL13'OPTIONS'
+         DC    AL3(GREEN)
+         DC    CL40'Change defaults and workspace size'
+*
+         DC    X'110000',AL3(WHITE),C'2  '
+         DC    AL3(TURQ)
+         DC    CL13'ALLOCATIONS'
+         DC    AL3(GREEN)
+         DC    CL40'Change default allocations'
+*
+         DC    X'110000',AL3(WHITE),C'3  '
+         DC    AL3(TURQ)
+         DC    CL13'PFK''S'
+         DC    AL3(GREEN)
+         DC    CL40'Change default Program Function Keys'
+*
+         DC    X'110000',AL3(WHITE),C'4  '
+         DC    AL3(TURQ)
+         DC    CL13'ASMDEF'
+         DC    AL3(GREEN)
+         DC    CL40'Change default maclibs + control stmnts'
+*
+         DC    X'110000',AL3(WHITE),C'X  '
+         DC    AL3(TURQ)
+         DC    CL13'EXIT'
+         DC    AL3(GREEN)
+         DC    CL40'Return to MAIN menu'
+*
+RLASTC2  DC    X'110000',AL3(TURQ)      r last, c2
+         DC    C'Hit ',AL3(WHITE),C'PF03/15 ',AL3(TURQ)
+         DC    C'to return to the RPF main menu'
+SCR1LEN  EQU   *-SCR1TXT
+*
+*        Allocations screen
+*
+SCR3TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR3TXT  DC    X'00C21100001DF8'       EW or EWA nolock
+         DC    CL79'RPF Default allocations ---------------------------X
+               ---------------------------'
+S3R1C56  DC    X'110000'               r1,c56+
+MSG3     DC    CL25'-------------------------'
+*
+S3R4C1   DC    X'110000'               r4,c1+
+         DC    X'1DF8',AL3(YELLOW),C'Data Set Information:'
+*
+S3R5C1   DC    X'110000'               r5,c1+
+         DC    X'1DF5',AL3(TURQ)
+S3MEM    DC    C'Member =',X'1DC913',AL3(RED)
+         DC    AL3(USCORE)
+SCR3MEM  DC    CL8' ',AL3(HDEFAULT),X'1DF0'     Member
+         DC    AL3(TURQ)
+         DC    C' ',X'1DF5'            SF + protected MDT on
+S3DSN    DC    C',Dsname=',X'1DC9',AL3(RED)
+         DC    AL3(USCORE)
+SCR3DSN  DC    CL46' ',AL3(HDEFAULT),X'1DF0'    DSNAME
+*
+S3R6C1   DC    X'110000'               r6,c1+
+         DC    X'1DF5',AL3(TURQ)
+S3VOL    DC    C'Volume =',AL3(RED),X'1DC9'
+         DC    AL3(USCORE)
+SCR3VOL  DC    CL6' ',AL3(HDEFAULT),X'1DF0'     Volume
+*
+S3R8C1   DC    X'110000'               r8,c1+
+         DC    X'1DF0',AL3(YELLOW),C'LIBRARIAN master file:'
+*
+S3R9C1   DC    X'110000'               r9,c1+
+         DC    X'1DF5',AL3(TURQ)
+S3MOD    DC    C'Module =',X'1DC9',AL3(RED)
+         DC    AL3(USCORE)
+SCR3MOD  DC    CL8' ',AL3(HDEFAULT),X'1DF0'
+         DC    AL3(TURQ)
+         DC    C' ',X'1DF5'            SF + protected MDT on
+S3MSTR   DC    C',Master=',X'1DC9',AL3(RED)
+         DC    AL3(USCORE)
+SCR3MSTR DC    CL46' ',AL3(HDEFAULT),X'1DF0'
+*
+S3R10C1  DC    X'110000'               r10,c1+
+         DC    X'1DF5',AL3(TURQ)
+S3MSTV   DC    C'Volume =',X'1DC9',AL3(RED)
+         DC    AL3(USCORE)
+SCR3MSTV DC    CL6' ',AL3(HDEFAULT),X'1DF0' mstr volume
+*
+S3R12C1  DC    X'110000'               r12,c1+
+         DC    X'1DF0',AL3(YELLOW),C'Rick Fochtman''s Archive:'
+*
+S3R13C1  DC    X'110000'               r13,c01+
+         DC    X'1DF5',AL3(TURQ)
+S3ARCH   DC    C'Archive=',X'1DC9',AL3(RED),AL3(USCORE)
+SCR3ARCH DC    CL46' ',AL3(HDEFAULT),X'1DF0'
+*
+S3LST1   DC    X'1100001DF0',AL3(TURQ)  R last-1, c01+
+         DC    C'Hit   ',AL3(WHITE),C'Enter     ',AL3(TURQ)
+         DC    C'to make changes effective'
+S3LST    DC    X'1100001DF0'            R last, c01+
+         DC    C'Press ',AL3(WHITE),C'PF03/PF15 ',AL3(TURQ)
+         DC    C'to cancel the changes'
+SCR3LEN  EQU   *-SCR3TXT           LENGTH SCREEN
+*
+*        Session default screen
+*
+*
+SCR4TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR4TXT  DC    X'00C21100001DF8'   EW/EWA Nolock
+         DC    CL54'RPF Session defaults: -----------------------------X
+               ---'
+S4R1C56  DC    X'110000'               r1,c56+
+MSG4     DC    CL25'----------------------'
+S4R4C2   DC    X'11C371'               R04,C02+
+         DC    AL3(YELLOW),C'Change session defaults if desired:'
+S4R6C1   DC    X'110000',AL3(TURQ),X'1DF5'   r06,c01+
+S4WS     DC    C'WS-Size  =',X'1DD913',AL3(RED)
+SCR4WSS  DC    CL7'0000000',X'1DF0',AL3(TURQ)
+S4R6C33  DC    X'11C670'               R06,C33+
+         DC    C'(Number of lines)'
+*
+S4R7C1   DC    X'110000',X'1DF5'       R07,C01+
+S4OUT    DC    C'OUT Class=',X'1DC9'
+         DC    AL3(RED)
+SCR4OUT  DC    CL1'O',X'1DF0',CL7' ',AL3(TURQ)
+S4R7L1   EQU   *-S4R7C1
+         DC    X'110000'               R07,C33+
+         DC    CL32'(Output class)'
+S4R7L2   EQU   *-S4R7C1
+*
+         DC    X'110000',X'1DF5'                       R08,C01+
+S4PRT    DC    C'Printer  =',X'1DC9'
+         DC    AL3(RED)
+SCR4PRT  DC    CL8' ',X'1DF0',AL3(TURQ)                            @rp4
+         DC    X'110000'               R08,C33+
+         DC    CL32'(Local printer name)'
+*
+         DC    X'110000',X'1DF5'                       R09,C01+
+S4LOG    DC    C'Logging  =',X'1DC9'
+         DC    AL3(RED)
+SCR4LOG  DC    CL3'NO ',X'1DF0',CL5' ',AL3(TURQ)                   @rp4
+         DC    X'110000'               R09,C33+
+         DC    CL32'(Yes or No)'
+*
+         DC    X'110000',X'1DF5'                       R10,C01+
+S4NUL    DC    C'Nulls    =',X'1DC9'
+         DC    AL3(RED)
+SCR4NUL  DC    CL3'YES',X'1DF0',CL5' ',AL3(TURQ)
+         DC    X'110000'               R10,C33+
+         DC    CL32'(Yes or No, for EDIT only)'
+*
+         DC    X'110000',X'1DF5'                       R11,C01+    @rp1
+S4AUTO   DC    C'Autosave =',X'1DC9'
+         DC    AL3(RED)
+SCR4AUTO DC    CL1' ',X'1DF0',CL7' ',AL3(TURQ)
+         DC    X'110000'               R11,C33+
+         DC    CL32'(Y or N, for EDIT only)'
+*
+         DC    X'110000',X'1DF5'                       R12,C01+    @rp5
+S4REP    DC    C'Replace  =',X'1DC9'
+         DC    AL3(RED)                                            @rp5
+SCR4REP  DC    CL3'NO ',X'1DF0',CL5' ',AL3(TURQ)
+         DC    X'110000'               R12,C33+
+         DC    CL32'(Rep like members in Move/Copy)'
+*
+         DC    X'110000',X'1DF5'                       R13,C01+    @rp5
+S4COLS   DC    C'Cols     =',X'1DC9'
+         DC    AL3(RED)                                            @rp5
+SCR4COLS DC    CL1' ',X'1DF0',CL7' ',AL3(TURQ)
+         DC    X'110000'               R13,C33+
+         DC    CL32'(Scale line in EDIT Y/N)'
+*
+         DC    X'110000',X'1DF5'                       R14,C01+
+S4CONFI  DC    C'Confirm  =',X'1DC9'
+         DC    AL3(RED)
+SCR4CONF DC    CL1' ',X'1DF0',CL7' ',AL3(TURQ)
+         DC    X'110000'               R14,C33+
+         DC    CL32'(Select / to confirm delete)'
+*
+         DC    X'110000',X'1DF5'                       R15,C01+
+S4CAPS   DC    C'CAPS     =',X'1DC9'
+         DC    AL3(RED)
+SCR4CAPS DC    CL3' ',X'1DF0',CL5' ',AL3(TURQ)
+         DC    X'110000'               R15,C33+
+         DC    CL32'(Specify AUT, ON or OFF)'
+*
+S4R16C1  DC    X'110000',X'1DF5'                       R16,C01+
+S4PFX    DC    C'Dft Pfx  =',X'1DC9'
+         DC    AL3(RED)                                            @rp4
+SCR4PFX  DC    CL17' ',X'1DF0',AL3(TURQ)                           @rp4
+S4R16C33 DC    X'110000'               R16,C33+
+         DC    CL32'(Default pfx in data set list)'
+S4LST1   DC    X'1100001DF0',AL3(TURQ)  R last-1, c01+
+         DC    C'Hit   ',AL3(WHITE),C'Enter     ',AL3(TURQ)
+         DC    C'to make changes effective'
+S4LST    DC    X'1100001DF0'            R last, c01+
+         DC    C'Press ',AL3(WHITE),C'PF03/PF15 ',AL3(TURQ)
+         DC    C'to cancel the changes'
+SCR4LEN  EQU   *-SCR4TXT           LENGTH SCREEN
+*
+*        Assembler and Linkage Editor Defaults
+*
+SCR6TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR6TXT  DC    X'F1C21140401DF8'       EW/EWA and unlock
+         DC    CL54'RPF Assembler and linkage editor defaults: --------X
+               ---'
+S6R1C56  DC    X'110000'               r 01,c56+
+MSG6     DC    CL25'-------------------------'
+S6R3C1   DC    X'110000'               r 03,c01+
+         DC    X'1DF8',AL3(YELLOW),C'Assembler defaults:'
+S6R4C1   DC    X'110000',X'1DF5'       r 04,c01+
+         DC    AL3(TURQ)
+CASMNAME DC    CL12'Assembler  =',X'1DC913'
+         DC    AL3(RED)
+SCR6ASM  DC    CL8' ',X'1DF0'
+S6R6C1   DC    X'110000',X'1DF5'       r 06,c01+
+         DC    AL3(TURQ)
+CMAC1    DC    CL12'Maclib1 DSN=',X'1DC9'
+         DC    AL3(RED)
+SCR6MAC1 DC    CL46' ',X'1DF0'
+*
+S6R7C1   DC    X'110000',X'1DF5'       r 07,c01+
+         DC    AL3(TURQ)
+CMAC2    DC    CL12'Maclib2 DSN=',X'1DC9'
+         DC    AL3(RED)
+SCR6MAC2 DC    CL46' ',X'1DF0'
+*
+S6R7L    EQU   *-S6R7C1
+         DC    X'110000',X'1DF5'       r 08,c01+
+         DC    AL3(TURQ)
+CMAC3    DC    CL12'Maclib3 DSN=',X'1DC9'
+         DC    AL3(RED)
+SCR6MAC3 DC    CL46' ',X'1DF0'
+*
+         DC    X'110000',X'1DF5'       r 09,c01+
+         DC    AL3(TURQ)
+CMAC4    DC    CL12'Maclib4 DSN=',X'1DC9'
+         DC    AL3(RED)
+SCR6MAC4 DC    CL46' ',X'1DF0'
+*
+         DC    X'110000',X'1DF5'       r 10,c01+
+         DC    AL3(TURQ)
+CMAC5    DC    CL12'Maclib5 DSN=',X'1DC9'
+         DC    AL3(RED)
+SCR6MAC5 DC    CL46' ',X'1DF0'
+*
+         DC    X'110000',X'1DF5'       r 11,c01+
+         DC    AL3(TURQ)
+CMAC6    DC    CL12'Maclib6 DSN=',X'1DC9'
+         DC    AL3(RED)
+SCR6MAC6 DC    CL46' ',X'1DF0'
+*
+S6R13C1  DC    X'110000',X'1DF5'       r 13,c01+
+         DC    AL3(TURQ)
+CAPRM    DC    CL12'ASM parm   =',X'1DC9'
+         DC    AL3(RED)
+SCR6APRM DC    CL30' ',X'1DF0'
+S6R14C1  DC    X'110000',X'1DF5'       r 14,c01+
+         DC    AL3(TURQ)
+CLPRM    DC    CL12'LKED parm  =',X'1DC9'
+         DC    AL3(RED)
+SCR6BPRM DC    CL30' ',X'1DF0'
+S6R16C1  DC    X'110000',X'1DF8'       r 16,01+
+         DC    AL3(YELLOW),C'Linkage editor control statements:'
+*
+S6R17C1  DC    X'110000',X'1DF9'       r 17,01+
+         DC    AL3(TURQ)
+C1       DC    C'1>'
+         DC    AL3(RED)
+STMNT1   DC    X'1DC1',CL69' ',X'1DF0'
+S6R17L   EQU   *-S6R17C1
+*
+         DC    X'110000',X'1DF9'       r 18,01+
+         DC    AL3(TURQ)
+C2       DC    C'2>'
+         DC    AL3(RED)
+STMNT2   DC    X'1DC1',CL69' ',X'1DF0'
+*
+         DC    X'110000',X'1DF9'       r 19,01+
+         DC    AL3(TURQ)
+C3       DC    C'3>'
+         DC    AL3(RED)
+STMNT3   DC    X'1DC1',CL69' ',X'1DF0'
+*
+         DC    X'110000',X'1DF9'       r 20,01+
+         DC    AL3(TURQ)
+C4       DC    C'4>'
+         DC    AL3(RED)
+STMNT4   DC    X'1DC1',CL69' ',X'1DF0'
+*
+         DC    X'110000',X'1DF9'       r 21,01+
+         DC    AL3(TURQ)
+C5       DC    C'5>'
+         DC    AL3(RED)
+STMNT5   DC    X'1DC1',CL69' ',X'1DF0'
+*
+         DC    X'110000',X'1DF9'       r 22,01+
+         DC    AL3(TURQ)
+C6       DC    C'6>'
+         DC    AL3(RED)
+STMNT6   DC    X'1DC1',CL69' ',X'1DF0'
+*
+S6LST1   DC    X'1100001DF0',AL3(TURQ)  R last-1, c01+
+         DC    C'Hit   ',AL3(WHITE),C'Enter     ',AL3(TURQ)
+         DC    C'to make changes effective'
+S6LST    DC    X'1100001DF0'            R last, c01+
+         DC    C'Press ',AL3(WHITE),C'PF03/PF15 ',AL3(TURQ)
+         DC    C'to cancel the changes'
+SCR6LEN  EQU   *-SCR6TXT               Length of SCR6
+SCREENSL EQU   *-SCREENS               Length of all screens
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Our save area
+RC       DS    F                       Temporary save return code
+DBW      DS    D                       Workfield RCTOSBA and CVB/CVD
+SBAR0R1  DS    D                       Workfield RCTOSBA
+ADDRCOMM DS    F                       Contains address of RPFCOMM
+SAVE5    DS    F
+SAVE14   DS    F
+R14CONV  DS    F                       Save register 14 CONV
+R14PARSE DS    F                       Save register 14 PARSE
+R14WRITE DS    F                       Save register 14 WRITEMBR
+RPFPROF  DS    CL(MDLPROFL)            RPF profile DCB
+READBUF  DS    F                       Contains address of I/O buffer
+BUFLV    DS    F                       Length of  I/O buffer
+BLKSIZE  DS    F                       Blksize of RPFPROF
+DECBR    READ  DECB2,SF,0,0,'S',MF=L
+DECBLENR EQU   *-DECBR
+*
+BLDLLIST DS    0F                      Align on fullword (BLDL)
+         DC    AL2(1)                  One entry
+         DC    AL2(14)                 Length of data
+BLDLNAME DS    CL8                     Name of profile member
+TTR      DC    XL3'00'                 TTR
+KZC      DC    XL3'00'                 KZC
+*
+NUMFLD   DS    CL8
+WRKFLD   DS    CL8
+NEWSIZE  DS    F                       New length of workspace     @rp6
+BUFOUTCL DS    C                       Copy of COMOUTCL in RPFCOMM
+BUFCONF  DS    C                       Copy of CCONFIRM in RPFCOMM
+BUFAUTO  DS    C                       Copy of COMMAUTO in RPFCOMM
+BUFCAPS  DS    CL3                     Copy of COMMCAPS in RPFCOMM
+BUFREPL  DS    CL3                     Copy of COMMREPL in RPFCOMM
+BUFNULL  DS    CL3                     Copy of COMMNUL  in RPFCOMM
+BUFFER   DS    CL900                   Formatted BUFFER after CONV
+*
+ASMBUF   EQU   *
+BUFASM   DS    CL8                     Assembler program name
+BUFMAC1  DS    CL46                    Maclib 1 from screen
+BUFMAC2  DS    CL46                    Maclib 2 from screen
+BUFMAC3  DS    CL46                    Maclib 3 from screen
+BUFMAC4  DS    CL46                    Maclib 4 from screen
+BUFMAC5  DS    CL46                    Maclib 5 from screen
+BUFMAC6  DS    CL46                    Maclib 6 from screen
+BUFAPRM  DS    CL30                    Assembler parm from screen
+BUFLPRM  DS    CL30                    Linkage editor parm from screen
+BUFC1    DS    CL69                    1st LKED stmnt from screen
+BUFC2    DS    CL69                    2nd LKED stmnt from screen
+BUFC3    DS    CL69                    3rd LKED stmnt from screen
+BUFC4    DS    CL69                    4th LKED stmnt from screen
+BUFC5    DS    CL69                    5th LKED stmnt from screen
+BUFC6    DS    CL69                    6th LKED stmnt from screen
+ASMBL    EQU   *-ASMBUF                Length
+*
+ALLOCBUF DS    0CL138                  3*46 bytes
+BUFDSN   DS    CL46                    To receive data set name (opt.2)
+BUFMSTR  DS    CL46                    To receive Master file (opt.2)
+BUFARCH  DS    CL46                    To receive Archive cl. (opt.2)
+WORKL    EQU   *-WORKAREA
+*
+         TITLE 'RPFPROF DSECT'
+DBAREA   RPFPROF
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+         PRINT NOGEN
+         DCBD  DSORG=PO,DEVD=DA
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END

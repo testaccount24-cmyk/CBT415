@@ -1,0 +1,154 @@
+         MACRO
+&NAME    RPFPROF &DSECT=YES,&SIZE=7002
+         AIF   (T'&NAME NE 'O').LABEL1
+         MNOTE 8,'LABEL MISSING IN MACRO DEFINITION'
+         MEXIT
+.LABEL1  ANOP
+         AIF   (T'&SIZE EQ 'N').LABEL2
+         MNOTE 8,'SIZE SHOULD BE A NUMERIC VALUE'
+         MEXIT
+.LABEL2  ANOP
+         AIF   ('&DSECT' EQ 'NO').LABEL3
+&NAME    DSECT
+         AGO   .LABEL4
+.LABEL3  ANOP
+&NAME    CSECT
+.LABEL4  ANOP
+OPTLINE  DC    CL8'@RPFPROF'
+         DC    CL8'V2.0.0'
+DBSIZE   DC    AL4(&SIZE*88)           Default workspace size
+DBCLS    DC    CL1'A'                  Default SYSOUT class
+DBLOG    DC    CL3'NO'                 Log file
+DBNULL   DC    CL3'YES'                Default NULLs
+DBPRT    DC    CL8' '                  Default local printer
+DBAUTO   DC    C'N'                    Default AUTOSAVE
+DBCOLS   DC    C'N'                    Default scale line (Y/N)
+DBREPL   DC    CL3'NO'                 Default Replace like mbrs = NO
+DBCONFIR DC    CL1'/'                  Default Confirm delete
+DBCAPS   DC    CL3'AUT'                Default Caps
+DBPFX    DC    CL17'RPF'               Default Prefix in Opt 3.4
+         DC    CL(OPTLINE+80-*)' '
+*
+DSNLINE  DC    CL4'DSN='               Default dataset data
+DBDSN    DC    CL46' '                 Default dataset name
+         DC    CL4'VOL='
+DBVOL    DC    CL6' '                  Default volume
+         DC    CL4'MBR='
+DBMEM    DC    CL8' '                  Default member
+         DC    CL(DSNLINE+80-*)' '
+*
+LIBLINE  DC    CL4'MST='
+DBMSTR   DC    CL46' '                 LIBRARIAN Masterfile
+         DC    CL4'LVO='
+DBMSVOL  DC    CL6' '                  LIBRARIAN volume
+         DC    CL4'MOD='
+DBMOD    DC    CL8' '                  LIBRARIAN module
+         DC    CL(LIBLINE+80-*)' '
+*
+ARCHLINE DC    CL5'ARCH='
+DBARCH   DC    CL46' '                 Archiver cluster
+         DC    CL(ARCHLINE+80-*)' '
+*
+PFKLINE1 DC    CL2'1='                 PFK01-03
+DBPFK01  DC    X'F1',C'N',CL24'HELP'
+DBPFK02  DC    X'F2',C'X',CL24' '
+DBPFK03  DC    X'F3',C'N',CL24'END'
+*
+PFKLINE2 DC    CL2'2='                 PFK04-06
+DBPFK04  DC    X'F4',C'N',CL24'RETURN'
+DBPFK05  DC    X'F5',C'N',CL24'F'
+DBPFK06  DC    X'F6',C'X',CL24' '
+*
+PFKLINE3 DC    CL2'3='                 PFK07-09
+DBPFK07  DC    X'F7',C'N',CL24'UP'
+DBPFK08  DC    X'F8',C'N',CL24'DOWN'
+DBPFK09  DC    X'F9',C'X',CL24' '
+*
+PFKLINE4 DC    CL2'4='                 PFK10-12
+DBPFK10  DC    X'7A',C'N',CL24'LEFT'
+DBPFK11  DC    X'7B',C'N',CL24'RIGHT'
+DBPFK12  DC    X'7C',C'N',CL24'RETRIEVE'
+*
+PFKLINE5 DC    CL2'5='                 PFK13-15
+DBPFK13  DC    X'C1',C'N',CL24'HELP'
+DBPFK14  DC    X'C2',C'X',CL24' '
+DBPFK15  DC    X'C3',C'N',CL24'END'
+*
+PFKLINE6 DC    CL2'6='                 PFK16-18
+DBPFK16  DC    X'C4',C'N',CL24'RETURN'
+DBPFK17  DC    X'C5',C'N',CL24'F'
+DBPFK18  DC    X'C6',C'X',CL24' '
+*
+PFKLINE7 DC    CL2'7='                 PFK19-21
+DBPFK19  DC    X'C7',C'N',CL24'UP'
+DBPFK20  DC    X'C8',C'N',CL24'DOWN'
+DBPFK21  DC    X'C9',C'X',CL24' '
+*
+PFKLINE8 DC    CL2'8='                 PFK22-24
+DBPFK22  DC    X'4A',C'N',CL24'LEFT'
+DBPFK23  DC    X'4B',C'N',CL24'RIGHT'
+DBPFK24  DC    X'4C',C'N',CL24'RETRIEVE'
+*
+MACLINE1 DC    CL5'MAC1='
+DBMAC1   DC    CL46'''SYS1.MACLIB'''   Default Maclib 1
+         DC    CL(MACLINE1+80-*)' '
+*
+MACLINE2 DC    CL5'MAC2='
+DBMAC2   DC    CL46'''SYS1.AMODGEN'''  Default Maclib 2
+         DC    CL(MACLINE2+80-*)' '
+*
+MACLINE3 DC    CL5'MAC3='
+DBMAC3   DC    CL46' '                 Default Maclib 3
+         DC    CL(MACLINE3+80-*)' '
+*
+MACLINE4 DC    CL5'MAC4='
+DBMAC4   DC    CL46' '                 Default Maclib 4
+         DC    CL(MACLINE4+80-*)' '
+*
+MACLINE5 DC    CL5'MAC5='
+DBMAC5   DC    CL46' '                 Default Maclib 5
+         DC    CL(MACLINE5+80-*)' '
+*
+MACLINE6 DC    CL5'MAC6='
+DBMAC6   DC    CL46' '                 Default Maclib 6
+         DC    CL(MACLINE6+80-*)' '
+*
+LKDLINE1 DC    CL5'LKD1='
+DBLK1    DC    CL60' '                 Default LKED control stmnt 1
+         DC    CL(LKDLINE1+80-*)' '
+*
+LKDLINE2 DC    CL5'LKD2='
+DBLK2    DC    CL60' '                 Default LKED control stmnt 2
+         DC    CL(LKDLINE2+80-*)' '
+*
+LKDLINE3 DC    CL5'LKD3='
+DBLK3    DC    CL60' '                 Default LKED control stmnt 3
+         DC    CL(LKDLINE3+80-*)' '
+*
+LKDLINE4 DC    CL5'LKD4='
+DBLK4    DC    CL60' '                 Default LKED control stmnt 4
+         DC    CL(LKDLINE4+80-*)' '
+*
+LKDLINE5 DC    CL5'LKD5='
+DBLK5    DC    CL60' '                 Default LKED control stmnt 5
+         DC    CL(LKDLINE5+80-*)' '
+*
+LKDLINE6 DC    CL5'LKD6='
+DBLK6    DC    CL60' '                 Default LKED control stmnt 6
+         DC    CL(LKDLINE6+80-*)' '
+*
+ASMLINE  EQU   *
+DBASM    DC    CL8'IFOX00'             Default assembler program
+         DC    CL5'ASMP='
+DBASPA   DC    CL30' '                 Default assembler parm
+         DC    CL5'LKDP='
+DBLKPA   DC    CL30'XREF,LIST,NCAL'    Default LKED parm
+         DC    CL(ASMLINE+80-*)' '
+*
+DBDSNLI  DC    CL240' '                8 data sets + volumes
+         DC    CL240' '
+SPARE1   DC    CL80'SPARE1'
+*
+SPARE2   DC    CL80'SPARE2'
+DBLEN    EQU   *-&NAME
+         MEND

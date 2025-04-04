@@ -1,0 +1,873 @@
+         PUNCH ' ALIAS RPFBR,RPFPD,RPFST'
+         TITLE 'TSO command processor for RPF edit, browse or PDS'
+RPFED    CSECT
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:    RPFED,  TSO command processor                     *
+*                                                                     *
+*        Attributes: RENT, REUS.                                      *
+*                                                                     *
+*        Author:    Rob Prins                                         *
+*                                                                     *
+*        Called by: TSO terminal monitor program.                     *
+*                                                                     *
+*        Syntax:    RPFED 'data set name' +                 *Edit*    *
+*                         VOLUME(volume) LINES(nnnnn) or              *
+*                   RPFBR 'data set name' +                 *Browse*  *
+*                         VOLUME(volume) LINES(nnnnn) or              *
+*                   RPFPD 'data set name' +                 *PDS*     *
+*                         VOLUME(volume) LINES(nnnnn) or              *
+*                   RPFST 'data set name' +                 *RESET*   *
+*                         VOLUME(volume) LINES(nnnnn) +               *
+*                         NEWUSER(userid) VERSION(nnnn)               *
+*                                                                     *
+*                   The VOLUME,LINES,NEWUSER and VERSION are optional *
+*                   'data set name' can be 'dsn' or 'dsn(member)'     *
+*                   The default value for LINES = 3000 or 7000        *
+*                   The default value for NEWUSER is our TSO userid.  *
+*                   The default value for VERSION = '0100'.           *
+*                   The keywords NEWUSER and VERSION are ignored if   *
+*                   using the command verb RPFED, RPFBR and RPFPD.    *
+*                                                                     *
+*        Function:  Obtain a data set name and an optional volume     *
+*                   Pass control to RPFDAIR to allocate the data set  *
+*                   After successful completion of RPFDAIR, pass      *
+*                   control to RPFPDS for a member selection list     *
+*                   Or to RPFEDIT to EDIT, or RPFBRO to browse.       *
+*                   The maximum lines to EDIT is LINES if this        *
+*                   module runs in addressing mode 24 or 10 * LINES   *
+*                   lines if this routine runs in addressing mode 31  *
+*                                                                     *
+*        Purpose:   Invoke the RPF editor from option 2 (EDIT) in     *
+*                   Wally's ISPF with RPFED - or -                    *
+*                   Invoke the RPF browser from option 1 (Browse) in  *
+*                   Wally's ISPF with RPFBR - or -                    *
+*                   Invoke the RPF PDS routine from option 3.1        *
+*                   in Wally's ISPF with RPFPD.                       *
+*                   Invoke the RPF RESET routine from option 3.5      *
+*                   in Wally's ISPF with RPFST.                       *
+*                   This command processor also can be used in the    *
+*                   TSO command line (READY mode).                    *
+*                                                                     *
+*        Registers: R13 points to the dynamic workarea. The first 72  *
+*                   bytes is our savearea.                            *
+*                   R12 and R10 are the base registers                *
+*                   R11 points to the RPFCOMM control block.          *
+*                   R8  points to the PDL (mapped with RPFPRS)        *
+*                                                                     *
+*        Subroutines:                                                 *
+*                   RPFEDIT   The RPF editor                          *
+*                   RPFBRO    The RPF Browser                         *
+*                   RPFPDS    Member selection list for Browse, EDIT, *
+*                             Library Functions and RESET ISPF stats. *
+*                   IKJPARS   Parse the TSO operands of RPFED.        *
+*                   IKJDAIR   Allocate the needed data sets.          *
+*                                                                     *
+*        Change log:                                                  *
+*        Dec 01,2020 RPr: Initial version                             *
+*        Dec 08,2020 RPr: ABEND0C4 fixed, because @@SETUP not called. *
+*        Jan 10,2021 RPr: Keyword LINES/SIZE added                    *
+*                         and fix I/O error if member not present.    *
+*        Jan 11,2021 RPr: Easier recovery from x37 abends.            *
+*        Feb 25,2021 RPr: Add function RESET ISPF stats with alias    *
+*                         RPFST with keywords NEWUSER and VERSION     *
+*        May 18,2021 RPr: Allocate the files needed with IKJDAIR.     *
+*        May 23,2021 RPr: SIZE increased to 7,000 lines.              *
+*        Nov 04,2021 RPr: I/O error intercepted.                      *
+*        Dec 05,2024 RPr: Routine DSNPARS added to parse quoted and   *
+*                         non prefixed data set names.                *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         ENTRY RPFBR
+         ENTRY RPFPD
+         ENTRY RPFST
+RPFBR    DC    0D'0'
+RPFPD    DC    0D'0'
+RPFST    DC    0D'0'
+RPFED    AMODE 31
+         COPY  SYSVARS
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFED,R12               Provide addressability
+         LA    R10,2048(,R12)          Setup
+         LA    R10,2048(,R10)               second base
+         USING RPFED+4096,R10          Make addressable
+         LR    R6,R1                   Save CPPL address
+         GETMAIN R,LV=WORKL            Obtain dynamic workarea
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1                  Use our save area
+         USING WORKAREA,R13            Get addressability workarea
+         L     R1,=V(COMMAREA)         RPFCOMM
+         GETMAIN R,LV=COMML            Getmain
+         ST    R1,ADDRCOM              Save it's address
+         LR    R2,R1                   Set in register 2
+         LA    R3,COMML                Duplicate length
+         L     R4,=V(COMMAREA)         Start input
+         LR    R5,R3                   Duplicate length
+         MVCL  R2,R4                   Copy RPFCOMM into dynamic area
+         MVC   SPC24,=A(NEXTENT*7000)  Default workspace size
+         AIF   (NOT &SVS).NO3K
+         MVC   SPC24,=A(NEXTENT*3000)  Default workspace size
+.NO3K    ANOP
+         LR    R11,R1                  A(dynamic area)
+         USING COMMAREA,R11
+         ST    R6,CPPLADDR             Save CPPL address
+*---------------------------------------------------------------------*
+*
+*        Populate RPFCOMM control block
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         ST    R6,COMMCPPL             And save in RPFCOMM
+         L     R14,CVTPTR(,0)          Adress CVT
+         USING CVT,R14
+         MVC   COMMOS,CVTDCB           OS bits
+         DROP  R14                     CVT
+         CLI   COMMOS,X'13'            Native MVS?
+         BNE   INIT1                   No: do not touch COMMOS
+         LA    R1,136                  X'88'
+         SLL   R1,24                   Promote to high-order
+         LA    R1,0(,R1)               Clear high-order bit or byte
+         LTR   R1,R1                   Register zero?
+         BZ    INIT1                   No: no native MVS with AM31
+         MVI   COMMOS,X'93'            MVS with MVS380 installed
+INIT1    DS    0H
+         AIF   (&SVS).SVS1
+         L     R1,0(,R14)              4-word list
+         L     R1,12(,R1)              A(ASCB)
+         L     R1,176(,R1)             A(User id)
+         MVC   COMMUSER,0(R1)          Move TSO userid into RPFCOMM
+         AGO   .NOSVS1
+.SVS1    ANOP
+         L     R1,COMMCPPL             Out CPPL address
+         L     R1,8(,R1)               A(PSCB) = CPPL + 8
+         MVC   COMMUSER(7),0(R1)       Move TSO userid into RPFCOMM
+.NOSVS1  ANOP
+         LA    R14,COMMUSER            Point to start of UserID
+         LA    R1,COMMUSER+8           Point to end of UserID
+         TRT   COMMUSER,COMSKPNS       Stop at first blank
+         SLR   R1,R14                  Calculate length
+         STC   R1,COMMUSRL             And save in RPFCOMM
+         XC    COMMFLGS,COMMFLGS       Clear flags in RPFCOMM
+         L     R1,=V(PFKS)             Program function keys
+         USING PFKS,R1                 Temporary addressability
+         MVC   COMPFK01(156),PFK0106   Move
+         MVC   COMPFK07(156),PFK0712        PFKs
+         MVC   COMPFK13(156),PFK1318            into
+         MVC   COMPFK19(156),PFK1924                RPFCOMM
+         DROP  R1                      Kill local addressability
+         MVI   COMMAUTO,C'Y'           Default Autosave=Y
+         MVI   COMOUTCL,C'A'           Default SYSOUT class
+         MVC   COMMNUID,COMMUSER       Default our TSO userid
+         MVC   COMMNVV,=C'01'          Default Version for RESET
+         MVC   COMMNMM,=C'00'          Default Mod level for RESET
+*
+         L     R1,0(R6)                Point to CBUF in CPPL
+         MVC   WORKNAME,4(R1)          Our program name
+         GETMAIN R,LV=PPL#L            Obtain a dynamic PPL workarea
+         STM   R0,R1,PPL#LA            Save length and address of PPL
+         L     R2,PPL#PTR              Get the address of the PPL
+         USING PPL,R2                  Adress it
+         L     R1,CPPLADDR             Get address of CPPL
+         USING CPPL,R1                 Address it
+*---------------------------------------------------------------------*
+*
+*        Populate the Parse Parameter List (PPL) from the CPPL,
+*        add the IKJPARMD list in the PPL and invoke IKJPARS
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+*
+         MVC   PPLUPT,CPPLUPT          Put in the UPT address from CPPL
+         MVC   PPLECT,CPPLECT          Put in the ECT address from CPPL
+         MVC   PPLCBUF,CPPLCBUF        Put in the command buffer addr.
+*                                      From the CPPL
+         XC    RETCODE,RETCODE         Clear return code
+         XC    ECB,ECB                 Clear Event control block
+         L     R1,PCLADCON             Address of PCL
+         ST    R1,PPLPCL               Set in PPL
+         LA    R1,ANSWER               Answer area
+         ST    R1,PPLANS               Pointer into PPL
+         LA    R1,ECB                  Event control block
+         ST    R1,PPLECB               Pointer into PPL
+         ST    R13,PPLUWA              User provide workarea
+         RPFSA24
+         CALLTSSR EP=IKJPARS,MF=(E,PPL)   Invoke parse
+         DROP  R1,R2                   CPPL and PPL
+         RPFSA31
+         LTR   R15,R15                 Parse successfully processed?
+         BZ    PARSEOK                 Yes: carry
+         LA    R0,11                   Length
+         LA    R1,=CL11'Parse error'   Message
+         TPUT  (1),(0),R
+         B     RETURN                  Return to TMP
+PARSEOK  DS    0H
+         L     R8,ANSWER               Pointer to PDL
+         USING RPFPRS,R8               mapped with IKJPARM
+         LA    R3,DSNPDE               Point to DSN PDE
+         USING DSNRET,R3               Get addressability
+         LA    R2,COMMDSN              Point to data set name RPFCOMM
+         TM    DSNFLGS,$DQUOTE         Do we have a quoted DSN?
+         BNO   ED005                   No.
+         MVI   COMMDSN,X'7D'           Start quote
+         LA    R2,1(,R2)               Point after quote
+ED005    DS    0H
+         L     R1,DSNPTR               Data set name
+         LH    R14,DSNL                Length of data set name
+         BCTR  R14,0                   Discount for EX
+         EX    R14,MVEDSN              Move data set name in RPFCOMM
+         TM    MFLGS,$MPRES            DSN = dsn(member) specified?
+         BNO   ED009                   No: carry
+         L     R1,DSNM                 Pointer to member name
+         LH    R14,DSNML               Length of member name
+         BCTR  R14,0                   Discount for EX
+         EX    R14,MVEMBR              Move member name
+ED009    DS    0H
+         DROP  R3
+         LA    R3,VOLPDE               Point to Volume PDE
+         USING VOLRET,R3               Get addressability of VOLPDE
+         TM    VFLGS,$VPRES            Volume present?
+         BNO   ED011                   No:
+         L     R1,VOLPTR               Point to volume serial
+         LH    R14,VOLL                Length
+         BCTR  R14,0                   Discount for EX
+         EX    R14,MVEVOL              Volume serial into RPFCOMM
+ED011    DS    0H
+         DROP  R3
+         LA    R3,LINESPDE             Point to Lines PDE
+         USING LINERET,R3              Get addressability of LINESPDE
+         TM    LFLGS,$LPRES            LINES present?
+         BNO   ED015                   No:
+         L     R1,LINEPTR              Point to Lines
+         LH    R14,LINEL               Length
+         BCTR  R14,0                   Discount for EX
+         EX    R14,PACKLNE             Pack # lines
+         CVB   R5,PACKFLD              Convert to binary # lines
+         M     R4,=F'88'               * entry length
+         ST    R5,SPC24                Save
+ED015    DS    0H
+         DROP  R3
+         LA    R3,NUIDPDE              Point to Lines PDE
+         USING NUIDRET,R3              Get addressability of New user
+         TM    NFLGS,$NPRES            New User for RESET present?
+         BNO   ED017                   No:
+         L     R1,NUIDPTR              Point to New user for RESET
+         LH    R14,NUIDL               Length
+         BCTR  R14,0                   Discount for EX
+         MVI   COMMNUID,C' '           Blank New user ...
+         MVC   COMMNUID+1(L'COMMNUID-1),COMMNUID      for RESET
+         EX    R14,MVENUID             Volume serial into RPFCOMM
+ED017    DS    0H
+         DROP  R3
+         LA    R3,VERSPDE              Point to VERSION PDE
+         USING VERSRET,R3              Get addressability of VERSPDE
+         TM    VEFLGS,$VEPRES          Keyword VERSION present?
+         BNO   ED019                   No:
+         L     R1,VERSPTR              Point to VERSION for RESET
+         MVC   COMMNVV,0(R1)           Move 'vv' part of VERSION
+         MVC   COMMNMM,2(R1)           Move 'mm' part of VERSION
+ED019    DS    0H
+         DROP  R3,R8                   VERSRET and RPFPRS
+         L     R8,ANSWER               Pointer to PDE's (the PDL)
+         RPFSA24                       Enter addressing mode 24
+         IKJRLSA (R8)                  Release PARSE storage
+         RPFSA31                       Enter amode 31
+         LM    R2,R3,PPL#LA            Load length and address of PPL
+         FREEMAIN R,LV=(2),A=(3)       Free the PPL
+         B     LOAD                    Parsing done, invoke RPF
+MVEDSN   MVC   0(0,R2),0(R1)           << executed >>
+MVEVOL   MVC   COMMVOL(0),0(R1)        << executed >>
+MVEMBR   MVC   COMMBR(0),0(R1)         << executed >>
+MVENUID  MVC   COMMNUID(0),0(R1)       << executed >>
+PACKLNE  PACK  PACKFLD(8),0(0,R1)      << executed >>
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Determine the # lines and # columns of the screen and        *
+*        Preload the necessary RPF modules to perform the             *
+*        EDIT or Browse                                               *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+LOAD     DS    0H
+         GTSIZE
+         MVI   COMMCMD,X'7E'           And move in RPFCOMM
+         CH    R1,=H'80'               At least width of 80?
+         BL    NOFULLSC                No: error, no 3270 terminal
+         CH    R0,=H'24'               At least 24 lines?
+         BL    NOFULLSC                No: error, no 3270 terminal
+         CH    R1,=H'200'              No more width than 200?
+         BH    START13                 Yes: odd screen, make 24x80
+         CH    R0,=H'99'               More than 99 lines?
+         BH    START13                 Yes: odd screen, reset to 24x80
+         B     START07                 Test screen size (size*width)
+NOFULLSC DS    0H
+         MVC   MSG,=CL40'Invalid screen size'
+         LA    R0,40                   Length
+         LA    R1,MSG                  Message
+         TPUT  (1),(0),R
+         B     RETURN                  Exit
+START07  DS    0H
+         STM   R0,R1,COMMSIZE          Save them in RPFCOMM
+         MR    R0,R0                   Multiply size * width
+         C     R1,=F'1920'             1920 bytes?
+         BE    START13                 Yes: 3270 model 2
+         C     R1,=F'16384'            Maximum size (16K)?
+         BNH   START19                 No: good
+START13  DS    0H
+         MVI   COMMCMD,X'F5'           And move in RPFCOMM
+         LA    R0,24                   Set default
+         LA    R1,80                              24x80
+         STM   R0,R1,COMMSIZE          Save them in RPFCOMM
+         MR    R0,R0                   Multiply size * width
+START19  DS    0H
+         LA    R1,1700(,R1)            Add some space for control chars
+*                                      like SF and SBA
+         ST    R1,COMMSCLN             Save length of screen buffer
+*
+         AIF   (&SVS).SVS2
+         STFSMODE ON,NOEDIT=YES        Set fullscreen mode
+.SVS2    ANOP
+         L     R3,SPC24                Size of workspace
+         TM    COMMOS,X'93'            Are we running in AMODE31?
+         BNO   START21                 Yes: leave # of lines
+         M     R2,=F'10'               * 10 if addressing mode 31
+START21  DS    0H
+         ST    R3,COMWRKLN             Save
+         L     R2,COMMSCLN             Length of screen buffer
+         GETMAIN R,LV=(2)              Acquire storage for screenbuffer
+         ST    R1,COMMSCR              and save
+         GETMAIN R,LV=4880             Acquire storage for RETIEVE bfr
+         MVC   0(8,R1),=CL8'@RPFRTRV'  Acronym
+         XC    8(4,R1),0(R1)           Clear #cmds in buffer
+         ST    R1,CRETRIEV             And save it's address
+         GETMAIN R,LV=1600             Acquire storage TSO commands
+         ST    R1,COMTSOCM             TSO command buffer
+         LR    R4,R1                   Duplicate in register 4
+         LR    R6,R4                   and in register 6 for MVCL
+         LA    R5,1600                 Length
+         IC    R7,=X'40'               Fill character
+         SLL   R7,24                   Promote to high-order
+         MVCL  R4,R6                   and clear the TSO commands
+         MVC   0(8,R1),=CL8'@RPFTSO'   Acronym
+*---------------------------------------------------------------------*
+*
+*        Allocate the EDIT workspace. The amount of lines is specified
+*        in the LINES or SIZE (alias of LINES) keyword in the TSO
+*        command. The amount of LINES will be multiplied with 88, the
+*        length of a workspace entry.
+*        If RPFED runs in addressing mode 31, this space will be
+*        allocated above the line (ATL). Because there is much more
+*        space (up to 2 GiB), the workspace size will be multiplied
+*        by 10.
+*        And ... allocate the temporary data sets RPFEDT1 and RPFCTPST
+*        with IKJDAIR for the Library function (RPFPD) and
+*        The CUT and PASTE primary command in RPFEDIT.
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+         L     R2,COMWRKLN             <LINES> or 10*<LINES>
+*
+         AIF   (&SVS).SVS3
+         GETMAIN RC,LV=(2),LOC=ANY     Obtain EDIT workspace
+         AGO   .NOSVS3
+.SVS3    ANOP
+         GETMAIN R,LV=(2)              Obtain EDIT workspace
+.NOSVS3  ANOP
+         LTR   R15,R15                 Getmain OK?
+         BNZ   FREESTOR                No: terminate
+         ST    R1,COMWSTRT             Save its address
+         L     R2,COMWRKLN
+         LA    R2,0(R1,R2)             End of EDIT workspace
+         SL    R2,=A(3*NEXTENT)        Minus 3 entries
+         ST    R2,COMWRKND             End of workspace
+         XC    COMMFSCR,COMMFSCR
+         XC    COMMLAST,COMMLAST
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R3,RPFD08               Point to allocation parm block
+         USING DAPB08,R3               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFEDT1'   DDNAME to allocate
+         MVC   DA08PDSN,=A(DSN1)       Temporary data set name
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVI   DA08PQTY+3,X'04'        4 cylinders primary
+         MVI   DA08SQTY+3,X'02'        2 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         LR    R1,R3                   Parameter for CALLTS
+         L     R15,=V(CALLTS)
+         CALL  (15)
+         XC    ECB,ECB                 Clear Event control block
+         MVC   DA08DDN,=CL8'RPFCTPST'  DDNAME to allocate
+         MVC   DA08PDSN,=A(DSN2)       Temporary data set name
+         LR    R1,R3                   Parameter for CALLTS
+         L     R15,=V(CALLTS)
+         CALL  (15)
+         DROP  R3                      DAPB08
+         LOAD  EP=RPFCHNG
+         ST    R0,EPCHNG               Primary command C of EDIT
+         LOAD  EP=RPFDAIR
+         ST    R0,EPDAIR               Dynamic allocation interface
+         LOAD  EP=RPFDATAL
+         ST    R0,EPDATAL              Entry panel EDIT/Browse/utils
+         LOAD  EP=RPFEDIT
+         ST    R0,EPEDIT               The RPF editor
+         LOAD  EP=RPFEDITL
+         ST    R0,EPEDITL              The RPF loader
+         LOAD  EP=RPFFIND
+         ST    R0,EPFIND               Primary command F of EDIT
+         LOAD  EP=RPFFILL
+         ST    R0,EPFILL               Primary command FILL of EDIT
+         LOAD  EP=RPFPFK
+         ST    R0,EPPFK                Primary command PFK
+         LOAD  EP=RPFSAVE
+         ST    R0,EPSAVE               Primary command SAVE of EDIT
+         LOAD  EP=RPFC3270
+         ST    R0,EPC3270              RPFC3270 data stream compression
+         LOAD  EP=RPFCNVDT
+         ST    R0,EPCNVDT              Convert date routine
+         LOAD  EP=RPFSUB
+         ST    R0,EPSUB                RPF submit jobs
+         L     R1,=V(DSNPARS)          Data set name parse routine
+         ST    R1,EPDSNPA
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Determine which function will be executed.                   *
+*        This is dependend of the module name (command verb).         *
+*        RPFED will perform the EDIT function or EDIT member          *
+*              selection list.                                        *
+*        RPFBR will perform the BROWSE function or BROWSE member      *
+*              selection list.                                        *
+*        RPFST will perform the RESET or Delete ISPF stats function.  *
+*              The data set should be partioned.                      *
+*        RPFPD will perform the Library Functions function.           *
+*              The data set should be partioned.                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+*
+         CLC   WORKNAME+3(2),=C'ED'    RPFED invoked ?
+         BNE   RPF003                  No: test if invoked by
+*                                      another entry point (alias)
+         OI    COMMFLG3,$COMEDIT       Mark EDIT
+         B     RPF009                  Carry
+RPF003   DS    0H
+         CLC   WORKNAME+3(2),=C'BR'    RPFBR invoked?
+         BNE   RPF004                  No: test if invoked by
+*                                      another entry point (alias)
+         OI    COMMFLG3,$COMBR         Mark Browse
+         B     RPF009                  Carry
+RPF004   DS    0H
+         CLC   WORKNAME+3(2),=C'ST'    RPFST invoked?
+         BNE   RPF009                  No: test if invoked by
+*                                      another entry point (alias)
+         OI    COMMFLG3,$COMISPF       Mark RESET ISPF in RPFCOMM
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Invoke RPFDAIR and test the return codes                     *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPF009   DS    0H
+         OI    COMMFLG1,$COMMALC       Tell RPFDAIR to allocate
+         L     R15,EPDAIR              Entry point of RPFDAIR
+         LA    R1,ADDRCOM              Address of RPFCOMM
+         BALR  R14,R15                 Call RPFDAIR with RPFCOMM in R11
+         LR    R7,R15                  Save return code
+         B     *+4(7)                  Initiate branchlist
+         B     EDITBR           00     Invoke editor or browser
+         B     NOTINCAT         04     Data set not in catalog
+         B     NOTONVOL         08     Data set not on volume
+         B     ALCERR           12     Allocation error
+         B     EDITBR           16     Does not exist
+         B     NOFBVB           20     Record format not F(B) or V(B)
+         B     EDITBR           24     Does not exist
+         B     NOPSPO           28     Data set not PS or PO
+         B     MBRNTFND         32     Member not found
+         B     AUTHFAIL         36     Access denied
+         B     IOERR            40     I/O error
+NOTINCAT MVC   MSG,=CL40'Data set not in catalog'
+         B     TPERR                   Write message
+NOTONVOL MVC   MSG,=CL40'Data set not on volume'
+         B     TPERR                   Write message
+ALCERR   MVC   MSG,=CL40'Allocation error'
+         B     TPERR                   Write message
+NOFBVB   TM    COMMFLG3,$COMEDIT+$COMISPF Invoke for EDIT or RESET?
+         BM    NOFBVB2                 Yes: error
+         B     EDITBR                  Else Browse or Library
+NOFBVB2  MVC   MSG,=CL40'Data set not fixed or variable'
+         B     TPERR                   Write message
+NOPSPO   MVC   MSG,=CL40'DSORG is not PS or PO'
+         B     TPERR                   Write message
+MBRNTFND CLI   COMMBR,C' '             No member provided?
+         BE    PDSLINK                 Yes: invoke RPFPDS
+         TM    COMMFLG3,$COMBR         Browse?
+         BO    NOTFND                  Yes: member not found
+         TM    COMMFLG3,$COMEDIT       Edit?
+         BNO   PDSLINK                 No: Library Functions
+         OI    COMMFLG1,$COMINPT       Set editor in Input mode
+         B     EDITOR                  Invoke RPFEDIT
+NOTFND   MVC   MSG,=CL40'Member not found'
+         B     TPERR                   Write message
+AUTHFAIL MVC   MSG,=CL40'Access denied'
+         B     TPERR                   Write message
+IOERR    MVC   MSG,=CL40'I/O error'
+         B     TPERR                   Write message
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Invoke The editor or PDS with the EDIT option if RPFED is    *
+*        used. Invoke the browser or PDS with the Browse option       *
+*        if RPFBR is used. Invoke RPFPDS for Library Functions if     *
+*        alias RPFPD is used. Invoke RPFPDS with flag $COMISPF on     *
+*        if RPFST is used. In the last two cases a test on a          *
+*        partitioned data set will be done.                           *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+EDITBR   DS    0H
+         TM    COMMFLG1,$COMMSEQ       Is it a sequential data set?
+         BO    EDITBR2                 Yes: invoke RPFEDIT or RPFBRO
+         TM    COMMFLG3,$COMEDIT+$COMBR Invoked for browse or EDIT?
+         BZ    PDSLINK                 No: Invoke PDS for Library
+         CLI   COMMBR,C' '             Member provided?
+         BNE   EDITBR3                 No: invoke RPFBRO or RPFEDIT
+PDSLINK  DS    0H
+         MVC   EPLOC,=CL8'RPFPDS'      Module name to link to
+         BAL   R14,LINK                Link program
+         LTR   R15,R15                 Rc=0?
+         BZ    CLEANUP                 Yes: cleanup
+         B     IOERR                   No: I/O error
+EDITBR2  DS    0H
+         TM    COMMFLG3,$COMEDIT+$COMBR Invoked for browse or EDIT?
+         BZ    NOTAPDS                 No: error, not a PDS
+EDITBR3  DS    0H
+         TM    COMMFLG3,$COMEDIT       Edit this data set?
+         BNO   EDITBR4                 No: try to browse
+EDITOR   DS    0H
+         LA    R1,ADDRCOM              Address of RPFCOMM
+         L     R15,EPEDIT              Invoke the ...
+         BALR  R14,R15                 Editor
+         CH    R15,=H'4'               Workspace truncated?
+         BNE   CLEANUP                 No: cleanup
+         MVC   MSG,=CL40'Workspace too small, increase LINES'
+         B     TPERR
+EDITBR4  DS    0H
+         MVC   COMMPRM(8),=CL8'RPFWORK' DDname to browse
+         MVC   EPLOC,=CL8'RPFBRO'      The browser
+         BAL   R14,LINK                Link to RPFBRO
+         B     CLEANUP                 Cleanup
+NOTAPDS  DS    0H
+         MVC   MSG,=CL40'Data set is not partitioned'
+TPERR    DS    0H
+         AIF   (&SVS).SVS4
+         STLINENO LINE=1,MODE=OFF      Cursor at line 1 and FULLSCR off
+.SVS4    ANOP
+         LA    R0,40                   Length
+         LA    R1,MSG                  Message
+         TPUT  (1),(0),R
+         B     CLEAN2                  Carry
+CLEANUP  DS    0H
+         AIF   (&SVS).SVS5
+         STLINENO LINE=1,MODE=OFF      Cursor at line 1 and FULLSCR off
+.SVS5    ANOP
+CLEAN2   DS    0H
+         NI    COMMFLG1,255-$COMMALC   Tell RPFDAIR to unallocate
+         L     R15,EPDAIR              Entry point RPFDAIR
+         LA    R1,ADDRCOM              Address of RPFCOMM
+         BALR  R14,R15                 Execute
+         XC    RPFD18,RPFD18           Clear parameter block
+         LA    R3,RPFD18               Point to unallocation parm blk
+         USING DAPB18,R3               Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'RPFEDT1'   DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         LR    R1,R3                   Unallocation parm block
+         L     R15,=V(CALLTS)
+         CALL  (15)
+         MVC   DA18DDN,=CL8'RPFCTPST'  DDNAME to unallocate
+         LR    R1,R3                   Unallocation parm block
+         L     R15,=V(CALLTS)
+         CALL  (15)
+         DROP  R3                      DAPB18
+         DELETE EP=RPFCHNG             Unload
+         DELETE EP=RPFDAIR                   the
+         DELETE EP=RPFDATAL
+         DELETE EP=RPFFIND                      RPF
+         DELETE EP=RPFFILL                         mod
+         DELETE EP=RPFPFK                             ul
+         DELETE EP=RPFSAVE                              es
+         DELETE EP=RPFC3270
+         DELETE EP=RPFCNVDT
+         DELETE EP=RPFSUB
+         DELETE EP=RPFEDIT
+         DELETE EP=RPFEDITL
+         L     R3,COMWSTRT             Pickup start EDIT workspae
+         L     R2,COMWRKLN             # lines to free
+*
+         AIF   (&SVS).SVS6
+         FREEMAIN RU,LV=(2),A=(3)      Free
+         AGO   .NOSVS6
+.SVS6    ANOP
+         FREEMAIN R,LV=(2),A=(3)       Free
+.NOSVS6  ANOP
+FREESTOR DS    0H
+         L     R2,COMMSCR              Screen buffer
+         L     R3,COMMSCLN             Length of screen buffer
+         FREEMAIN R,LV=(3),A=(2)       Release screen buffer
+         L     R2,CRETRIEV             A(RETRIEVE buffer)
+         FREEMAIN R,LV=4880,A=(2)      Release RETRIEVE buffer
+         L     R2,COMTSOCM             A(TSO commands buffer)
+         FREEMAIN R,LV=1600,A=(2)      Release buffer TSO commands
+RETURN   DS    0H
+         FREEMAIN R,LV=COMML,A=(11)    Get rid of RPFCOMM
+         LR    R3,R13                  Workarea address
+         L     R13,4(,R3)              Callers save area
+         LA    R2,WORKL                Pickup length workarea
+         FREEMAIN R,LV=(2),A=(3)       Get rid of this area
+         RETURN (14,12),RC=0
+         TITLE 'Link to modules'
+LINK     DS    0H
+         ST    R14,LINKR14             Save register 14
+         LA    R2,EPLOC                Modulename
+         LA    R1,ADDRCOM              RPFCOMM address
+         XC    LNKLST(8),LNKLST        Clear EP and DCB address
+         RPFSA24                       Switch to amode 24
+         LINK  EPLOC=(2),SF=(E,LNKLST)
+         RPFSA31                       Restore addressing mode
+         L     R14,LINKR14             Restore register 14
+         BR    R14                     Return
+         TITLE 'Constants and TSO parameters'
+PCLADCON DC    A(RPFPCL)               Address of PCL
+*                                      or # lines in LINES operand
+DSN1     DC    AL2(8)                  Real length EDTDSN
+EDTDSN   DC    CL44'&&&&RPFED1'        DSName temp.data set of RPFPDS
+DSN2     DC    AL2(8)                  Real length CTPST
+CTPST    DC    CL44'&&&&RPFED2'        DSName temp.data set CUT/Paste
+*
+PCLSTART DS    0H
+RPFPCL   IKJPARM DSECT=RPFPRS          PDE's
+DSNPDE   IKJPOSIT DSNAME,PROMPT='DATA SET NAME',                       C
+               HELP=('valid TSO data set name')
+VOLKW    IKJKEYWD
+         IKJNAME 'VOLUME',SUBFLD=VOLSF
+LINESKW  IKJKEYWD
+         IKJNAME 'LINES',SUBFLD=LINESF
+NEWUIDKW IKJKEYWD
+         IKJNAME 'NEWUSER',SUBFLD=NEWUIDSF
+VERSKW   IKJKEYWD
+         IKJNAME 'VERSION',SUBFLD=VERSSF
+VOLSF    IKJSUBF
+VOLPDE   IKJIDENT 'VOLUME SERIAL',                                     C
+               FIRST=ALPHANUM,OTHER=ALPHANUM,MAXLNTH=6,                C
+               PROMPT='VOLUME SERIAL NUMBER'
+LINESF   IKJSUBF
+LINESPDE IKJIDENT 'LINES IN WORKSPACE',                                C
+               FIRST=NUMERIC,OTHER=NUMERIC,MAXLNTH=5,                  C
+               PROMPT='NUMBER OF WORKSPACE LINES BETWEEN 200 AND 50,000C
+               ',VALIDCK=VALIDLNE
+NEWUIDSF IKJSUBF
+NUIDPDE  IKJIDENT 'NEW USERID',                                        C
+               FIRST=ANY,OTHER=ANY,MAXLNTH=8,                          C
+               PROMPT='NEW USER ID'
+VERSSF   IKJSUBF
+VERSPDE  IKJIDENT 'VERSION',                                           C
+               FIRST=NUMERIC,OTHER=NUMERIC,MAXLNTH=4,                  C
+               PROMPT='ISPF VERSION NUMBER LIKE ''0100''',             C
+               VALIDCK=VALIDVV
+         IKJENDP
+PCL#L    EQU   *-PCLSTART
+         LTORG ,
+         DROP
+         TITLE 'Validate LINES operand'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Validate SIZE or LINES operand                               *
+*        The value should be at least 200 lines and no more than      *
+*        30,000 lines                                                 *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE
+         USING VALIDLNE,R12
+VALIDLNE DS    0H
+         STM   R14,R12,12(R13)         Save registers
+         LR    R12,R15                 Load base register
+         L     R6,0(,R1)               Point to LINES PDE
+         USING LINERET,R6              Address it
+         SR    R15,R15                 Default return code 0
+         TM    LFLGS,$LPRES            Was keyword present?
+         BZ    VALIDXIT                No: default = ok
+         LH    R3,LINEL                Get length of LINES
+         CH    R3,=H'3'                Less than 3 ?
+         BL    VALIDERR                Yes: Rc=4, invalid Lines/size
+         L     R14,LINEPTR             Address of Lines/Size operand
+         CH    R3,=H'3'                Length = 3?
+         BNE   VALIDTS1                Yes: test
+         CLC   0(3,R14),=C'200'        Less than 200?
+         BL    VALIDERR                Yes: invalid
+         B     VALIDXIT                Good
+VALIDTS1 DS    0H
+         CH    R3,=H'4'                Length = 4?
+         BE    VALIDXIT                Yes: always good
+         CLC   0(5,R14),=C'50000'      More than 50000?
+         BNH   VALIDXIT                No: good
+VALIDERR LA    R15,4                   Return code 4
+VALIDXIT L     R14,12(,R13)            Restore register 14
+         LM    R0,R12,20(R13)          Restore other registers
+         BR    R14                     Return to caller
+         DROP  R6,R12                  LINERET and VALIDLNE
+         TITLE 'Validate VERSION operand'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Validate VERSION operand                                     *
+*        The length should always be 4. The value is at least 0100    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE
+         USING VALIDVV,R12
+VALIDVV  DS    0H
+         STM   R14,R12,12(R13)         Save registers
+         LR    R12,R15                 Load base register
+         L     R6,0(,R1)               Point to VERSION PDE
+         USING VERSRET,R6              Address it
+         SR    R15,R15                 Default return code 0
+         TM    VEFLGS,$VEPRES          Was keyword present?
+         BZ    VVXIT                   No: default = ok
+         LH    R3,VERSL                Get length of VERSION keyword
+         CH    R3,=H'4'                Is the Length 4?
+         BNE   VVERR                   No: Rc=4, invalid VERSION
+         L     R14,VERSPTR             Address of Version operand
+         CLC   0(2,R14),=C'0100'       At least '0100'
+         BNL   VVXIT                   No: Invalid
+VVERR    LA    R15,4                   Return code 4
+VVXIT    L     R14,12(,R13)            Restore register 14
+         LM    R0,R12,20(R13)          Restore other registers
+         BR    R14                     Return to caller
+         DROP  R6,R12                  VERSRET and VALIDVV
+         LTORG
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+         COPY  DSNPARS
+*
+         COPY  CALLTS
+*
+         TITLE 'Program function keys'
+PFKS     CSECT
+PFK0106  DC    X'F1',C'N',C'HELP                    '
+         DC    X'F2',C'X',C'                        '
+         DC    X'F3',C'N',C'END                     '
+         DC    X'F4',C'N',C'RETURN                  '
+         DC    X'F5',C'N',C'F                       '
+         DC    X'F6',C'X',C'                        '
+PFK0712  DC    X'F7',C'N',C'UP                      '
+         DC    X'F8',C'N',C'DOWN                    '
+         DC    X'F9',C'X',C'                        '
+         DC    X'7A',C'N',C'LEFT                    '
+         DC    X'7B',C'N',C'RIGHT                   '
+         DC    X'7C',C'N',C'RETRIEVE                '
+PFK1318  DC    X'C1',C'N',C'HELP                    '
+         DC    X'C2',C'X',C'                        '
+         DC    X'C3',C'N',C'END                     '
+         DC    X'C4',C'N',C'RETURN                  '
+         DC    X'C5',C'N',C'F                       '
+         DC    X'C6',C'X',C'                        '
+PFK1924  DC    X'C7',C'N',C'UP                      '
+         DC    X'C8',C'N',C'DOWN                    '
+         DC    X'C9',C'X',C'                        '
+         DC    X'4A',C'N',C'LEFT                    '
+         DC    X'4B',C'N',C'RIGHT                   '
+         DC    X'4C',C'N',C'RETRIEVE                '
+         TITLE 'RPFCOMM CSECT'
+COMMAREA RPFCOMM DSECT=NO
+         TITLE 'Other DSECTS'
+*
+WORKAREA DSECT                         Dynamic workarea
+WORKSAVE DS    18F                     Our save area
+PACKFLD  DS    D
+PPL#LA   DS    F                       \___ Length + address PPL ____/
+PPL#PTR  DS    F                       /                             \
+CPPLADDR DS    F                       Address of PPL of TMP
+RETCODE  DS    F                       Return code
+RET#PRS  DS    F                       Return code from parse
+ECB      DS    F                       CP'S EVENT CONTROL BLOCK
+LINKR14  DS    F
+R12TS    DS    F                       Save register 12 CALLTS
+R14TS    DS    F                       Save register 14 CALLTS
+ADDRCOM  DS    F                       Address of RPFCOMM
+ANSWER   DS    F                       Parse answer area
+SPC24    DS    F                       Default 7,000 lines workspace
+WORKNAME DS    CL8                     Our program name
+EPLOC    DS    CL8                     Program to link to
+MSG      DS    CL40
+RPFDAPL  DS    5F                      DAIR parameter list
+RPFD08   DS    CL84                    DAIR allocation parm block
+RPFD18   DS    CL40                    DAIR unallocation parm block
+LNKLST   LINK  EPLOC=*,SF=L
+*                                      Parameter list
+WORKL    EQU   *-WORKAREA              Length of workarea
+         CVT   DSECT=YES,LIST=NO
+         PRINT NOGEN
+         DCBD   DSORG=PS,DEVD=DA
+         IKJCPPL
+         IKJUPT                        User profile table
+         IKJPPL                        Parse parameter list
+PPL#L    EQU   *-PPL
+         IKJDAPL                       DAIR parameter list
+         IKJDAP08                      DAIR allocation parm block
+         IKJDAP18                      DAIR unallocation parm block
+*
+DSNRET   DSECT
+DSNPTR   DS    F                       Pointer to data set name
+DSNL     DS    H                       Length of data set name
+DSNFLGS  DS    C
+$DPRES   EQU   128                     Data set is present
+$DQUOTE  EQU   64                      DSN between quotes
+         DS    C                       Reserved
+DSNM     DS    F                       Pointer to membername
+DSNML    DS    H                       Member length
+MFLGS    DS    C
+$MPRES   EQU   128                     Member is present
+         DS    C                       Reserved
+*
+VOLRET   DSECT
+VOLPTR   DS    F                       Pointer to volume serial
+VOLL     DS    H                       Length of volume serial
+VFLGS    DS    C
+$VPRES   EQU   128                     Volume is present
+         DS    C                       Reserved
+*
+LINERET  DSECT
+LINEPTR  DS    F                       Pointer to lines value
+LINEL    DS    H                       Length of lines value
+LFLGS    DS    C
+$LPRES   EQU   128                     Lines is present
+         DS    C                       Reserved
+*
+NUIDRET  DSECT
+NUIDPTR  DS    F                       Pointer to New user if there
+NUIDL    DS    H                       Length of lines value
+NFLGS    DS    C
+$NPRES   EQU   128                     New User is present
+         DS    C                       Reserved
+*
+VERSRET  DSECT
+VERSPTR  DS    F                       Pointer to ISPF version
+VERSL    DS    H                       Length of Version
+VEFLGS   DS    C
+$VEPRES  EQU   128                     Version is present if set
+         DS    C                       Reserved
+         END

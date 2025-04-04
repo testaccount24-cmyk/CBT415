@@ -1,0 +1,566 @@
+RPFASM00 TITLE 'STAND ALONE RPF FOREGROUND ASSEMBLER MONITOR'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFASM00                                      *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Author:        Rob Prins                                     *
+*                                                                     *
+*        Function:      Execute the RPF foreground assembler and      *
+*                       linkage editor in ISPF.                       *
+*                       RPFASM00 should be called in ISPF as          *
+*                       CMD(RPFASM00).                                *
+*                                                                     *
+*        This routine is a routine to exec RPF foreground assembler   *
+*        and linkage editor under ISPF.                               *
+*        What I do is the following:                                  *
+*        - Initialize the RPFCOMM area:                               *
+*        - Save our CPPL address to execute TSO service routines.     *
+*        - Define RPF default PFK's                                   *
+*        - Load ISPF interface ISPLINK                                *
+*        - Load RPFDAIR  and store address in EPDAIR                  *
+*        - Load RPFC3270 and store address in EPC3270                 *
+*        - Load RPFSUB   and store address in EPSUB                   *
+*        - VGET maclibs, srclib, objlib, ASM-parms, LKED-Parms,       *
+*          printer and output-class from ISPF profile.                *
+*        - Link to RPFASM                                             *
+*        - VPUT maclibs, srclib, objlib, ASM-parms, LKED-Parms,       *
+*          printer and output-class from ISPF profile.                *
+*        - Unallocate RPFWORK and RPFWORK2 with RPFDAIR.              *
+*        - Give msg 'RPFASM00 ended' to force the reshow code.        *
+*                                                                     *
+*        Registers:                                                   *
+*        Registers 12 and 10 are the base register.                   *
+*        Register 11 contains the address of RPFCOMM.                 *
+*                                                                     *
+*                                                                     *
+*        Subroutines:                                                 *
+*        RPFDAIR - allocate and unallocate source library             *
+*        RPFASM  - execute assembler and linkage editor               *
+*        RPFBRO  - browse output of assembler and linkage editor      *
+*        RPFPFK  - alter/display program function keys                *
+*                                                                     *
+*        Note: RPFCOMM is used with DSECT=NO!                         *
+*        The SYS1.(A)MODGEN library should be included in the         *
+*        SYSLIB concatenation of the assembly.                        *
+*        Set &OS390 to 1 if using RPFASM00 in z/OS or OS/390          *
+*        Set &MVSXA to 1 if using RPFASM00 in MVS/XA                  *
+*        Both variables can be found in member SYSVARS.               *
+*                                                                     *
+*        Change log:                                                  *
+*        Jan 25,2020 RPr: Allow terminals with buffer up to 16384     *
+*        May 08,2020 RPr: Load routine RPFC3270 for RPFBRO.           *
+*        May 22,2021 RPr: Treat RPFASM00 as a TSO command processor   *
+*                         with the address of the CPPL in register 1. *
+*        Jun 02,2021 RPr: Purge the TSO buffers and fix an ABEND0C1   *
+*                         if entering the TSO command in browse.      *
+*        Dec 20,2021 RPr: RPFASM00 made re-entrant and re-usable.     *
+*        Jul 10,2022 RPr: Add default Source lib and first Maclib     *
+*                         if not present in ISPF profile.             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFASM00 CSECT
+RPFASM00 AMODE 31
+RPFASM00 RMODE 24
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LA    R12,0(,R15)             Setup base register
+         USING RPFASM00,R12,R10        Get addressability
+         LR    R4,R1                   Save CPPL
+         GETMAIN R,LV=WORKL            Obtain save + working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(0,R13)             Forward pointer
+         LR    R13,R1                  Override callers save area
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         USING WORKAREA,R13            Address our working storage
+         LA    R10,2048(,R12)          Setup ...
+         LA    R10,2048(,R10)                2nd base
+         L     R1,=V(COMMAREA)         RPFCOMM
+         GETMAIN R,LV=COMML            Getmain
+         LR    R0,R1                   Set in register 0 for move
+         LR    R11,R1                  Set in register 11
+         LA    R1,COMML                Length of RPFCOMM
+         ST    R11,ADRCOMM             Save address of RPFCOMM
+         L     R2,=V(COMMAREA)         Start input
+         LR    R3,R1                   Duplicate length
+         MVCL  R0,R2                   Copy RPFCOMM into dynamic area
+         USING COMMAREA,R11
+         ST    R4,COMMCPPL             Save our CPPL address
+         GETMAIN R,LV=COMMASML         Acquire RPFASM section
+         ST    R1,COMASMPT             Save it's address
+         LR    R0,R1                   Set in register 0 for move
+         LR    R2,R1                   Same address
+         LA    R1,COMMASML             Length
+         XR    R3,R3                   Length input is zero
+         ICM   R3,8,=X'40'             Fill character is blank
+         MVCL  R0,R2                   Clear RPFASM section of RPFCOMM
+         LA    R0,RPFVARS              Blank
+         LR    R2,R0                        RPFVARS
+         LA    R1,VARLEN               Length
+         XR    R3,R3                   Length input is zero
+         ICM   R3,8,=X'40'             Fill character is blank
+         MVCL  R0,R2                   Blank all variables
+         XC    COMWRKLN,COMWRKLN       Clear fields in RPFCOMM
+         XC    COMWSTRT,COMWSTRT       ,,     ,,    ,,    ,,
+         XC    COMMLAST,COMMLAST       ,,     ,,    ,,   ,,
+         XC    COMMFLGS,COMMFLGS       ,,     ,,    ,,   ,,
+         GETMAIN R,LV=4096             Obtain screen buffer
+         ST    R1,COMMSCR
+         MVC   COMMSCLN,=A(4096)       And save the length
+         GETMAIN R,LV=1600             Allocate space for TSO commands
+         ST    R1,COMTSOCM             And save it's address
+         LR    R4,R1                   Duplicate in register 4
+         LR    R6,R4                   and in register 6 for MVCL
+         LA    R5,1600                 Length
+         IC    R7,=X'40'               Fill character
+         SLL   R7,24                   Promote to high-order
+         MVCL  R4,R6                   and clear the TSO commands
+         MVC   0(8,R1),=CL8'@RPFTSO'   Acronym
+         MVC   COMPFK01(156),PFK0106   MOVE DEFAULT RPF PFKEY'S
+         MVC   COMPFK07(156),PFK0712   ,,
+         MVC   COMPFK13(156),PFK1318   ,,
+         MVC   COMPFK19(156),PFK1924   ,,
+         L     R14,CVTPTR(,0)          Adress CVT
+         USING CVT,R14
+         MVC   COMMOS,CVTDCB           OS bits
+         DROP  R14                     CVT
+         CLI   COMMOS,X'13'            Native MVS?
+         BNE   INIT1                   No: do not touch COMMOS
+         LA    R1,136                  X'88'
+         SLL   R1,24                   Promote to high-order
+         LA    R1,0(,R1)               Clear high-order bit or byte
+         LTR   R1,R1                   Register zero?
+         BZ    INIT1                   No: no native MVS with AM31
+         MVI   COMMOS,X'93'            MVS with MVS380 installed
+INIT1    DS    0H
+         LOAD  EP=ISPLINK              Load entry point ISPLINK
+         LR    R9,R0                   Save entry point
+         MVI   COMMDSN,C' '                     blank
+         MVC   COMMDSN+1(L'COMMDSN-1),COMMDSN   the needed
+         MVC   COMMBR,COMMDSN                   fields
+         MVC   COMMVOL,COMMDSN
+         MVC   RPFSRCV,COMMDSN         Init source library
+         L     R2,COMASMPT             RPFASM section of RPFCOMM
+         USING COMMASMD,R2             Make addressable
+         MVC   COMMASM,=CL8'IFOX00'    Default IFOX00 assembler
+         AIF   (NOT &OS390).GO1
+         MVC   COMMASM,=CL8'ASMA90'    Assembler name in OS/390, z/OS
+         AGO   .GO2
+.GO1     ANOP
+         AIF   (NOT &MVSXA).GO2
+         MVC   COMMASM,=CL8'IEV90'     Assembler name in MVS/XA and ESA
+.GO2     ANOP
+         DROP  R2                      COMMASMD
+         GTSIZE
+         MVI   COMMCMD,X'7E'           And move in RPFCOMM
+         CH    R1,=H'80'               At least width of 80?
+         BL    NOFULLSC                No: error, no 3270 terminal
+         CH    R0,=H'24'               At least 24 lines?
+         BL    NOFULLSC                No: error, no 3270 terminal
+         CH    R1,=H'200'              No more width than 200?
+         BH    START13                 Yes: odd screen, make 24x80
+         CH    R0,=H'99'               More than 99 lines?
+         BH    START13                 Yes: odd screen, reset to 24x80
+         B     START07                 Test screen size (size*width)
+NOFULLSC DS    0H
+         LA    R1,MSG2                 Area address
+         LA    R0,MSG2LEN              Length
+         TPUT  (1),(0),R               Msg: invalid screensize
+         B     THEEND                  Exit
+START07  DS    0H
+         STM   R0,R1,COMMSIZE          Save them in RPFCOMM
+         MR    R0,R0                   Multiply size * width
+         C     R1,=F'1920'             1920 bytes?
+         BE    START13                 Yes: 3270 model 2
+         C     R1,=F'16384'            Maximum size (16K)?
+         BNH   START19                 No: good
+START13  DS    0H
+         MVI   COMMCMD,X'F5'           And move in RPFCOMM
+         LA    R0,24                   Set default
+         LA    R1,80                              24x80
+         STM   R0,R1,COMMSIZE          Save them in RPFCOMM
+START19  DS    0H
+         AIF   (&SVS).SVS1
+         L     R3,X'4C'                A(CVT)
+         L     R3,0(,R3)               A(my ASCB)
+         L     R3,12(,R3)              A(TCT)
+         L     R3,176(,R3)             A(USERID)
+         MVC   COMMUSER,0(R3)          Move TSO userid into RPFCOMM
+         AGO   .NOSVS1
+.SVS1    ANOP
+         L     R1,COMMCPPL             Out CPPL address
+         L     R1,8(,R1)               A(PSCB) = CPPL + 8
+         MVC   COMMUSER(7),0(R1)       Move TSO userid into RPFCOMM
+.NOSVS1  ANOP
+         LOAD  EP=RPFDAIR              Load RPFDAIR (allocation rout.)
+         ST    R0,EPDAIR               Store entry point in RPFCOMM
+         LOAD  EP=RPFSUB               Load RPFSUB
+         ST    R0,EPSUB                Store entry point in RPFCOMM
+         LOAD  EP=RPFC3270             Load RPFC3270 (compress 3270 ds)
+         ST    R0,EPC3270              Store entry point in RPFCOMM
+         L     R1,=V(DSNPARS)          Data set name parse routine
+         ST    R1,EPDSNPA
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFSRCN,RPFSRCV,TYPE,RPFSRCL),VL,         X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFSRCN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  EP OF ISPLINK
+         CALL  (15),(VDEFINE,RPFMAC1N,RPFMAC1V,TYPE,RPFMAC1L),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  EP OF ISPLINK
+         CALL  (15),(VGET,RPFMAC1N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFMAC2N,RPFMAC2V,TYPE,RPFMAC2L),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFMAC2N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFMAC3N,RPFMAC3V,TYPE,RPFMAC3L),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFMAC3N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFMAC4N,RPFMAC4V,TYPE,RPFMAC4L),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFMAC4N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFMAC5N,RPFMAC5V,TYPE,RPFMAC5L),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFMAC5N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFMAC6N,RPFMAC6V,TYPE,RPFMAC6L),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFMAC6N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFOBJN,RPFOBJV,TYPE,RPFOBJL),VL,         X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFOBJN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFST1N,RPFST1V,TYPE,RPFST1L),VL,         X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFST1N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFST2N,RPFST2V,TYPE,RPFST2L),VL,         X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFST2N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFST3N,RPFST3V,TYPE,RPFST3L),VL,         X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFST3N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFST4N,RPFST4V,TYPE,RPFST4L),VL,         X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFST4N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFST5N,RPFST5V,TYPE,RPFST5L),VL,         X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFST5N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFST6N,RPFST6V,TYPE,RPFST6L),VL,         X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFST6N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFIDDNN,RPFIDDNV,TYPE,RPFIDDNL),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFIDDNN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFIDSNN,RPFIDSNV,TYPE,RPFIDSNL),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFIDSNN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFASPAN,RPFASPAV,TYPE,RPFASPAL),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFASPAN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFLKPAN,RPFLKPAV,TYPE,RPFLKPAL),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFLKPAN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFDFPRN,RPFDFPRV,TYPE,RPFDFPRL),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFDFPRN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VDEFINE,RPFCLASN,RPFCLASV,TYPE,RPFCLASL),VL,      X
+               MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VGET,RPFCLASN,PROF),VL,MF=(E,CALLST)
+         MVC   COMMDSN,RPFSRCV         Move source library
+         MVC   COMMPRT,RPFDFPRV        Move default printer
+         MVC   COMOUTCL,RPFCLASV       Move default output class
+         L     R2,COMASMPT             RPFASM section of RPFCOMM
+         USING COMMASMD,R2             Make addressable
+         MVC   COMMMAC1,RPFMAC1V       Move
+         MVC   COMMMAC2,RPFMAC2V         in
+         MVC   COMMMAC3,RPFMAC3V           obtained
+         MVC   COMMMAC4,RPFMAC4V            ISPF
+         MVC   COMMMAC5,RPFMAC5V              var
+         MVC   COMMMAC6,RPFMAC6V                 iab
+         MVC   COMMOBJ,RPFOBJV                      les
+         MVC   COMMLKED(69),RPFST1V    Move
+         MVC   COMMLKED+69(69),RPFST2V    Linkage
+         MVC   COMMLKED+138(69),RPFST3V       Editor
+         MVC   COMMLKED+207(69),RPFST4V          Control
+         MVC   COMMLKED+276(69),RPFST5V              state-
+         MVC   COMMLKED+345(69),RPFST6V                  ments
+         MVC   COMMIDDN,RPFIDDNV       Move DDNAME of incl. library
+         MVC   COMMIDSN,RPFIDSNV       Move DSNAME of incl. library
+         MVC   COMMASPA,RPFASPAV       Move assembler parm
+         MVC   COMMLKPA,RPFLKPAV       Move linkage editor parm
+         CLC   COMMDSN(10),=CL10' '    Source library in ISPF prof?
+         BNE   SRCLIB9                 Yes: do not set a default src
+         MVI   COMMDSN,C' '            Blank field ...
+         MVC   COMMDSN+1(L'COMMDSN-1),COMMDSN         first
+         MVC   COMMDSN(8),COMMUSER     Default srclib start with userid
+         LA    R1,COMMDSN              Try to find blank to add '.ASM'
+         LA    R14,8                   Search max 8 positions
+SRCLIB1  DS    0H
+         CLI   0(R1),C' '              Blank found?
+         BE    SRCLIB5                 Yes: add '.ASM'
+         LA    R1,1(,R1)               Next position
+         BCT   R14,SRCLIB1             Test again
+SRCLIB5  DS    0H
+         MVC   0(4,R1),=C'.ASM'        Add default suffix
+SRCLIB9  DS    0H
+         CLC   COMMMAC1(10),=CL10' '   First maclib in ISPF profile?
+         BNE   LINKASM                 Yes: use this maclib
+         MVC   COMMMAC1,=CL46'''SYS1.MACLIB''' Else default to SYS1...
+         DROP  R2                      COMMASMD
+LINKASM  DS    0H
+         LA    R1,ADRCOMM              Parameter
+         LINK  EP=RPFASM               Invoke RPF foreground assembler
+TESTRC   DS    0H                      RPFASM terminated successfully
+         MVC   RPFSRCV,COMMDSN
+         MVC   RPFDFPRV,COMMPRT
+         MVC   RPFCLASV,COMOUTCL
+         L     R2,COMASMPT             RPFASM section of RPFCOMM
+         USING COMMASMD,R2             Make addressable
+         MVC   RPFMAC1V,COMMMAC1       Write
+         MVC   RPFMAC2V,COMMMAC2         Altered
+         MVC   RPFMAC3V,COMMMAC3           Variablles
+         MVC   RPFMAC4V,COMMMAC4              by RPFASM
+         MVC   RPFMAC5V,COMMMAC5                on
+         MVC   RPFMAC6V,COMMMAC6
+         MVC   RPFOBJV,COMMOBJ                    ISPPROF
+         MVC   RPFST1V,COMMLKED
+         MVC   RPFST2V,COMMLKED+69
+         MVC   RPFST3V,COMMLKED+138
+         MVC   RPFST4V,COMMLKED+207
+         MVC   RPFST5V,COMMLKED+276
+         MVC   RPFST6V,COMMLKED+345
+         MVC   RPFIDDNV,COMMIDDN
+         MVC   RPFIDSNV,COMMIDSN
+         MVC   RPFASPAV,COMMASPA
+         MVC   RPFLKPAV,COMMLKPA
+         DROP  R2                      COMMASMD
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFMAC1N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFMAC2N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFMAC3N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFMAC4N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFMAC5N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFMAC6N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFOBJN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFSRCN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFST1N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFST2N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFST3N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFST4N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFST5N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFST6N,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFIDDNN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFIDSNN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFASPAN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFLKPAN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFDFPRN,PROF),VL,MF=(E,CALLST)
+         LR    R15,R9                  Entry point of ISPLINK
+         CALL  (15),(VPUT,RPFCLASN,PROF),VL,MF=(E,CALLST)
+THEEND   DS    0H
+         TCLEARQ INPUT                 Purge input buffers
+         TCLEARQ OUTPUT                Purge output buffers
+         NI    COMMFLG1,255-$COMMALC   Tell RPFDAIR to unallocate
+         L     R15,EPDAIR              EP of RPFDAIR
+         LA    R1,ADRCOMM              Address of RPFCOMM
+         CALL  (15)                    Invoke RPFDAIR
+         L     R2,COMMSCR              Load screen buffer address
+         FREEMAIN R,LV=4096,A=(2)      FREEMAIN screen area
+         L     R2,COMTSOCM             Load screen area address
+         FREEMAIN R,LV=1600,A=(2)      FREEMAIN TSO commands area
+         L     R2,COMASMPT             RPFASM section of RPFCOMM
+         FREEMAIN R,LV=COMMASML,A=(2)  Get rid of this area
+         FREEMAIN R,LV=COMML,A=(11)    Release RPFCOMM
+         LA    R1,MSG                  Area address
+         LA    R0,MSGLEN               Length
+         TPUT  (1),(0),R               Msg: invalid screensize
+         LR    R3,R13                  Our working storage
+         L     R13,4(,R13)             Callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release working storage
+         RETURN (14,12),RC=0           and return
+DSNMOVE  MVC   COMMDSN(0),2(R10)       << executed >>
+*
+VDEFINE  DC    CL8'VDEFINE'            ISPF Vdefine
+TYPE     DC    CL8'CHAR'
+VPUT     DC    CL8'VPUT'               ISPF Vput
+VGET     DC    CL8'VGET'               ISPF Vget
+PROF     DC    CL8'PROFILE'
+RPFST1N  DC    C'(RPFST1)'             LKED control statement 1
+RPFST1L  DC    A(69)
+RPFST2N  DC    C'(RPFST2)'             LKED control statement 2
+RPFST2L  DC    A(69)
+RPFST3N  DC    C'(RPFST3)'             LKED control statement 3
+RPFST3L  DC    A(69)
+RPFST4N  DC    C'(RPFST4)'             LKED control statement 4
+RPFST4L  DC    A(69)
+RPFST5N  DC    C'(RPFST5)'             LKED control statement 5
+RPFST5L  DC    A(69)
+RPFST6N  DC    C'(RPFST6)'             LKED conteol statement 6
+RPFST6L  DC    A(69)
+RPFMAC1N DC    C'(RPFMAC1)'            Maclib 1 (SYSLIB)
+RPFMAC1L DC    A(46)
+RPFMAC2N DC    C'(RPFMAC2)'            Maclib 2
+RPFMAC2L DC    A(46)
+RPFMAC3N DC    C'(RPFMAC3)'            Maclib 3
+RPFMAC3L DC    A(46)
+RPFMAC4N DC    C'(RPFMAC4)'            Maclib 4
+RPFMAC4L DC    A(46)
+RPFMAC5N DC    C'(RPFMAC5)'            Maclib 5
+RPFMAC5L DC    A(46)
+RPFMAC6N DC    C'(RPFMAC6)'            Maclib 6
+RPFMAC6L DC    A(46)
+RPFOBJN  DC    C'(RPFOBJ)'             Object library (SYSLIN)
+RPFOBJL  DC    A(46)
+RPFSRCN  DC    C'(RPFSRC)'             Source library
+RPFSRCL  DC    A(46)
+RPFIDDNN DC    C'(RPFIDDN)'            Include library DDname
+RPFIDDNL DC    A(8)
+RPFIDSNN DC    C'(RPFIDSN)'            Include library DSName
+RPFIDSNL DC    A(46)
+RPFASPAN DC    C'(RPFASPA)'            Assembler parm
+RPFASPAL DC    A(30)
+RPFLKPAN DC    C'(RPFLKPA)'            Linkage editor parm
+RPFLKPAL DC    A(30)
+RPFDFPRN DC    C'(RPFDFPRT)'           Default printer
+RPFDFPRL DC    A(8)
+RPFCLASN DC    C'(RPFCLASS)'           Output class
+RPFCLASL DC    A(1)
+*
+MSG      DC    C'RPFASM00 ended'
+MSGLEN   EQU   *-MSG
+MSG2     DC    C'Invalid screensize, RPFASM00 ended'
+MSG2LEN  EQU   *-MSG2
+PFK0106  DC    X'F1',C'N',C'HELP                    '
+         DC    X'F2',C'X',C'                        '
+         DC    X'F3',C'N',C'END                     '
+         DC    X'F4',C'N',C'RETURN                  '
+         DC    X'F5',C'N',C'FIND                    '
+         DC    X'F6',C'X',C'                        '
+PFK0712  DC    X'F7',C'N',C'UP                      '
+         DC    X'F8',C'N',C'DOWN                    '
+         DC    X'F9',C'X',C'                        '
+         DC    X'7A',C'N',C'LEFT                    '
+         DC    X'7B',C'N',C'RIGHT                   '
+         DC    X'7C',C'N',C'                        '
+PFK1318  DC    X'C1',C'N',C'HELP                    '
+         DC    X'C2',C'X',C'                        '
+         DC    X'C3',C'N',C'END                     '
+         DC    X'C4',C'N',C'RETURN                  '
+         DC    X'C5',C'N',C'FIND                    '
+         DC    X'C6',C'X',C'                        '
+PFK1924  DC    X'C7',C'N',C'UP                      '
+         DC    X'C8',C'N',C'DOWN                    '
+         DC    X'C9',C'X',C'                        '
+         DC    X'4A',C'N',C'LEFT                    '
+         DC    X'4B',C'N',C'RIGHT                   '
+         DC    X'4C',C'N',C'                        '
+         LTORG ,
+*
+         COPY  DSNPARS
+*
+         TITLE 'RPFCOMM CSECT'
+COMMAREA RPFCOMM DSECT=NO
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Our save area
+DWB      DC    D'0'
+ADRCOMM  DS    F                       Contains address of RPFCOMM
+CALLST   DS    5F                      Parmlist ISPLINK calls
+RPFVARS  EQU   *
+RPFST1V  DS    CL69
+RPFST2V  DS    CL69
+RPFST3V  DS    CL69
+RPFST4V  DS    CL69
+RPFST5V  DS    CL69
+RPFST6V  DS    CL69
+RPFMAC1V DS    CL46
+RPFMAC2V DS    CL46
+RPFMAC3V DS    CL46
+RPFMAC4V DS    CL46
+RPFMAC5V DS    CL46
+RPFMAC6V DS    CL46
+RPFOBJV  DS    CL46
+RPFSRCV  DS    CL46
+RPFIDDNV DS    CL8
+RPFIDSNV DS    CL46
+RPFASPAV DS    CL30
+RPFLKPAV DS    CL30
+RPFDFPRV DS    CL8
+RPFCLASV DS    CL1
+VARLEN   EQU   *-RPFVARS
+WORKL    EQU   *-WORKAREA
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         PRINT NOGEN
+         CVT   DSECT=YES,LIST=NO
+         IKJTCB
+         IKJUPT
+         END

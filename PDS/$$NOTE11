@@ -1,0 +1,68 @@
+    RPF 192
+Subject:  RPF 192
+From:     <robprins2@kpnmail.nl>
+Date:     4/3/2022, 6:44 AM
+To:       "Sam Golob" <sbgolob@cbttape.org>
+
+Dear Sam,
+
+The new release of RPF is finished.
+
+This release contains a lot of improvements and some bug fixes.
+
+The release notes are:
+
+RPFASM   Fix allocation error include library (INC-Lib).
+RPFVTOC  Module made re-entrant and re-usable and large volumes
+         supported in OS/390 and z/OS.
+RPFEDIT  Increment line number on screen set to 1, do not renumber
+         numbered data initially, with the exception of new
+         datasets/members, Number of changes counted for RPFSAVE
+         and VIEW mode supported.
+RPFFIND  Operands 'line-1' and 'line-2' deleted in F(IND) primary
+         command and replaced by 'start column'.
+RPFALLOC Module made re-entrant and re-usable.
+Primary command NONUM changed into NUMBER OFF.
+Primary command NUM changed into NUMBER ON.
+RPFSAVE  Fix misplacement line number in V(B) data sets.
+RPFCHNG  Fix misplacement line number in V(B) data sets.
+RPFFILL  Fix misplacement line number in V(B) data sets.
+RPFSAVE  ISPF stats modified lines updated from RPFEDIT
+RPFPDS   ISPF initial size + modified lines placed in screen if
+         screen width >= 92 + order of stats entries changed on
+         screen, fix wrong SORT CHA and SORT SIZE result, line
+         command 'V' invokes the editor in VIEW mode, and add
+         option 'OV' and option 'NX' in the load module member
+         selection list if in effect.
+RPFMVCPY Order of ISPF stats entries changed on screen, COPY/MOVE
+         with IEBCOPY runs now in a non-APF environment in MVS38J
+         like MVS/ESA and above, message 'From/To dataset not in
+         catalg' added and add option 'OV' and option 'NX' in the
+         load module member selection list if in effect.
+RPFTSO   Reset APF authorization temporary if invoking a non-APF
+         command processor in MVS38J and module made re-entrant and
+         re-usable.
+RPFVTOC1 Compress with IEBCOPY runs now in a non-APF environment
+         in MVS38J like MVS/ESA and above, and VIEW mode
+         supported with line command 'V'.
+RPFMAIN  PF01 and PF13 key supported in MAIN menu to invoke HELP
+         function.
+RPFDATAL 'Skip numbers' added in menu in option 3.8, Search
+         strings of data.
+RPFSRCH  Skip search of last 8 bytes of fixed data or first 8
+         bytes of variable data if 'Skip numbers' = Y, or skip
+         first 6 bytes and last 8 bytes if value = C.
+RPFOUT   Module made re-entrant and re-usable.
+
+Would you like to post the enclosed file onto CBT?
+
+Many thanks in advance,
+
+Met vriendelijke groet/With kind regards
+Rob Prins
+Haremakers 54, 1531 LC Wormer
+Ploegdijk 2 H633, 7241 SC Lochem
+T 06-46312299
+E robprins2@kpnmail.nl
+www.prince-webdesign.nl
+

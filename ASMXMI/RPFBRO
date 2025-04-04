@@ -1,0 +1,2766 @@
+RPFBRO   TITLE 'RPF Browse processor'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFBRO.                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFARCH, RPFARSVE, RPFASM,  RPFHCPY, RPFHELP, *
+*                       RPFLIB, RPFLIB01, RPFMAIN, RPFMVCPY, RPFOUT,  *
+*                       RPFPDS, RPFSRCH, RPFVTOC1.                    *
+*                                                                     *
+*        Subroutines:   RPFCNVDT convert Julian date.                 *
+*                       RPFC3270 Compress 3270 data stream.           *
+*                       RPFPFK   Display/alter program function keys. *
+*                       RPFSUB   Submit jobs with TSO SUBMIT command. *
+*                                                                     *
+*        Function:      Browse data sets, members or output listings. *
+*                       The input parameter is in COMMPRM in RPFCOMM. *
+*                                                                     *
+*                       Bytes 0-7  : DDNAME                           *
+*                                    The DD-name will be set into     *
+*                                    the the DCB in RPFBRO.           *
+*                                                                     *
+*                       The DDNAME could be:                          *
+*                       RPFPRINT The DDNAME of the assembler listing  *
+*                                or the DDNAME of the SEARCH print    *
+*                                data set with DDNAME=RPFPRINT        *
+*                       RPFLKPRT The DDNAME of the linkage editor     *
+*                                listing with DDNAME=RPFLKPRT         *
+*                       RPFEDPRT The DDNAME of RPFHCPY print data set *
+*                       RPFTERM  The SYSTERM output of the assembler  *
+*                       RPFWORK  The to be browsed source data        *
+*                       RPFHELP  The to be browsed HELP data          *
+*                       RPFEDT1  The Librarian information            *
+*                                                                     *
+*                       Bytes 8-15 : the string 'PRINT' or blanks.    *
+*                                    If the string PRINT is there,    *
+*                                    only a print in the default      *
+*                                    SYSOUT class will be produced.   *
+*                                                                     *
+*                       Bytes 16-23: the program name, which output   *
+*                                    will be browsed or blanks        *
+*                                    If the program name is there,    *
+*                                    a different header will be set   *
+*                                    in the browse panel.             *
+*                                                                     *
+*        Registers:     Registers 12 and 10 are the base registers    *
+*                       for the mainline.                             *
+*                       Register 12 is the base for the other CSECTS. *
+*                       Register 13 points to the working storage     *
+*                       Register 11 always points to the RPFCOMM      *
+*                                   control block.                    *
+*                                                                     *
+*        Notes:         Browse of data sets with RECFM=U will be      *
+*                       executed by copying the RECFM=U data set      *
+*                       to a RECFM=VB data set with a LRECL           *
+*                       that fits in the screen width.                *
+*                       This data set will be browsed.                *
+*                                                                     *
+*        Return codes set in register 15:                             *
+*                       00:     No errors                             *
+*                       08:     Errors detected, message set in       *
+*                               COMMPRM in RPFCOMM                    *
+*                                                                     *
+*        Primary commands:                                            *
+*                       ASCII:  Toggle translate ASCII to EBCDIC on   *
+*                               or off.                               *
+*                       TOP:    Display top of data set or listing    *
+*                       BOTTOM: Display bottom of data set or listing *
+*                       END:    Terminate Browse and return to caller *
+*                       HELP:   Display brief HELP information        *
+*                       HEX:    Toggle HEX display                    *
+*                       DOWN:   Scroll forward                        *
+*                       UP:     Scroll backward                       *
+*                       LEFT:   Scroll Left                           *
+*                       RIGHT:  Scroll Right                          *
+*                       SUBMIT: Submit the data set if JCL present    *
+*                       RETURN: Terminate browse and return to RPFMAIN*
+*                       C nn:   Start display with column "nn"        *
+*                       PRINT x:Print data set into SYSOUT class "x"  *
+*                       PFK:    Alter PFK definitions                 *
+*                       F STR:  Find character string                 *
+*                       TSO:    Execute TSO commands.                 *
+*                       =N/=N.N Exec option N or N.N from RPFMAIN     *
+*                 E.G. '=3.4' Go directly to opt 3.4 in main (DS LIST)*
+*                                                                     *
+*        Change log:                                                  *
+*        Jun 11,1993 RPr: 3270 model 5 (27 rows, 132 columns)         *
+*                         supported.                                  *
+*        Apr 25,1997 RPr: made 2000 compliant                         *
+*        Mar 12,2001 RPr: max size decreased to 1024 pages            *
+*        May 17,2001 RPr: Submit command added                        *
+*        Jul 17,2002 RPr: Add '=n'/'=n.n' command                  @rp1
+*        Aug 24,2002 RPr: Support browsing V(B) data sets          @rp2
+*        Oct 16,2002 RPr: Block data sets with a LRECL > 255       @rp3
+*        Oct 17,2002 RPr: Add SCL and SCR command                  @rp4
+*        Nov 11,2002 RPr: Add 7 color support                      @rp5
+*        Nov 17,2002 RPr: Change worksize from (LINES on screen * 258)*
+*                         to (LINES on screen * (LRECL+3))         @rp6
+*                         Increase Number of screen pages to 2048  @rp6
+*        Feb 06,2003 RPr: Error resolved if lrecl < screensize and @rp7
+*                         data contains control chars              @rp7
+*        Dec 14,2018 RPr: Make RPF compatible for MVS/380 and up @rpa01
+*        Jan 26,2019 RPr: Optimize RPFBRO for future enhancements  @rp8
+*        Jan 31,2019 RPr: Support HEX command                      @rp9
+*        Mar 11,2019 RPr: Prevent scattered screen if non standard @rpa
+*                         screen sizes are used and ....           @rpa
+*                         Support large screens up to 62x160  @gp1/@rpa
+*                         with special thanks to Greg Price   @gp1/@rpa
+*        May 14,2019 Rpr: Add alias commands LEFT/RIGHT/UP and DOWN   *
+*        Jul 03,2019 RPr: Obey the SUBMIT=TSO or SUBMIT=RPF default   *
+*        Sep 27,2019 RPr: Increase number of screens to 15360 if the  *
+*                         addressing mode is 31/32 or 64              *
+*        Oct 13,2019 RPr: Do a little parsing of the primary commands *
+*                         and remove ON/OFF in the HEX command.       *
+*        Oct 17,2019 RPr: SCR1 removed, add EW/EWA in main screen     *
+*        Oct 28,2019 RPr: Remove invalid characters in PRINT output   *
+*        Nov 04,2019 RPr: Fix loop in FIND if storage is exhausted    *
+*                         and text was not found                      *
+*        Nov 12,2019 RPr: Fix SCR (RIGHT) command. The data was       *
+*                         1 byte too far positioned.                  *
+*        Jan 03,2020 RPr: Add alias FIND along the 'F' command        *
+*        Jan 14,2020 RPr: Set EOF flag if an I/O error detected       *
+*        Jan 25,2020 RPr: Support terminals up to 9920 bytes.         *
+*                         (like 62x160 or 99x100)                     *
+*        Feb 06,2020 RPr: Translate invalid character only on screen. *
+*                         Browse of RECFM=U data sets implemented.    *
+*        Feb 17,2020 RPr: HELP screen improved, has now the same      *
+*                         size as the other screens.                  *
+*        Feb 19,2020 RPr: Translate only a-z to CAPS in command area  *
+*        Apr 02,2020 RPr: Compress the 3270 data stream before TPUT   *
+*                         Support screens up to 16384 bytes with a    *
+*                         maximum linecount of 99 and a maximum width *
+*                         of 200 bytes.                               *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Sep 05,2020 RPr: Fix storage constraint if invoked for PRINT *
+*        Sep 18,2020 RPr: Fix ABEND0C4 in HEX command                 *
+*        Oct 18,2020 RPr: Fix blank screen if # records of data set   *
+*                         is exactly a multiple of (screen lines - 2) *
+*        Jan 06,2021 RPr: Primary command TSO added.                  *
+*        May 14,2021 RPr: F x'hhhh...' or FIND x'hhhh..' supported.   *
+*                         Fix not found matches of 'string' in        *
+*                         HEX mode with 'F' primary command.          *
+*        May 21,2021 RPr: Allocate/unallocate temporary data set      *
+*                         for browsing RECFM=U data sets and          *
+*                         the SYSOUT files for PRINT with IKJDAIR.    *
+*                         SUBMIT function removed. Module RPFSUB      *
+*                         invoked for the SUBMIT function.            *
+*        Jun 03,2021 RPr: ESTAE removed, file abends recovered with   *
+*                         SYNAD routines.                             *
+*        Jul 15,2021 RPr: Screen area moved to a GETMAIN'ed area      *
+*                         and made dependent of screen size.          *
+*        Aug 13,2021 RPr: DATE routine replaced by call to RPFCNVDT.  *
+*        Sep 22,2021 RPr: RPFBRO made re-entrant and re-usable.       *
+*        Nov 10,2021 RPr: Fix missing separator line of RECFM=U data  *
+*                         if block of data is exactly 'n' * LRECL-10  *
+*                         of output temporary data set.               *
+*        Jan 01,2023 RPr: Increase length of counters in headers      *
+*                         of print lines for extended ISPF stats      *
+*        Jul 01,2023 RPr: Remove the stack and all the GETMAIN'ed     *
+*                         screen areas to reduce storage requirements.*
+*                         LABEL and L primary commands deleted.       *
+*        Sep 21,2023 RPr: Fix wrong message if trying to SUBMIT a     *
+*                         data set with non card image records.       *
+*        Nov 01,2023 RPr: Add primary command ASCII to toggle         *
+*                         translate ASCII to ECBDIC or not.           *
+*        Nov 02,2023 RPr: Fix need of DOWN command before repeat FIND.*
+*        Dec 12,2023 RPr: Primary command ASCII added in HELP screen. *
+*        Feb 23,2024 RPr: Prevent ABEND0C4 by disabling the initial   *
+*                         repeat find.                                *
+*        Mar 30,2024 RPr: Add '** Bottom of data **' line.            *
+*        Jun 28,2024 RPr: Fix browse error and ABEND0C4 in HEX mode   *
+*                         if a V(B) record contains no data.          *
+*        Aug 01,2024 RPr: Fix omission of error messages if an error  *
+*                         occurs.                                     *
+*        Aug 23,2024 RPr: Scroll from/to cursor position if the       *
+*                         cursor is in the data.                      *
+*        Sep 13,2024 RPr: Browse all data sets supported, but the     *
+*                         record length will be truncated to 255.     *
+*        Nov 13,2024 RPr: Add ISPF vv.mm in header if present.        *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFBRO   CSECT                         RPF Browse processor
+RPFBRO   AMODE 31                                                @rpa01
+RPFBRO   RMODE 24                                                @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFBRO,R12,R10          Make RPFBRO addressable
+         LA    R10,2048(,R12)          Second base register
+         LA    R10,2048(,R10)
+         L     R11,0(,R1)              Load RPFCOMM area
+         USING COMMAREA,R11            Make RPFCOMM addressable
+         GETMAIN R,LV=WORKL            Obtain working storage area
+         ST    R1,8(0,R13)             Forward pointer
+         ST    R13,4(,R1)              Backward pointer
+         LR    R13,R1
+         USING WORKAREA,R13            Make working storage addressable
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         L     R1,COMMCOLS             Screen size (columns)
+         LA    R1,3(,R1)               + extended colors
+         L     R0,COMMSIZE             # lines on screen
+         BCTR  R0,0                    Minus 2 ...
+         BCTR  R0,0                               header lines
+         MR    R0,R0                   Size of all data lines in screen
+         LA    R1,SCR5LEN(,R1)         Add length of headers
+         ST    R1,LSCREEN              Save this length
+         GETMAIN R,LV=(1)
+         ST    R1,ASCREEN              Save its address
+         LR    R0,R1                   Output in register 0
+         LA    R1,SCR5LEN              Length of headers
+         LR    R3,R1                   Length1 = length2
+         L     R2,=V(SCR5TXT)          Input screen
+         MVCL  R0,R2                   ... and copy
+         LA    R1,SCREENHL             Help screen length
+         GETMAIN R,LV=(1)              Acquire store for HELP screen
+         ST    R1,ASCRH                Save its address
+         LR    R0,R1                   Output in register 0
+         LA    R1,SCREENHL             Length of HELP screen
+         LR    R3,R1                   Length1 = length2
+         L     R2,=V(SCREENH)          Input HELP screen
+         MVCL  R0,R2                   ... and copy
+         XC    PAGESPC,PAGESPC         Clear page space address
+         MVC   BROPARM,COMMPRM         Move parameters
+         XC    COMMPRM,COMMPRM         and clear
+         MVI   SC@BUFF,C' '            Blank parse ...
+         MVC   SC@BUFF+1(79),SC@BUFF               buffer
+         XC    LENSTR,LENSTR           Disable initial repeat FIND
+         MVC   HEAD1,TXT1              Move ...
+         MVC   HEAD2,TXT2                   contents of ...
+         MVC   HEAD3,TXT3                               headers
+         MVI   SYSCLS,C'C'             Default SYSOUT class
+         MVC   MSG2TXT,MDL2TXT         Line xxxx, col yyyyy
+         MVC   SCR5TX1,MDL5TX1         Move screen ...
+         MVC   SCR5TX3,MDL5TX3                     headers
+         XC    DECBU(DECBLEN),DECBU    Clear Data Event Control Block
+         MVI   MSG5,C'-'               Initialize
+         MVC   MSG5+1(L'MSG5-1),MSG5             MSG5
+         MVC   RPFPRINT,MDLPRINT       Move ...
+         MVC   SYSOUT,MDLOUT                model ...
+         MVC   RPFWORK2,MDLWORK2                  DCB's
+         LA    R0,JFCB                 Job file control block
+         ST    R0,EXLST                Save JFCB in exit list
+         MVI   EXLST,X'87'             JFCB exit = last entry
+         LA    R0,EXLST                Exit list
+         STCM  R0,B'0111',RPFPRINT+DCBEXLSA-IHADCB
+         LA    R1,JULDATE              Parm 1 RPFCNVDT
+         ST    R1,PRMCNVD1             Save
+         LA    R1,OUTPUT               Parm 2 RPFCNVDT
+         ST    R1,PRMCNVD2             Save
+         LM    R0,R1,COMMSIZE          Pickup # lines/ # columns   @rpa
+         LA    R3,3                                                @gp1
+         SR    R0,R3                   Get data display line count @gp1
+         STH   R0,#LINES               Save it                     @gp1
+         LR    R3,R1                   Copy screen width           @gp1
+         BCTR  R1,0                    Decrement line length       @gp1
+         ST    R1,LENGTH               Save line length code       @gp1
+         L     R7,ASCREEN              Point to Browse panel
+         USING SCR5TXT,R7              Make addressable            @rpa
+         MVC   SCR5CMD(1),COMMCMD      Set EW/EWA into data str.   @gp1
+         LA    R1,2                    Default start column
+         ST    R1,COLUMN                 ,,      ,,    ,,
+         MVI   SWITCH,0                Init flag byte
+         MVI   SW2,0                   Init flag byte 2
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SBA5#00+1          Update SBA for:    r01,c01
+*
+         LA    R0,1                    Row 1
+         LR    R1,R3                   Get column count            @gp1
+         SH    R1,=H'24'               Get adjustment size
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SBA5#0+1           Update SBA for:    R01,C56+ @gp1
+*
+         LA    R0,2                    Row 2
+         LA    R1,1                    Get column count            @gp1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SBA5#1+1           Update SBA for:    R02,C01  @gp1
+*
+         LA    R0,3                    Row 3
+         LA    R1,1                    Get column count            @gp1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SBA5#2+1           Update SBA for:    R03,C01  @gp1
+*
+*        Place the data in the middle of the HELP screen if a wide
+*        screen is used. This looks much nicer.
+*
+         L     R5,COMMCOLS             Width of screen
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+*
+WRSBA01  DS    0H
+         L     R8,ASCRH                Help screen
+         USING SCREENH,R8
+         MVC   SCRHTXT(1),COMMCMD      Set EW/EWA into data str.
+*
+         LA    R0,1                    Get row count
+         LA    R1,1                    Get column count
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCRHTXT+3          Update SBA for r1c1+ HELP screen
+*
+         LA    R0,2                    Get row count
+         LA    R1,1                    Get column count
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R2C1+1             Update SBA for r2c1+ HELP screen
+*
+         LA    R3,R4C1                 Start with row 4
+         LA    R4,15                   15 rows to go
+         LA    R5,4                    Row 4 is the first
+*
+SCR01    DS    0H
+         LR    R0,R5                   Get row count
+         LA    R1,1                    Get column count
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              Update SBA for rxc1+ HELP screen
+         LA    R5,1(,R5)               Next row
+         LA    R3,R4C1L(,R3)           Next row HELP screen
+         BCT   R4,SCR01                Loop until all done
+*
+         LA    R0,21                   Get row count
+         LA    R1,1                    Get column count
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R21C1+1            Update SBA for r21c1+ HELP scr
+*
+         LA    R0,22                   Get row count
+         LA    R1,1                    Get column count
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R22C1+1            Update SBA for r22c1+ HELP scr
+*
+         L     R0,COMMSIZE             Get row count (last row)
+         LA    R1,1                    Get column count
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLC1+1             Update SBA for r last c1+
+*
+         DROP  R8
+         LM    R0,R1,COMMSIZE          Reload screen dimensions    @gp1
+         BCTR  R0,0                                                @gp1
+         BCTR  R0,0                    Discount top 2 lines        @gp1
+         LA    R1,3(,R1)               Account for color codes     @gp1
+         MR    R0,R0                   Screen size minus 2 lines   @gp1
+         ST    R1,TPUTLEN              Save the TPUT length
+         LA    R8,RPFPRINT             Load DCB
+         USING IHADCB,R8               Dsect over DCB
+         MVC   DCBDDNAM(8),BRODDN      Move DDNAME into DCB
+         CLC   DCBDDNAM,=CL8'RPFHELP'  BROWSE invoked BY HELP?
+         BNE   TESTUTIL                No: also good
+         MVC   SCR5HEAD,SCR5TX2        Move different header
+         B     PRTOPEN2                .. and open input
+TESTUTIL DS    0H
+         CLI   BROPROG,X'00'           Program name in bytes 16-23
+*                                      of COMMPRM?
+         BE    DSN0                    No: move normal BROWSE header
+         MVC   SCR5DDN,BRODDN          Move DDNAME and utility
+         MVC   SCR5UTIL,BROPROG        - name from RPFCOMM in header
+         MVC   SCR5HEAD,SCR5TX3        Move different header
+         B     PRTOPEN2                Branch
+DSN0     DS    0H
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         RDJFCB RPFPRINT,MF=(E,COMOPN)  Read JFCB
+         MVC   SCR5DSN,JFCB            .. and move DSN into panel
+         LA    R3,SCR5DSN+43           Fill last blanks in DSN with -
+         LA    R4,44                   Maximum 44 positions
+DSN1     DS    0H
+         CLI   0(R3),C' '              Trailing blank found?
+         BNE   DSN9                    No: all trailing blanks replaced
+         MVI   0(R3),C'-'              Replace by '-' (looks nice)
+         BCTR  R3,0                    Decrease by 1
+         BCT   R4,DSN1                 Loop until trailing spaces
+DSN9     DS    0H                      ... replaced
+         CLI   JFCB+44,C' '            Does JFCB contain a membername?
+         BE    PRTOPEN                 No: sequential file so open it
+         CLC   COMMCOLS,=F'90'         A wide screen?
+         BH    DSN10                   Yes: DSN/Member/vv.mm always fit
+         CLI   SCR5DSN+37,C'-'         Not a long DSN?
+         BNE   PRTOPEN                 If long, no room for membername
+DSN10    LA    R3,SCR5DSN              Pickup DSNAME
+         LA    R3,0(R3,R4)             Actual length of DSNAME
+         MVI   0(R3),C'('              Left parenthese
+         MVC   1(8,R3),JFCB+44         Move member name
+         TR    1(8,R3),COMTRTAB        Get rid of unprintables
+         LA    R3,8(,R3)               Point to last byte member name
+         LA    R4,7                    Max 7 times BCT
+MEM1     DS    0H
+         CLI   0(R3),C' '              Trailing blank found?
+         BNE   MEM9                    No: replace complete
+         MVI   0(R3),C'-'              Replace by '-' (looks nice)
+         BCTR  R3,0                    Previous position in membername
+         BCT   R4,MEM1                 Loop until all blanks replaced
+MEM9     DS    0H
+         MVC   1(2,R3),=CL2')'         Right parenthese
+         LA    R3,3(,R3)               Point after parenthese +1
+         XR    R1,R1                   Clear register 1
+         XR    R14,R14                 Clear register 14
+         IC    R1,COMMVM               ISPF/RPF vv byte
+         IC    R14,COMMVM+1            ISPF/RPF mm byte
+         LTR   R1,R1                   Present?
+         BZ    PRTOPEN                 No: do not set VV:MM in header
+         CVD   R1,DBW                  Make Packed decimal
+         OI    DBW+7,X'0F'             Clear sign
+         UNPK  0(2,R3),DBW             Unpack ISPF vv
+         MVI   2(R3),C'.'              Period between vv and mm
+         CVD   R14,DBW                 Make Packed decimal
+         OI    DBW+7,X'0F'             Clear sign
+         UNPK  3(2,R3),DBW             Unpack the result
+PRTOPEN  DS    0H
+         MVC   SCR5HEAD,SCR5TX1        Move default BROWSE header
+PRTOPEN2 DS    0H
+         DROP  R7                      Kill addr. of SCR5TXT       @rpa
+         L     R15,=V(OPEN)            Routine address
+         BALR  R14,R15                 Execute
+         TM    DCBRECFM,DCBRECU        Do we have undefined records?
+         BNO   PRTOPEN3                No: continue
+*---------------------------------------------------------------------*
+*                                                                     *
+*        The to be browsed data set or member has a RECFM of U.       *
+*        Copy and format this data to a temporary data set with       *
+*        a RECFM of VB and a LRECL calculated with the formula below: *
+*        LRECL=((screen width-10)/16) The quotient multiplied with 16 *
+*        and afterwards increased with 14 (10 + 4 for the RDW)        *
+*        Example: if the screen width = 132, the LRECL will be 126.   *
+*        (132-10)/16 = 7, 7*16=112 + 10 + 4 = 126.                    *
+*                                                                     *
+*        The output contains in the first record:                     *
+*        8 bytes HEX offset in the block starting with 00000000       *
+*        2 spaces                                                     *
+*        The data record, which is a part of the input block. The     *
+*        number of bytes is always a multiple of 16 (e.g. 64 bytes on *
+*        a 80 column screen)                                          *
+*        The second records contains:                                 *
+*        10 spaces                                                    *
+*        The high-order nibbles in of the data line in record 1       *
+*        The third records contains:                                  *
+*        10 spaces                                                    *
+*        The low-order nibbles in of the data line in record 1        *
+*        The fourth records contains:                                 *
+*        10 spaces followed with a hex ruler.                         *
+*                                                                     *
+*        After the copy in routine RECFMU, browse this data set       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+         L     R15,=V(CLOSE)           Close input and free buffers
+         BALR  R14,R15                 Execute
+         XC    RPFD08,RPFD08           Clear parameter block
+*
+*        Allocate temporary data set with IKJDAIR. This data set wil
+*        be written bij the RECFMU routine.
+*
+         LA    R14,RPFD08              Point to allocation parm block
+         USING DAPB08,R14              Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFPRT2'   DDNAME to allocate
+         MVC   DA08PDSN,=A(PRTDSNL)  Length and temporary data set name
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVI   DA08PQTY+3,X'46'        70 cylinders primary
+         MVI   DA08SQTY+3,X'14'        20 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         LR    R1,R14                  Parameter for CALLTS
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R14                     RPFD08
+         RPFSA24                       Enter addressing mode 24
+         L     R15,=V(RECFMU)          Routine address
+         BALR  R14,R15                 Process RECFM=U data set
+         LR    R8,R1                   Pickup new DCB
+         RPFSA31                       Restore addressing mode
+         OI    SW2,$RECFMU             Ignore the HEX command
+         MVC   RPFPRINT+DCBRECFM-IHADCB(1),DCBRECFM copy
+         MVC   RPFPRINT+DCBLRECL-IHADCB(2),DCBLRECL     DCB
+         MVC   RPFPRINT+DCBBLKSI-IHADCB(2),DCBBLKSI        attributes
+         MVC   RPFPRINT+DCBDDNAM-IHADCB(8),DCBDDNAM
+         LA    R8,RPFPRINT             Reset DCB address
+         B     PRTOPN3A
+PRTOPEN3 DS    0H
+         L     R15,=V(CLOSE)           Close input and free buffers
+         BALR  R14,R15                 Execute
+PRTOPN3A DS    0H
+         L     R15,=V(OPEN)            Routine address
+         BALR  R14,R15                 Execute
+*------------------------------------------------------------------@gp1
+*                                                                  @gp1
+*        Since larger screen sizes will almost always have         @gp1
+*        more than 24 lines, the larger screen size will be        @gp1
+*        retained even if the data set's record data length        @gp1
+*        does not exceed 80 bytes.                                 @gp1
+*                                                                  @gp1
+*------------------------------------------------------------------@gp1
+         LH    R1,DCBLRECL             LRECL of input
+         CH    R1,=H'255'              > 255
+         BNH   RECFM#TR                No
+         LA    R1,255                  Truncate to 255
+         MVC   MSG5,ERRFTXT            Message: Truncated to 255   @rp3
+         OI    SWITCH,$MSG             Mark message present
+RECFM#TR TM    DCBRECFM,DCBRECV        Variable records ?          @rp2
+         BNO   RECFM#F                 No: branch                  @rp2
+         SH    R1,=H'4'                Minus Length RDW            @rp2
+RECFM#F  DS    0H                                                  @rp4
+         ST    R1,RECL                 And save LRECL
+         BCTR  R1,0                    Minus 1
+         C     R1,LENGTH               DCBLRECL < length of scale line
+         BNL   PRTOPEN4                No: good                    @rp7
+         TM    DCBRECFM,DCBRECCA+DCBRECCM ASA or machine control chars?
+         BZ    RECF#CC                 No do not decrease length   @rp7
+         BCTR  R1,0                    minus 1                     @rp7
+RECF#CC  DS    0H                                                  @rp7
+         ST    R1,LENGTH               Line length code = LRECL-1
+PRTOPEN4 DS    0H
+         L     R1,RECL                 Pickup record length        @rp6
+         LA    R1,3(,R1)               Including extended color    @rp6
+         ST    R1,DATALINE             Save length 1 line          @rp6
+*
+*        DATALINE = record length input file + 3 bytes color and
+*                   is the length of 1 line in the dataspace.
+*        PAGELEN  = the size of the dataspace
+*                   ((# rows on screen - 3) * DATALINE)
+*
+         LH    R3,#LINES               # data lines on screen      @gp1
+         MR    R2,R1                   * length                    @rp6
+         ST    R3,PAGELEN              New size on screen          @rp6
+         CLC   DCBLRECL,=H'80'         Card image data set?
+         BNE   *+8                     No: proceed
+         OI    SWITCH,$CARDIM          Mark card image
+*+8
+         OI    SYSOUT+DCBRECFM-IHADCB,DCBRECCA Make default RECFM=FBA
+         TM    DCBRECFM,DCBRECCC       RECFM of input is xxM or xxA?
+         BM    CHARS                   Yes: we have control characters
+         OI    SWITCH,$NOCC            Input has no control characters
+         LA    R1,1                    Default start column
+         ST    R1,COLUMN                 ,,      ,,    ,,
+         B     ENDCHARS                Carry in
+CHARS    DS    0H
+         TM    DCBRECFM,DCBRECCM       RECFM of input is xxM?
+         BZ    ENDCHARS                RECFM=FBA for output is good
+         OI    SYSOUT+DCBRECFM-IHADCB,DCBRECCM Make RECFM=FBM
+         NI    SYSOUT+DCBRECFM-IHADCB,255-DCBRECCA and remove FBA
+ENDCHARS DS    0H
+         CLC   BROPRT,=CL8'PRINT'      Print only?
+         BNE   BRO000                  No: Browse
+         MVC   BUFFER(8),=CL8'PRINT'   Put 'PRINT' command in buffer
+         L     R15,=V(RPFPRT)          Load routine address
+         CALL  (15)                    Branch to routine
+         B     RETURN                  Return to caller
+         DROP  R8                      RPFPRINT
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Browse the data set and process the primary commands         *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+BRO000   DS    0H
+         L     R15,=V(OPEN)            Routine address
+         BALR  R14,R15                 Execute
+         TM    SW2,$RDBACK             1 screen back (UP command)?
+         BNZ   BRO000A                 Yes: do not reset counter
+         XC    COUNTER,COUNTER         Start reading from beginning
+         B     BRO001                  and branch
+BRO000A  DS    0H
+         L     R4,COUNTER              Start to read as many records
+*                                      as in COUNTER
+BRO000B  DS    0H
+         L     R15,=V(GETINP)          Read record
+         BALR  R14,R15                 execute and return length in R1
+         BCT   R4,BRO000B              Loop until all read
+         NI    SW2,255-$RDBACK
+BRO001   DS    0H
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Populate a dataspace with data of the input data set.        *
+*        The dataspace represents 1 screen of data.                   *
+*        The size of this area depends of the number of rows on the   *
+*        3270 screen and the record length of the data set.           *
+*                                                                     *
+*        Each record occupies 1 line in the dataspace, unless the HEX *
+*        command is given, then 4 lines will be used. The first line  *
+*        is the original data line, the next 2 lines will be the HEX  *
+*        presentation of that line (the first nibble is in line 2 and *
+*        the next line contains the last nibble). The fourth line     *
+*        contains a separator.                                        *
+*                                                                     *
+*        The length of 1 line in the dataspace = DATALINE             *
+*        With this dataspace the BROWSE screen will be populated.     *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+BRO002   DS    0H
+         ICM   R1,15,PAGESPC           Look if there is a dataspace
+         BNZ   BRO003                  Yes: already allocated
+         L     R2,PAGELEN              Load length of page
+         GETMAIN R,LV=(2)              Acquire storage for dataspace
+         ST    R1,PAGESPC              And save it's address
+BRO003   DS    0H
+         L     R15,=V(FILLPAGE)        Load routine address
+         BALR  R14,R15                 Read data and populate dataspace
+         TM    SWITCH,$EOF             Input end of file or I/O error
+         BZ    BRO008                  No: continue
+         CLC   COUNTER,=F'0'           No records in data set?
+         BE    EMPTYDS                 Yes: branch
+BRO008   DS    0H
+         TM    SWITCH,$BOTTOM          BOTTOM command given?
+         BNZ   BRO015                  Yes: increase pointer
+         BAL   R14,RPFTPUT             Write screen
+         B     *+4(R15)                Initiate branch list
+         B     *+4                     Treat RC=0 same as RC=4
+         B     BRO002                  Read next page from input
+         B     BRO000                  Top of data set or UP 1 screen
+         B     BRO#END                 END command
+         B     BRO011                  PRINT command
+         B     BRO015                  BOTTOM command
+         B     BRO029                  FIND command
+         B     BRO050                  SUBMIT command
+         B     BRO060                  HEX or ASCII on or off,
+*                                      go to top of data
+*------- ----- ----------------------> Primary command 'END'
+BRO#END  DS    0H
+         XR    R15,R15                 Rc = 0000
+         B     RETURN                  Exit RPFBRO
+*------- ----- ----------------------> Primary command 'PRINT'
+BRO011   DS    0H
+         L     R15,=V(RPFPRT)          Load routine address
+         CALL  (15)                    And call
+         LTR   R15,R15                 PRINT ok?
+         BNZ   BRO013                  No: inform programmer
+         MVC   MSG5,MSG1TXT            Msg: Listing made, SYSOUT=x
+         MVC   MSG5+24(1),SYSCLS       Move SYSOUT class in message
+         OI    SWITCH,$MSG             Message indicator on
+         B     BRO000                  Reshow data
+BRO013   DS    0H
+         MVC   MSG5,ERR3TXT            Msg: Alloc. error SYSOUT
+         OI    SWITCH,$MSG             Message indicator on
+         B     BRO000                  Reshow data
+*------- ----- ----------------------> Primary command 'BOTTOM'
+BRO015   DS    0H                      'B' or 'BOTTOM' primary command
+         TM    SWITCH,$EOF             Input end-of-file?
+         BO    BRO019                  Yes: already at bottom
+BRO017   DS    0H
+         B     BRO002                  Page 1 forward
+BRO019   DS    0H
+         NI    SWITCH,X'FF'-$BOTTOM    Clear 'Bottom' flag
+         B     BRO008                  Display screen
+*------- ----- ----------------------> Primary command 'FIND'
+BRO029   DS    0H
+         ICM   R1,15,FINDCNT           # succesful FIND's dataspace
+         BZ    BRO031                  Branch if no matches found
+*
+*        If FINDCNT not zero the previous also was a F(IND) command
+*
+         TM    SWITCH,$EOF             Already at last screen?
+         BNZ   BRO047                  Bottom of data reached
+         L     R15,=V(FILLPAGE)        Next #lines records in dataspace
+         BALR  R14,R15                 Execute
+         XC    FINDCNT,FINDCNT         Clear find counter
+BRO031   DS    0H
+         LH    R2,#LINES               Lines on screen (21 up to 96)
+         L     R3,PAGESPC              Point to data in page space
+         TM    SWITCH,$HEX             HEX display?                @rp9
+         BNO   BRO037                  No: normal find             @rp9
+         SRL   R2,2                    # screenlines/4             @rp9
+BRO037   DS    0H
+         LA    R4,3(,R3)               Point after color to data   @rp5
+         L     R5,RECL                 Load record length
+         L     R6,LENSTR               Length of string to find
+         BCTR  R6,0                    -/- because an EX instruction
+         SR    R5,R6                   Minus L'STRING plus 1
+BRO039   DS    0H
+         EX    R6,FINDMOVE             Move to work field
+         TM    SW2,$HEXFIND            F X'hhhh....' primary command?
+         BO    *+10                    Yes: no xlate to upper...
+         TR    WORKFLD,COMTCAPS        Xlate to upper
+*+10
+         EX    R6,FINDCOMP             Test if string found
+         BE    BRO044                  Yes: good
+BRO040   DS    0H
+         LA    R4,1(,R4)               Next byte
+         BCT   R5,BRO039               Loop until line scanned
+         L     R1,DATALINE             Length of line
+         LA    R3,0(R1,R3)             Point to next record
+         TM    SWITCH,$HEX             HEX display?                @rp9
+         BNO   BRO042                  No: branch                  @rp9
+         L     R1,DATALINE             Length of line
+         SLL   R1,1                    * 2
+         A     R1,DATALINE             * 3 to skip the HEX lines and
+         LA    R3,0(R1,R3)             separator line
+*                                      To skip another 3 records.
+BRO042   DS    0H
+         BCT   R2,BRO037               Loop until all lines searched
+*                                      or 'string' found.
+         ICM   R1,15,FINDCNT           # successful FIND's dataspace
+         BNZ   BRO045                  If found: FIND complete
+         TM    SWITCH,$EOF             Input end of file?
+         BO    BRO047                  Yes: Not found/Bottom reach
+         L     R15,=V(FILLPAGE)        Next #lines records in dataspace
+         BALR  R14,R15                 Execute
+         B     BRO031                  and branch
+BRO044   DS    0H
+         MVC   0(3,R3),=AL3(WHITE)     Change color of line        @rp5
+*                                      to white to indicate str. found
+         L     R1,FINDCNT              # succesful FIND's dataspace
+         LA    R1,1(,R1)               Increment FIND counter
+         ST    R1,FINDCNT              and save
+         B     BRO040                  Continue FIND
+BRO045   DS    0H
+         MVC   MSG5,MSG3TXT            Msg: Chars xxxxx found
+         MVC   MSG5+9(10),MSGSTR       Move 10 bytes 'string' in msg.
+         OI    SWITCH,$MSG             Msg indicator on
+         B     BRO008                  Display screen
+BRO047   DS    0H                      Not found/Bottom reach
+         OI    SWITCH,$MSG             Set message indicator
+         MVC   MSG5,ERRBTXT            Msg: Not found/Bottom reach
+         B     BRO008                  Display screen
+FINDMOVE MVC   WORKFLD(0),0(R4)        << executed >>
+FINDCOMP CLC   WORKFLD(0),STRING       << executed >>
+*------- ----- ----------------------> Primary command 'SUBMIT'
+BRO050   DS    0H
+         L     R15,=V(CLOSE)           Close input and free buffers
+         BALR  R14,R15                 Execute
+         L     R15,EPSUB               Entry point RPFSUB
+         ST    R11,PRM1                Save A(RPFCOMM)
+         LA    R0,JOBNAME              2nd parameter
+         ST    R0,PRM1+4               Save A(JOBNAME)
+         LA    R1,PRM1                 Parameter for RPFSUB
+         OI    SWITCH,$MSG             Msg indicator on
+         MVC   COMMPRM(4),=C'INP='     Move INP=
+         MVC   COMMPRM+4(8),BRODDN     Move DDNAME to submit
+         BALR  R14,R15                 Invoke RPFSUB
+         B     *+4(15)
+         B     BROSUB0                 Submit OK
+         B     BROSUB4                 Allocation error
+         B     BROSUB8                 No JOB statement found
+         B     BROSUB12                No card image data set
+         B     BROSUB16                Data set empty
+BROSUB0  DS    0H
+         MVC   MSG5,MSG5TXT            Msg: Job xxxxx submitted
+         MVC   MSG5+7(8),JOBNAME
+         B     BRO000                  Reshow data
+BROSUB4  DS    0H
+         MVC   MSG5,ERRDTXT            Message: SUBMIT failed
+         B     BRO000                  Reshow data
+BROSUB8  DS    0H
+         MVC   MSG5,ERRETXT            Message: No JOB statement
+         B     BRO000                  Reshow data
+BROSUB12 DS    0H
+         MVC   MSG5,ERRGTXT            Message: No card image data set
+         B     BRO000                  Reshow data
+BROSUB16 DS    0H
+         MVC   MSG5,ERR8TXT            Message: data set empty
+         B     BRO000                  Reshow data
+*------- ----- ----------------------> Primary command 'HEX'
+BRO060   DS    0H
+         L     R15,=V(CLOSE)           Close input and free buffers
+         BALR  R14,R15                 Execute
+         B     BRO000                  Re-open and Browse
+         TITLE 'ERROR ROUTINES'
+EMPTYDS  DS    0H
+         MVC   COMMPRM,ERR8TXT         Message: Data set is empty
+         OI    SWITCH,$MSG             Msg indicator on
+         LA    R15,8                   Return code
+         B     RETURN                  Return to caller with rc=8
+*
+RETURN   DS    0H
+         LR    R5,R15                  Save return code
+         L     R15,=V(CLOSE)           Close input and free buffers
+         BALR  R14,R15                 Execute
+         TM    SW2,$RECFMU             Routine RECFMU executed?
+         BNO   RETURN3                 No: skip unallocation
+         XC    RPFD18,RPFD18           Clear parameter block
+         LA    R14,RPFD18              Point to unallocation parm blk
+         USING DAPB18,R14              Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'RPFPRT2'   DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         LR    R1,R14                  Unalloc.   parameter block
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R14                     RPFD18
+RETURN3  DS    0H
+         L     R2,ASCREEN              Screen area
+         L     R1,LSCREEN              Screen length
+         FREEMAIN R,LV=(1),A=(2)       Release screen area
+         L     R2,ASCRH                HELP screen
+         LA    R1,SCREENHL             Length HELP screen
+         FREEMAIN R,LV=(1),A=(2)       Release HELP screen area
+         ICM   R2,15,PAGESPC           Address of page space if there
+         BZ    RETURN4                 Not there
+         L     R1,PAGELEN              Length of data page space
+         FREEMAIN R,LV=(1),A=(2)       Release HELP screen area
+RETURN4  DS    0H
+         LR    R3,R13                  Working storage
+         L     R13,4(,R13)             Load callers save ares
+         FREEMAIN R,LV=WORKL,A=(3)     Release working storage
+         LR    R15,R5                  Restore return code
+         RETURN (14,12),RC=(15)
+         TITLE 'Write and read the screen and process primary commands'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:           RPFTPUT, Write screen and scan/process    *
+*                           the primary commands.                     *
+*                                                                     *
+*        Return codes:      00   Does not exist                       *
+*                           04   DOWN command given                   *
+*                           08   UP or TOP command given              *
+*                           12   RETURN or END command given          *
+*                           16   PRINT command given                  *
+*                           20   BOTTOM command given                 *
+*                           24   F str   command given                *
+*                           28   SUB(mit)command given                *
+*                           32   Hex command                          *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFTPUT  DS    0H
+         ST    R14,R14TPUT             Save register 14
+         ST    R8,R8TPUT               Save register 8             @rpa
+         L     R8,ASCREEN              Point to Browse panel       @rpa
+         USING SCR5TXT,R8              Make addressable            @rpa
+RPFT000  DS    0H
+         L     R3,COUNTER              # records read
+         L     R0,#LNEISPC             Minus # lines on this screen
+         SR    R3,R0                   minus # lines on screen
+*                                      = first line on screen
+         BNM   RPFT000A                <=0 is not a full screen
+         XR    R3,R3                   First line
+RPFT000A DS    0H                                                  @rp9
+         LA    R3,1(,R3)               Include 1st line
+         CVD   R3,DBW                  Make packed                 @rp9
+         UNPK  MSG2TXT+18(7),DBW+4(4)  Unpack the result
+         OI    MSG2TXT+24,X'F0'        Clear sign
+         L     R2,PAGESPC              Address of data space
+         LH    R3,#LINES               Number of lines on screen   @gp1
+         L     R4,COLUMN               Load column offset
+         CVD   R4,DBW                  Convert to packed
+         UNPK  MSG2TXT+9(3),DBW(8)     Unpack column number
+         OI    MSG2TXT+11,X'F0'        Clear sign
+         BCTR  R4,0                    Minus 1
+         L     R7,=V(SCALE2)           Load scale line             @rp8
+         ALR   R7,R4                   + Offset column
+         L     R5,LENGTH               Line length code
+         LA    R1,LNE5                 Point to data portion of screen
+         MVC   0(3,R1),=AL3(YELLOW)    Move color
+         LA    R1,3(,R1)               Point to place of scale line
+         MVI   0(R1),C' '              Blank
+         MVC   1(255,R1),0(R1)         Scale line                  @gp1
+         EX    R5,RPFTSCL              Move scale line
+         LA    R6,LNE5                 Point to color of scale line@gp1
+         LA    R6,3(,R6)               Point to scale line after color
+         AL    R6,COMMCOLS             Point to 1st data line      @gp1
+RPFT001  DS    0H                      START LOOP
+         LA    R0,3(,R6)               Point to target             @gp1
+         L     R1,COMMCOLS             Get target length           @gp1
+         LA    R14,C' '                Get pad character           @gp1
+         SLL   R14,24                  Promote to high byte        @gp1
+         L     R15,RECL                Get source data length      @gp1
+         SR    R15,R4                  Adjust for offset           @gp1
+         BNM   GDOFFSET                Seems good                  @gp1
+         SR    R15,R15                 In case it went too far     @gp1
+GDOFFSET OR    R15,R14                 Set pad character           @gp1
+         CLC   0(3,R2),=AL3(BLUE)      ** Bottom of data ** line?
+*                                      Is the only line in blue
+         BE    RPFT001A                Yes: do not shift this line
+         LA    R14,3(R4,R2)            Point to data to load       @gp1
+         B     RPFT001B                Move the data
+RPFT001A LA    R14,3(,R2)        Do not shift ** bottom of data ** line
+RPFT001B MVCL  R0,R14                  Load a screen line          @gp1
+         MVC   0(3,R6),0(R2)           Move color attribute        @rp5
+         CLC   0(3,R6),=AL3(WHITE)     Color changed by FIND?      @rp9
+         BNE   *+10                    No: leave it                @rp9
+         MVC   0(3,R2),=AL3(TURQ)      Reset to standard color     @rp5
+         L     R1,LENGTH               Line length code
+         EX    R1,TR                   Translate
+         L     R1,DATALINE             Length entry in input
+         LA    R2,0(R1,R2)             Point to next entry in input
+         LR    R6,R0                   Next line on screen         @gp1
+         BCT   R3,RPFT001              Loop
+         B     RPFT001C                Branch over next instr.
+TR       TR    3(0,R6),COMTRTAB        << executed >>
+RPFTSCL  MVC   0(0,R1),0(R7)           << executed >>
+RPFT001C DS    0H
+*
+         AIF   (&SVS).NOCMP
+         L     R1,TPUTLEN              Length of data
+         LA    R1,3(,R1)               Add Length of start SBA
+         ST    R1,LN3270               Length uncompressed stream
+         LA    R0,LN3270               Length of data portion screen
+         ST    R0,CBPRM1               Save in RPFC3270 PLIST
+         LA    R0,COMMSIZE             Get screen dimensions address
+         ST    R0,CBPRM2               Save in RPFC3270 PLIST
+         LA    R0,SBA5#2               Buffer address to updat in place
+         ST    R0,CBPRM3               Save in RPFC3270 PLIST
+         L     R15,EPC3270             Point to RPFC3270 module
+         LA    R1,CBPRM1               Plist
+         BALR  R14,R15                 Execute compression
+.NOCMP   ANOP
+         MVC   MSG5X,MSG5              Move message if present     @rpa
+         TM    SWITCH,$MSG             Message given?
+         BNZ   RPFT002                 No: carry
+         MVC   MSG5X,MSG2TXT           Msg: col: xxxxx, line: yyyyy@rpa
+         TM    COMMFLG3,$COMSUBS       Browse substituted (EDIT sel.)?
+         BNO   RPFT002                 No: carry on
+         MVC   MSG5X,MSG6TXT           Msg: BROWSE substituted
+         NI    COMMFLG3,255-$COMSUBS   and reset flag
+RPFT002  DS    0H
+*
+         AIF   (&SVS).NOCMP2
+         L     R1,CBPRM1               A(Length compressed data stream)
+         L     R1,0(,R1)               Length compressed data portion
+.NOCMP2  ANOP
+         AIF   (NOT &SVS).CMP1
+         L     R1,TPUTLEN              Length of data
+         LA    R1,3(,R1)               Add Length of start SBA
+.CMP1    ANOP
+         LA    R1,SBA5#2-SCR5TXT(,R1)  Length of TPUT              @gp1
+         BCTR  R1,0                    Minus length of X'27' (escape)
+         LR    R0,R1                   In register 0 for TPUTS
+         LR    R1,R8                   Screen address
+         LA    R1,1(,R1)               Point after escape character
+         L     R15,=V(TPUTS)           Routine address
+         BALR  R14,R15                 Write screen
+RPFT003  DS    0H
+         LA    R2,AIDBYTE              AID byte for CONVIN
+         LA    R5,BUFFER               BUFFER for CONVIN
+         BAL   R14,CONVIN              Read the screen
+         MVI   REP5,C' '               Clear
+         MVC   REP5+1(L'REP5-1),REP5         Command area
+         LTR   R1,R1                   Length zero?
+         BZ    RPFT002                 Yes: no input, new screen
+         CLI   AIDBYTE,X'6D'           Clear key pressed?
+         BE    RPFT002                 Yes: new screen
+         TR    BUFFER,COMTCAPS         Xlate to upper case
+         MVC   SC@BUFF,BUFFER          Copy command buffer
+         TRT   SC@BUFF,COMSKPSP        Stop at first non-blank
+         BZ    ENDSCAN                 All blanks, nothing to parse
+         MVC   BUFFER,0(R1)            Shift command to start of BUFFER
+ENDSCAN  DS    0H
+         CLI   AIDBYTE,X'7D'           Enter key pressed?
+         BE    RPFT004                 Yes: good
+         LA    R2,BUFFER               Parameter PFK routine
+         LA    R1,AIDBYTE              Parameter PFK routine
+         L     R15,=V(PFK)             Go to PFK routine
+         BALR  R14,R15
+         B     PFKLIST(15)             Initiate branch list
+PFKLIST  B     RPFT004                 Rc = 0, no errors
+         B     RPFT003A                Rc = 4, PFK found with CON=Y
+         B     RPFT003B                Rc = 8, PFK not defined
+         B     RPFT003C                Rc = 12, PFK definition invalid
+RPFT003A DS    0H
+         MVC   REP5,BUFFER             Repeat command
+         B     RPFT002                 Review screen
+RPFT003B DS    0H
+         MVC   MSG5X,ERR4TXT           Msg: PFK not defined
+         OI    SWITCH,$MSG             Msg indicator on
+         B     RPFT002                 Branch for a new screen
+RPFT003C MVC   MSG5X,ERR5TXT           Msg: PFK definition invalid
+         OI    SWITCH,$MSG             Msg indicator on
+         B     RPFT002                 Branch for new screen
+*
+*        Process the screen and examine the commands using the
+*        table CMDTBLE and branch to the entry at offset 12
+*        in the corresponding entry
+*
+RPFT004  DS    0H
+         NI    SWITCH,255-$MSG         Set message indicator off
+         L     R1,=V(CMDTBLE)          Load the prim. command table
+         LA    R14,CMDS#               Number of commands in table
+CMDSC50  L     R15,0(,R1)              Actual Length of the prim. cmds.
+         BCTR  R15,0                   Minus 1 for EX
+         EX    R15,CMDCOMP             Compare command in BUFFER
+*                                      against the entry in CMDTBLE
+         BNE   CMDSC52                 No: Next entry in table
+         L     R1,12(,R1)              Routine address command in R1
+         BR    R1                      Execute primary command
+CMDSC52  LA    R1,16(,R1)              Next entry in command table
+         BCT   R14,CMDSC50             Loop until all done or cmd found
+         B     RPFTERR2                Invalid primary command
+CMDCOMP  CLC   BUFFER(0),4(R1)         << executed >>
+RPFT005  DS    0H
+         LA    R2,BUFFER+2             On column number
+         LA    R3,4                    Number of positions         @rp4
+         XR    R4,R4                   Count bytes
+RPFT007  DS    0H
+         CLI   0(R2),C' '              End of string?
+         BE    RPFT009                 Yes: enf of loop
+         CLI   0(R2),C'0'              Numeric test
+         BL    RPFTERR                 < 0: error
+         CLI   0(R2),C'9'              Numeric test
+         BH    RPFTERR                 > 9: error
+         LA    R2,1(,R2)               Next byte
+         LA    R4,1(,R4)               Count bytes
+         BCT   R3,RPFT007
+RPFT009  DS    0H
+         LTR   R4,R4                   No bytes found?
+         BZ    RPFTERR                 Yes: error
+         BCTR  R4,0                    Minus 1 for execute
+         EX    R4,RPFTPACK             Pack the result
+         CVB   R2,DBW                  Make it binary
+         LTR   R2,R2                   Zero column?
+         BZ    RPFTERR                 Yes: error
+         L     R3,RECL                                             @rp2
+         SR    R3,R2                   Take difference
+         BM    RPFTERR                 Negative: error
+         ST    R2,COLUMN               Store the result
+         C     R3,COMMCOLS             Length code < Screen width? @gp1
+         BL    RPFT011                 Yes: go on                  @gp1
+         L     R3,COMMCOLS             No, get screen width        @gp1
+         BCTR  R3,0                    Get its length code         @gp1
+RPFT011  DS    0H
+         ST    R3,LENGTH               Store into length
+         B     RPFT000                 Review screen
+RPFT012  DS    0H                      -----> '=' (fast jump)
+         MVC   CMAINOPT,BUFFER+1       Move options after '='      @rp1
+RPFT013  DS    0H                      -----> Primary command 'RETURN'
+         OI    COMMFLG2,$COMRTRN       Set return indicator        @rp1
+         LA    R15,12                  Return code for branch list @rp1
+         B     RPFTEND                 End of routine
+RPFT014  DS    0H                      -----> Primary command 'END'
+         LA    R15,12                  Return code for branch list
+         B     RPFTEND                 End of routine
+RPFT015  DS    0H                      -----> Primary command 'TOP'
+         XC    FINDCNT,FINDCNT         Clear successful FIND's
+         L     R15,=V(CLOSE)           Close routine
+         BALR  R14,R15                 Close
+         LA    R15,8                   Return code for branch list
+         B     RPFTEND                 End of routine
+RPFT016  DS    0H                      -----> Primary command 'PRINT'
+         XC    FINDCNT,FINDCNT         Clear successful FIND's
+         LA    R15,16                  Return code for branch list
+         B     RPFTEND                 End of routine
+RPFT017  DS    0H                      -----> Primary command 'PFK'
+         ST    R11,PRM1                Save address RPFCOMM
+         L     R15,EPPFK               Pickup entry point
+         LA    R1,PRM1                 Parameter
+         CALL  (15)                    Invoke RPFPFK
+         B     RPFT002                 New screen
+RPFT019  DS    0H                      -----> Primary command 'HELP'
+         L     R1,ASCRH                Parm TPUTS (HELP screen)
+         LA    R1,1(,R1)               Point after X'27' (Escape)
+         LA    R0,SCRHLEN              Parm TPUTS (length HELP screen)
+         L     R15,=V(TPUTS)           Routine address
+         BALR  R14,R15                 Write screen
+         LA    R0,L'BUFFER             Length
+         LA    R1,BUFFER               Buffer address
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Do a dummy TGET
+         B     RPFT002                 And refresh screen
+RPFT020  DS    0H                      -----> Primary command 'DOWN'
+         XC    FINDCNT,FINDCNT         Clear successful FIND's
+         TM    SWITCH,$EOF             Already at the end of the input?
+         BNZ   RPFT002                 Yes: only a re-display
+         L     R1,ROW                  Row where cursor is located
+         SH    R1,=H'3'                Minus the 3 header lines
+         BNP   RPFT021                 Not in data if <=0
+*                                      Execute a normal DOWN command
+         LH    R0,#LINES               # data lines on screen
+         SR    R0,R1                   Lines on screen - line(cursor)
+         TM    SWITCH,$HEX             Are we in HEX mode?
+         BNO   *+8                     No:
+         SRL   R0,2                    In HEX mode we have lines/4
+         AH    R0,=H'1'                Including current line
+         B     RPFT024                 Process UP command nn lines
+RPFT021  LA    R15,4                   Return code for branch list
+         B     RPFTEND                 End of routine
+*
+RPFT023  DS    0H                      -----> Primary command 'UP'
+         XC    FINDCNT,FINDCNT         Clear successful FIND's
+         L     R1,ROW                  Row where cursor is located
+         SH    R1,=H'3'                Minus the 3 header lines
+         BNP   RPFT023A                Not in data if <=0
+*                                      Execute a normal UP command
+         LH    R0,#LINES               # data lines on screen
+         SR    R0,R1                   Lines on screen - line(cursor)
+         TM    SWITCH,$HEX             Are we in HEX mode?
+         BNO   *+8                     No:
+         SRL   R0,2                    In HEX mode we have lines/4
+         B     RPFT023B                Process UP command nn lines
+RPFT023A LH    R0,#LINES               Number of line on screen
+         TM    SWITCH,$HEX             Are we in HEX mode?
+         BNO   RPFT023B                No:
+         SRL   R0,2                    In HEX mode we have lines/4
+RPFT023B A     R0,#LNEISPC             Lines in current screen
+RPFT024  L     R1,COUNTER              Records read counter
+         SR    R1,R0                   Go back nn lines
+         BNP   RPFT025                 <=0 = TOP
+         ST    R1,COUNTER              Save new value
+         OI    SW2,$RDBACK             Read nn lines back
+RPFT025  DS    0H
+         L     R15,=V(CLOSE)           Close input to re-read.
+         BALR  R14,R15                 Close
+         LA    R15,8                   Return code for branch list
+         B     RPFTEND                 End of routine
+RPFT027  DS    0H                      -----> Primary command 'BOTTOM'
+         XC    FINDCNT,FINDCNT         Clear successful FIND's
+         OI    SWITCH,$BOTTOM          Mark busy executing 'BOTTOM'
+         LA    R15,20                  Return code for branch list
+         B     RPFTEND                 End of routine
+RPFT039  DS    0H                      -----> Primary command 'FIND'
+         MVC   BUFFER+2(34),BUFFER+5   Replace FIND xxxx into F xxxx
+         MVI   BUFFER+38,X'40'         Blank last position
+         MVI   BUFFER+1,X'40'          'F' command complete.
+RPFT039A DS    0H                      -----> Primary command 'F'
+         CLI   BUFFER+2,C' '           Repeat FIND ? (only a F)
+         BE    RPFT045                 Yes: branch
+         XC    FINDCNT,FINDCNT         We have a new F(IND) command
+         CLC   BUFFER+2(2),=C'X'''     F X'.. (find HEX chars)?
+         BE    RPFT046                 Branch if yes
+         CLC   BUFFER+2(2),=C'x'''     F X'.. (find HEX chars)?
+         BE    RPFT046                 Branch if yes
+         LA    R4,38                   Maximum length
+         LA    R3,BUFFER+2             Start scanning from offset 02
+         MVI   DLM,C' '                Init delimiter
+         CLI   BUFFER+2,C''''          Delimiter 'quote' Found?
+         BNE   RPFT040                 No: DLM is a blank
+         LA    R4,37                   L'BUFFER - L'F X' (X=delimiter)
+         LA    R3,BUFFER+3             Point to first character
+         MVI   DLM,C''''               Move quote as delimiter
+RPFT040  DS    0H
+         XR    R5,R5                   Clear length of string
+         LA    R6,STRING               Point to string
+         MVI   STRING,C' '             Initialize string ...
+         MVC   STRING+1(L'STRING-1),STRING        to blanks
+RPFT041  DS    0H
+         CLC   0(1,R3),DLM             Delimiter found?
+         BE    RPFT043                 Yes: found
+         MVC   0(1,R6),0(R3)           Move 1 byte string
+         LA    R3,1(,R3)               Increase input pointer
+         LA    R6,1(,R6)               Increase output pointer
+         LA    R5,1(,R5)               Increase length of string
+         BCT   R4,RPFT041              Loop until 37 or DLM found
+         B     RPFTERR4                Invalid string
+RPFT043  DS    0H
+         XC    LENSTR,LENSTR
+         LTR   R5,R5                   No length?
+         BZ    RPFTERR4                Yes: invalid string
+         ST    R5,LENSTR               Save this
+         MVC   MSGSTR,BUFFER+2         Move 10 bytes 'string' for msg.
+         NI    SW2,255-$HEXFIND        Mark normal search
+         B     RPFT047                 Set Rc=24 (Find command)
+RPFT045  DS    0H
+         ICM   R1,B'1111',LENSTR       L'string = 0000 ???
+         BZ    RPFTERR4                Yes: invalid FIND command
+         B     RPFT047                 No: good
+RPFT046  DS    0H
+*
+*        Process F x'hhhh....' primary command and translate the
+*        string between x' and ' in real hex.
+*
+         LA    R2,BUFFER               Point to F command
+         L     R15,=V(HEXFIND)         Routine address
+         BALR  R14,R15                 Translate string
+         B     *+4(15)                 Execute branchlist
+         B     RPFT046A                String correctly parsed
+         B     RPFTERR4                Invalid F/FIND primary command
+RPFT046A DS    0H
+         MVC   STRING,0(R1)            Move converted string
+         OI    SW2,$HEXFIND            Mark hexadecimal search
+         ST    R0,LENSTR               Save length converted string
+         MVC   MSGSTR,BUFFER+2         Move 10 bytes 'string' for msg.
+RPFT047  DS    0H
+         LA    R15,24                  Return code for branch list
+         B     RPFTEND                 Return
+RPFT050  DS    0H                      -----> Primary command 'SUB'
+         LA    R15,28                  Return code for branch list
+         B     RPFTEND                 Return
+RPFT052  DS    0H                      -----> Primary command 'LEFT'
+         L     R4,COMMCOLS             Width of screen             @gp1
+         BCTR  R4,0                    Length code thereof         @gp1
+         L     R5,COLUMN               Start column to display     @rp4
+         SR    R5,R4                   Minus screen width
+         BP    *+8                     No: Branch                  @rp4
+         LA    R5,1                    Else start column 1         @rp4
+         B     RPFT056                 Create a "C" (Column) cmd   @rp4
+RPFT054  DS    0H                      -----> Primary command 'RIGHT'
+         L     R4,COMMCOLS             Width of screen             @gp1
+         BCTR  R4,0                    Length code thereof         @gp1
+         L     R5,COLUMN               Start column to display     @rp4
+         AR    R5,R4                   New start column            @rp4
+         L     R6,RECL                 Record length               @rp4
+         SR    R6,R4                   Minus screen width          @rp4
+         CR    R6,R5                   A complete screen?          @rp4
+         BNL   RPFT056                 Yes: branch                 @rp4
+         LR    R5,R6                   Swap R5                     @rp4
+         LTR   R5,R5                   Below 1                     @rp4
+         BH    RPFT056                 No: branch                  @rp4
+         LA    R5,1                    Else column 1               @rp4
+RPFT056  DS    0H                                                  @rp4
+         MVC   BUFFER,=C'C '           Create a "C" command        @rp4
+         CVD   R5,DBW                  Convert to decimal          @rp4
+         UNPK  BUFFER+2(4),DBW         UNPK the result             @rp4
+         OI    BUFFER+5,X'F0'          Clear sign                  @rp4
+         B     RPFT005                 Process "C" command         @rp4
+RPFT060  DS    0H                      -----> Primary command 'HEX'
+         XC    FINDCNT,FINDCNT         Clear successful FIND's
+         TM    SW2,$RECFMU             Are we browsing a RECFM=U ds?
+         BO    *+8                     These data sets are in HEX
+         XI    SWITCH,$HEX             Set HEX indicator on/off
+         LA    R15,32                  RC = 32, Toggle HEX or ASCII
+         B     RPFTEND                 Return                      @rp9
+RPFT062  DS    0H                      -----> Primary command 'ASCII'
+         XC    FINDCNT,FINDCNT         Clear successful FIND's
+         TM    SW2,$RECFMU             Are we browsing a RECFM=U ds?
+         BO    *+8                     These data sets are in EBCDIC
+         XI    SWITCH,$ASCII           Set ASCII indicator on/off
+         LA    R15,32                  RC = 32, Toggle HEX or ASCII
+         B     RPFTEND                 Return                      @rp9
+RPFT070  DS    0H                      -----> Primary command 'TSO'
+         RPFSA24                       Enter addressing mode 24
+         ST    R11,PRM1                Save address of RPFCOMM
+         LA    R1,PRM1                 Parameter
+         XC    LNKLST(LLNK),LNKLST     Clear list form
+         LINK  EP=RPFTSO,SF=(E,LNKLST) Link to RPFTSO
+         RPFSA31                       Restore addressing mode
+         B     RPFT002                 Review screen
+RPFTERR  DS    0H
+         MVC   MSG5X,ERR1TXT           Message: Invalid column number
+         OI    SWITCH,$MSG             Msg indicator on
+         B     RPFT002                 Review screen
+RPFTERR2 DS    0H
+         MVC   MSG5X,ERR2TXT           Msg: Invalid command
+         OI    SWITCH,$MSG             Msg indicator on
+         B     RPFT002                 Review screen
+RPFTERR4 DS    0H
+         MVC   MSG5X,ERRCTXT           Msg: Invalid char. string
+         OI    SWITCH,$MSG             Message indicator on
+         B     RPFT002                 Review screen
+RPFTEND  DS    0H
+         L     R14,R14TPUT             Restore register 14
+         L     R8,R8TPUT               Restore register 8          @rpa
+         BR    R14                     Return
+RPFTPACK PACK  DBW(8),BUFFER+2(0)      << executed >>
+RPFTMOVE MVC   4(0,R6),3(R2)           << executed >>              @rp5
+         DROP  R8                      Kill addr. of SCR5TXT       @rpa
+         TITLE 'CONVERT SCREEN ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        C O N V I N:        Convert a TGET ASIS screen to normal.    *
+*        The SBA's and attribute bytes will be removed and the        *
+*        rest will be placed in 'SCREEN' the AID byte will be         *
+*        placed in 'AIDBYTE'                                          *
+*        The length of the output will be placed in register 1        *
+*        Register 2 points to the AID byte                            *
+*        Register 5 points to the output screen area                  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+CONVIN   DS    0F                      Convert screen routine
+         ST    R14,R14CONV             Save register 14
+         L     R3,COMMSCR              Input screen
+         LA    R0,116                  Length
+         LR    R1,R3                   Buffer address
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Receive the contents
+         LR    R4,R1                   Save input lengthh
+         MVC   0(1,R2),0(R3)           Save AID byte
+         LA    R1,1(,R3)               and cursor address
+         CALL  CSR                     Calculate row and column number
+         XR    R2,R2                   Init output length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   CONV099                 Not high: end (no data)
+         LA    R3,3(,R3)               Adjust register 3
+*
+*        Output screen is pointed to by register 5
+*
+CONV001  CLI   0(R3),COMMSBA           Did we find an SBA?
+         BE    CONV003                 Yes: skip next 3 bytes input
+         MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV099                 End of routine
+CONV003  LA    R3,3(,R3)               Skip 3 bytes input
+         SH    R4,=H'2'                Minus 2 BCT
+         BNP   CONV099                 <=0: end of conversion
+         BCT   R4,CONV001              Test next byte
+CONV099  DS    0H
+         LR    R1,R2                   Answer (length) in register 1
+         L     R14,R14CONV             Restore register 14
+         BR    R14                     Return to caller
+         TITLE 'RPFPRINT and SYSOUT DCB'
+         PRINT NOGEN
+MDLPRINT DCB   DDNAME=RPFPRINT,MACRF=GL,EODAD=GET005,DSORG=PS,         X
+               EXLST=*-*,SYNAD=GET005,BFTEK=A
+MDLPRTL  EQU   *-MDLPRINT
+MDLOUT   DCB   DDNAME=INTRD,MACRF=PM,LRECL=133,RECFM=FB,               X
+               BLKSIZE=3990,DSORG=PS
+MDLOUTL  EQU   *-MDLOUT
+MDLWORK2 DCB   DSORG=PO,BLKSIZE=256,DDNAME=RPFWORK2,MACRF=R
+MDLWRK2L EQU   *-MDLWORK2
+         PRINT GEN
+         TITLE 'Screen and messages'
+MDL5TX1  DS    0CL174                                              @gp1
+         DC    CL7'Browse '
+MDL5DSN  DS    CL44
+         DC    86C'-'                                              @gp1
+         DC    37C'-'
+*
+SCR5TX2  DS    0CL174                                              @gp1
+         DC    CL57'RPF Tutorial: -------------------------------------C
+               ------'
+         DC    80C'-'                                              @gp1
+         DC    37C'-'
+*
+MDL5TX3  DS    0CL174                  Header if program specified
+         DC    CL11'Listing of '              in COMMPRM (bytes 16-23)
+MDL5UTIL DS    CL8                     Name of creating utility
+         DC    C' '
+MDL5DDN  DS    CL8                     Name of utility output DDNAME
+         DC    CL7' output'
+         DC    CL22'-------------------------'
+         DC    80C'-'                                              @gp1
+         DC    37C'-'
+*
+         TITLE 'Other constants'
+TXT1     DS    0CL133
+         DC    CL53'1(C)-2025 Skybird Systems: output listing of dataseX
+               t '
+TXT1DSN  DS    CL54
+         DC    CL7'   Page'
+TXT1PAGE DS    CL8
+         DC    CL1' '
+TXT1OF   DS    CL2
+TXT1PGS  DS    CL8
+TXT2     DS    0CL133                  2nd header print data set
+         DC    CL09' Volume= '
+TXT2VOL  DS    CL6                     Volume into header
+         DC    CL07',date= '
+TXT2DTE  DS    CL11                    Date into header           @2000
+         DC    CL07',time= '
+TXT2TME  DS    CL08                    Time into header
+         DC    CL09',userid= '
+TXT2UID  DS    CL7
+         DC    CL69' '
+TXT3     DS    0CL133                  ISPF/RPF stats header
+         DC    CL12' Saved with '
+TXT3EDT  DC    CL4'ISPF'
+         DC    CL12' by userid= '
+TXT3UID  DS    CL7
+         DC    CL10' on date= '
+TXT3DTE  DS    CL11                                               @2000
+         DC    CL08' ,time= '
+TXT3TME  DS    CL8
+         DC    CL20',number of records ='
+TXT3REC  DS    CL10
+         DC    C' '
+TXT3VTX  DC    CL8',vv.mm= '
+TXT3VER  DS    CL2                     ISPF version (VV)
+TXT3DOT  DS    CL1                     Period or blank
+TXT3MOD  DS    CL2                     ISPF modification level (MM)
+         DC    CL17' '
+PRTDSNL  DC    AL2(09),CL44'&&&&RPFPRT2'
+*
+ERR1TXT  DC    CL25'--- Invalid column number'
+ERR2TXT  DC    CL25'--------- Invalid command'
+ERR3TXT  DC    CL25'- Allocation error SYSOUT'
+ERR4TXT  DC    CL25'--------- PFK not defined'
+ERR5TXT  DC    CL25'-- PFK definition invalid'
+ERR8TXT  DC    CL25'------- Data set is empty'
+ERRBTXT  DC    CL25'-- Bottom of data reached'
+ERRCTXT  DC    CL25' Invalid character string'
+ERRDTXT  DC    CL25'----------- Submit failed'
+ERRETXT  DC    CL25'-- No JOB statement found'
+ERRFTXT  DC    CL25'-- Truncated to LRECL=255'
+ERRGTXT  DC    CL25'-- No card image data set'
+MSG1TXT  DC    CL25'-- Listing made, SYSOUT=X'
+MDL2TXT  DC    CL25'- Column XXX,line XXXXXXX'   Offset 09,18
+MSG3TXT  DC    CL25'-- Chars XXXXXXXXXX found'   Offset 09
+MSG5TXT  DC    CL25'-- Job jjjjjjjj submitted'   Offset 07
+MSG6TXT  DC    CL25'------ BROWSE substituted'
+*
+         LTORG ,
+         DROP
+*
+         COPY  CALLTS
+*
+         TITLE 'Process command F X''hhhh'' and convert hex string'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        H E X F I N D - filter out the HEX characters between        *
+*                        X' and the last ' and convert the            *
+*                        'EBCDIC' hex characters to real HEX          *
+*                        characters.                                  *
+*                                                                     *
+*                  Input   Register 11, address of RPFCOMM            *
+*                          BUFFER     , The F X'hh' command           *
+*                                                                     *
+*                  Output: Register 0, length of the string           *
+*                          Register 1, the address of the converted   *
+*                                      string.                        *
+*                                                                     *
+*                          Reg.15, RC= 0000 - Successfully converted  *
+*                                  RC= 0004 - Invalid string          *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+HEXFIND  CSECT
+         USING WORKAREA,R13            Address our working storage
+         STM   R2,R14,SAVEHX           Save registers
+         BALR  R12,0
+         USING *,R12
+         USING COMMAREA,R11            Make RPFCOMM addressable
+         LA    R3,BUFFER+4             Point after F X'
+         LR    R6,R3                   Save for later use
+         LA    R4,34                   Search max 34 times
+         XR    R5,R5                   Count the length
+HEX001   DS    0H
+         CLI   0(R3),C' '              Blank found?
+         BE    HEX005                  Yes: Hex string without end '
+         CLI   0(R3),C''''             Quote found?
+         BE    HEX005                  Yes: Hex string finished
+         TRT   0(1,R3),TRTHEX          Test on valid HEX characters
+         BNZ   HEX091
+         LA    R5,1(,R5)               Count the byte in the string
+         LA    R3,1(,R3)               Next byte in string
+         BCT   R4,HEX001               Loop
+HEX005   DS    0H
+         LTR   R5,R5                   No length?
+         BZ    HEX091                  Yes: invalid string
+         LR    R15,R5                  Duplicate length in R15
+         SRL   R15,1                   1 byte to the right
+         SLL   R15,1                   and back to the left
+         CR    R5,R15                  Do we have a even number?
+         BNE   HEX091                  No: invalid string
+         MVI   HEXSTR,C' '             Blank the
+         MVC   HEXSTR+1(L'HEXSTR-1),HEXSTR      output first
+         BCTR  R15,0                   Discount with 1 for TR and move
+         EX    R15,HEXMOVE             Move the string
+         TR    HEXSTR,TRHEX            Translate (eg: C1 -> 0A)
+         LA    R3,7                    Loop 7 times
+         LA    R2,HEXSTR               Input string
+         LA    R4,HEXSTR2              Output string
+HEX010   DS    0H
+         PACK  0(4,R4),0(7,R2)         Pack 6 bytes +1 non significant
+         LA    R2,6(,R2)               Next 6 bytes input
+         LA    R4,3(,R4)               Next 3 bytes output
+         BCT   R3,HEX010               Loop
+         SRL   R5,1                    Length = length/2
+         LR    R0,R5                   Load the
+         LA    R1,HEXSTR2                       answer
+         XR    R15,R15                 Rc = 0, string converted
+         B     HEX999                  Return
+HEX091   DS    0H
+         LA    R15,4                   Errornous return code
+HEX999   DS    0H
+         LM    R2,R14,SAVEHX           Restore R2 - R14
+         BR    R14                     Return
+HEXMOVE  MVC   HEXSTR(0),0(R6)         << executed >>
+TRHEX    DC    256AL1(*-TRHEX)         Translate table A-F and 0-9
+         ORG   TRHEX+X'40'
+         DC    X'00'                   Blank
+         ORG   TRHEX+X'81'
+         DC    X'0A0B0C0D0E0F'         Lower case A-F
+         ORG   TRHEX+C'A'
+         DC    X'0A0B0C0D0E0F'         Upper case A-F
+         ORG   TRHEX+C'0'
+         DC    X'00010203040506070809' 0-9
+         ORG   ,
+TRTHEX   DC    256X'FF'                Translate test table
+         ORG   TRTHEX+X'81'
+         DC    X'000000000000'         Lower case A-F
+         ORG   TRTHEX+C'A'
+         DC    X'000000000000'         Upper case A-F
+         ORG   TRTHEX+C'0'
+         DC    X'00000000000000000000' 0-9
+         ORG   ,
+         LTORG ,
+         DROP
+         TITLE 'Read RECFM=U data set and write output on a VB ds'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  RECFMU                                             *
+*                                                                     *
+*        Function: Read the data set with RECFM = U and copy the      *
+*                  data to a sequential data set with RECFM=VB        *
+*                  and a record length of (screen width - 10 divided  *
+*                  by 16, the quotient multiplied with 16 and         *
+*                  increased by 10 + 4 for the RDW).                  *
+*                  The DDNAME of the input data set is in bytes 0-7   *
+*                  of COMMPRM in RPFCOMM.                             *
+*                  If the input block > screen width, more records    *
+*                  will be written until the complete block is        *
+*                  processed.                                         *
+*                                                                     *
+*                  Input:  Register 11, address of RPFCOMM            *
+*                          BRODDN     , ddname                        *
+*                                                                     *
+*        On exit, Register 1 contains the address of the output DCB.  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+RECFMU   CSECT
+         USING WORKAREA,R13            Address working storage
+         STM   R2,R14,RECFMSVE         Save registers
+         LR    R12,R15                 Setup base register
+         USING RECFMU,R12              Make routine addressable
+         USING COMMAREA,R11            Address it
+         MVC   RPFWORK,MDLWORK         Move model ...
+         MVC   RPFPRT2,MDLPRT2                    DCB's
+         XC    RDW,RDW                 Clear RDW for V(B) data sets
+         L     R4,COMMCOLS             Width of screen
+         SH    R4,=H'10'               Minus prefix (= hex offset)
+         SRL   R4,4                    Make this value ...
+         SLL   R4,4                    ... a multiple of 16
+         STH   R4,DATLEN               LRECL - 14 (10 prefix + 4 RDW)
+         LA    R4,10(,R4)              Add the prefix back
+         STH   R4,RECLEN               This is LRECL output - 4 (RDW)
+         LA    R4,4(,R4)               Screen width + 4 = LRECL
+         STH   R4,RPFPRT2+DCBLRECL-IHADCB   Set in file
+         MVC   RPFWORK+DCBDDNAM-IHADCB(8),BRODDN
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  RPFWORK,MF=(E,COMOPN)
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (RPFPRT2,(OUTPUT)),MF=(E,COMOPN)
+         GETMAIN R,LV=32768            Getmain max blksize (32k)
+         ST    R1,AREA                 Save for later use
+READBLK  DS    0H
+         L     R9,AREA                 Area address
+         READ  DECBU,SF,RPFWORK,(9),'S',MF=E  Read a block
+         CHECK DECBU                   and wait for completion
+         XC    BLKOFFS,BLKOFFS         Offset in block starts with 0
+         LH    R3,RPFWORK+DCBBLKSI-IHADCB BLKSIZE at time of read
+         L     R4,DECBU+16             Status area address
+         SH    R3,14(R4)               Subtract residual count
+*                                      to get real block length
+         STH   R3,BLKLEN               Save the actual block length
+         BAL   R14,PUTIT               Write the block to output
+         B     READBLK
+SYNADU   DS    0H                      IO-error RPFWORK
+READ99   DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFWORK,MF=(E,COMCLS)
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFPRT2,MF=(E,COMCLS)
+         FREEPOOL RPFPRT2              Release the buffers
+         L     R9,AREA                 Pickup area address
+         FREEMAIN R,LV=32768,A=(9)     and get rid of this area
+         LA    R1,RPFPRT2              DCB address
+         LM    R2,R14,RECFMSVE         Restore R2 - R14
+         XR    R15,R15                 Return code
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  PUTIT                                              *
+*        Function: Write the read block of the 'RECFM=U' library      *
+*                  to the sequential output data set. Split up        *
+*                  the block if this is too large in more             *
+*                  output records.                                    *
+*                  The input block is pointed to by register 9        *
+*                  The length of this block is in BLKLEN              *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+PUTIT    DS    0H
+         LR    R8,R14                  Save return register
+         LH    R7,BLKLEN               Length input record
+PUT001   DS    0H
+         MVI   RECORD,C' '             Blank output
+         MVC   RECORD+1(L'RECORD-1),RECORD         first
+         CH    R7,DATLEN         Do we have screen width - 10 chars?
+         BL    PUT005                  No: write last record
+         LH    R4,DATLEN               Pickup screen width - 10
+         BCTR  R4,0                    Discount for EX
+         EX    R4,PUTMVE               Move RECLEN bytes input block
+         LH    R4,RECLEN               Pickup screen width
+         LA    R4,4(,R4)               + RDW
+         STCM  R4,3,RDW                RDW
+         UNPK  DBW(9),BLKOFFS(5)       Expand each byte
+         NC    DBW(8),=X'0F0F0F0F0F0F0F0F'   Clear high order nibbles
+         TR    DBW(8),=C'0123456789ABCDEF'
+         MVC   RECORD(8),DBW           Move to user field
+         PUT   RPFPRT2,OUTAREA         Write record
+         LH    R1,DATLEN               Screen width - 10
+         BAL   R14,HEXCONV             Make 2 hex records
+         LH    R1,DATLEN               Screen width - 10
+         BCTR  R1,0                    Minus 1 for EX
+         EX    R1,PUTMVE2              Move ruler
+         PUT   RPFPRT2,OUTAREA         Write ruler
+         LH    R1,DATLEN               Screen width - 10
+         L     R2,BLKOFFS              Offset in input block
+         LA    R2,0(R1,R2)             Increase with screen width - 10
+         LA    R9,0(R1,R9)             Point to next part in input
+         ST    R2,BLKOFFS              Save new offset
+         SH    R7,DATLEN     Decrease length input with screen width-10
+         B     PUT001                  Write next part
+PUT005   DS    0H
+         LTR   R7,R7                   Already zero?
+         BZ    PUT007                  Yes: complete block written
+*                                      but write separator with '-'
+         BCTR  R7,0                    Discount for execute
+         EX    R7,PUTMVE               Move last part of block
+         LA    R7,15(,R7)              Restore + 4 for RDW
+         UNPK  DBW(9),BLKOFFS(5)       Expand each byte
+         NC    DBW(8),=X'0F0F0F0F0F0F0F0F'   Clear high order nibbles
+         TR    DBW(8),=C'0123456789ABCDEF'   = HEX offset in block
+         MVC   RECORD(8),DBW           Move offset to record
+         STCM  R7,3,RDW                Length + RDW
+         PUT   RPFPRT2,OUTAREA         Write record
+         LR    R1,R7                   Length for HEXCONV ...
+         SH    R1,=H'14'               ... = LRECL - HEX offset - RDW
+         BAL   R14,HEXCONV             Make and write 2 hex records
+         LR    R1,R7                   Length
+         EX    R1,PUTMVE2              Move ruler
+         PUT   RPFPRT2,OUTAREA         Write ruler with same RDW
+PUT007   DS    0H
+         MVI   RECORD,C'-'             Separator
+         MVC   RECORD+1(L'RECORD-1),RECORD  record
+         LH    R4,RECLEN               Pickup record length
+         LA    R4,4(,R4)               + RDW
+         STCM  R4,3,RDW                RDW
+         PUT   RPFPRT2,OUTAREA         Write record
+PUT099   DS    0H
+         BR    R8
+PUTMVE   MVC   RECORD+10(0),0(R9)      << executed >>
+PUTMVE2  MVC   RECORD+10(0),RULER      << executed >>
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  HEXCONV                                            *
+*        Function: Convert the contents of RECORD, starting with      *
+*                  offset 10 to HEX.                                  *
+*                  Register 1 points to the length of the to be       *
+*                  Converted string.                                  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+HEXCONV  DS    0H
+         ST    R14,R14HEXC             Save register 14
+         LR    R6,R1                   Save length
+         MVI   RECHEX1,X'40'           Blank the
+         MVC   RECHEX1+1(L'RECHEX1-1),RECHEX1   records
+         MVC   RECHEX2,RECHEX1                         first
+         LA    R3,RECORD+10            Point to record with data
+         LA    R4,RECHEX1+10           Point to record with hi nibbles
+         LA    R5,RECHEX2+10           Point to record with lo nibbles
+HEXC005  DS    0H
+         MVC   HEXINP,0(R3)            Input character from record
+         UNPK  DBW(3),HEXINP(2)        Expand each byte
+         NC    DBW(2),=X'0F0F'         Clear hi order nibbles
+         TR    DBW(2),=C'0123456789ABCDEF'
+         MVC   HEXOUT(2),DBW           Move to user field
+         MVC   0(1,R4),HEXOUT          Move 1st nibble in 1st record
+         MVC   0(1,R5),HEXOUT+1        Move 2nd nibble in 2nd record
+         LA    R3,1(,R3)               Next pos. input rec with chars
+         LA    R4,1(,R4)               Next pos. record with hi nibbles
+         LA    R5,1(,R5)               Next pos. record with lo nibbles
+         BCT   R6,HEXC005              Loop until all done
+         MVC   RECORD,RECHEX1          Move record with high nibbles
+         PUT   RPFPRT2,OUTAREA         Write record
+         MVC   RECORD,RECHEX2          Move record with low  nibbles
+         PUT   RPFPRT2,OUTAREA         Write record
+         L     R14,R14HEXC             Restore register 14
+         BR    R14
+*
+RULER    DC    C'0---+---+---+---1---+---+---+---2---+---+---+---3---+-X
+               --+---+---4---+---+---+---5---+---+---+---6'
+         DC    C'---+---+---+---7---+---+---+---8---+---+---+---9---+--X
+               -+---+---A---+---+---+---B---+---+---+---C'
+         DC    C'---+---+---+---D'
+*
+MDLWORK  DCB   DDNAME=RPFWORK,RECFM=U,MACRF=R,EODAD=READ99,DSORG=PS,   X
+               SYNAD=SYNADU
+MDLWRKL  EQU   *-MDLWORK
+MDLPRT2  DCB   DDNAME=RPFPRT2,RECFM=VB,MACRF=PM,DSORG=PS,              X
+               BLKSIZE=6000
+MDLPRT2L EQU   *-MDLPRT2
+         LTORG ,
+         DROP
+*
+         TITLE 'Read input data set'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:   FILLPAGE                                          *
+*        Function:  Read records of the source data or output listing *
+*                   and fill the page space (input for BROWSE screen).*
+*                   If end-of-file, set flag $EOF.                    *
+*                   If RECFM=V then the RDW will be skipped           *
+*                                                                     *
+*        Register assignment.                                         *
+*        R4  = pointer to record in data page space.                  *
+*        R10 = address of read record.                                *
+*        R11 = address of RPFCOMM.                                    *
+*        R12 = base register.                                         *
+*        R13 = address of working storage.                            *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+FILLPAGE CSECT
+         USING WORKAREA,R13            Our working storage
+         USING COMMAREA,R11            RPFCOMM
+         STM   R2,R14,SAVEFILL         Save register 14
+         LR    R12,R15                 Setup base register
+         USING FILLPAGE,R12            Make routine addressable
+         L     R2,PAGESPC              Load screen area
+         L     R3,PAGELEN              Length (21-->96) * (RECL+3) @rp6
+         LR    R4,R2                   Same address in register 4
+         ICM   R5,15,=X'40000000'      Padding character+length
+         MVCL  R2,R4                   Clear screen area
+         LH    R3,#LINES               Max 21 up to 96 lines
+         L     R4,PAGESPC              Pickup address of data page
+         XC    #LNEISPC,#LNEISPC       Init # lines in data space
+FIL001   DS    0H                                                  @rp2
+         MVC   0(3,R4),=AL3(TURQ)      Move default color
+         L     R1,DATALINE             Length of screen line
+         LA    R4,0(R1,R4)             Next line in area
+         BCT   R3,FIL001               loop until all done         @rp9
+*
+*        Each entry in the data space consists of 3 bytes color and
+*        maximum of 255 bytes data.
+*
+         LH    R3,#LINES               Max 21 up to 96 lines
+         L     R4,PAGESPC              Pickup address of data page
+         TM    SWITCH,$HEX             Hex mode on?                @rp9
+         BNO   FIL003                  No: live #LINES so          @rp9
+         SRL   R3,2                    Divide by 4 and multiply by @rp9
+         SLL   R3,2                    4 to make divisible by 4    @rp9
+*                            because HEX mode contains four lines  @rp9
+         XR    R5,R5                   Clear # lines in page space
+FIL003   DS    0H                                                  @rp2
+         L     R15,=V(GETINP)          Read a record
+         BALR  R14,R15                 Execute and return length in R1
+         TM    SWITCH,$EOF             End of file?
+         BNO   FIL005                  No: carry on
+         MVI   3(R4),C'*'              Create ...
+         L     R1,RECL                 Record length input to create ..
+         BCTR  R1,0                    Bottom ...
+         BCTR  R1,0                    of data ...
+         EX    R1,FILASTR              line with asterisks ...
+         L     R1,RECL                 Record length
+         L     R14,COMMCOLS            Width of screen
+         CR    R14,R1                  Check if record fits on screen
+         BH    *+6                     No
+         LR    R1,R14                  Position ....
+         SRL   R1,1                    to the ...
+         S     R1,=F'7'                middle ...
+         LA    R1,0(R1,R4)             '** Bottom of data **' line
+         MVC   0(16,R1),=C' Bottom of data '
+         MVC   0(3,R4),=AL3(BLUE)      Paint this line blue
+         B     FIL999                  Yes: finished
+FIL005   DS    0H
+         L     R2,COUNTER              Record counter
+         LA    R2,1(,R2)               Increase record counter
+         ST    R2,COUNTER              And save
+         L     R2,#LNEISPC             # lines in screen data space
+         LA    R2,1(,R2)               Incr. lines in data space
+         ST    R2,#LNEISPC             Save
+         BCTR  R1,0                    Length = -1 (returned GETINP)
+         LTR   R1,R1                   Record read in GETINP with
+         BM    FIL006                  record length = 0? Y: dont move
+         EX    R1,FILMVE               Move                        @rp6
+FIL006   DS    0H
+         TM    SW2,$RECFMU             A RECFM=U data set?
+         BNO   FIL009                  No: Move the line to screen
+         CLI   LINE,C'-'               The RECFM=U separator?
+         BNE   *+10                    No:
+         MVC   0(3,R4),=AL3(YELLOW)    Make this line yellow
+         CLC   =C' 0---+-',LINE+9      The HEX ruler?
+         BNE   *+10                    No:
+         MVC   0(3,R4),=AL3(RED)       Make this line red
+FIL009   DS    0H
+         TM    SWITCH,$HEX             HEX display?                @rp9
+         BNO   FIL019                  No: leave it                @rp9
+FILHEX1  DS    0H                                                  @rp9
+         CH    R3,=H'4'                At least 4 lines on screen? @rp9
+         BL    FIL999                  No: ready                   @rp9
+         LTR   R1,R1                   Record read in GETINP with
+         BM    FILHEX7                 record length = 0? Y: dont move
+         LA    R5,1(,R1)               Repair length of record
+         LR    R6,R4                   Copy Line address           @rp9
+         L     R15,DATALINE            Length of line on screen
+         LA    R6,0(R15,R6)            Point to first HEX line
+         LR    R7,R6                   Copy Line address  next line@rp9
+         LA    R7,0(R15,R7)            Point to next HEX line
+         LA    R6,3(,R6)               Point after color           @rp9
+         LA    R7,3(,R7)               Point after color           @rp9
+         LA    R14,LINE                Record to be HEX translated
+FILHEX5  DS    0H                                                  @rp9
+         MVC   HEXINP,0(R14)           Move byte in area to convert@rp9
+         UNPK  DBW(3),HEXINP(2)        Expand each byte
+         NC    DBW(2),=X'0F0F'         Clear hi order nibbles
+         TR    DBW(2),=C'0123456789ABCDEF'
+         MVC   HEXOUT(2),DBW           Move to user field
+         MVC   0(1,R6),HEXOUT          Move 1st nibble in 1st line @rp9
+         MVC   0(1,R7),HEXOUT+1        Move 2nd nibble in 2nd line @rp9
+         LA    R6,1(,R6)               Next byte 1st line          @rp9
+         LA    R7,1(,R7)               Next byte 2nd line          @rp9
+         LA    R14,1(,R14)             Next byte input record      @rp9
+         BCT   R5,FILHEX5              Loop until all done         @rp9
+FILHEX7  DS    0H                                                  @rp9
+         L     R6,DATALINE             Length of record            @rp9
+         LA    R4,0(R4,R6)             Skip now                    @rp9
+         LA    R4,0(R4,R6)                    three                @rp9
+         LA    R4,0(R4,R6)                         records         @rp9
+         MVC   0(3,R4),=AL3(YELLOW)    Move color of separator     @rp9
+         LA    R6,3(,R4)               Point after color           @rp9
+         L     R5,RECL                 Length of record            @rp9
+FILHEX9  DS    0H                                                  @rp9
+         MVI   0(R6),C'-'              Move separator              @rp9
+         LA    R6,1(,R6)               Next byte 1st line          @rp9
+         BCT   R5,FILHEX9              Loop until all done         @rp9
+         SH    R3,=H'3'                Substract the extra lines   @rp9
+         B     FIL019                  Branch over next instr.
+FILASTR  MVC   4(0,R4),3(R4)           << executed >>
+FILMVE   MVC   3(0,R4),LINE            << executed >>
+FIL019   DS    0H                      No Hex view                 @rp6
+         L     R1,DATALINE             Length of line
+         LA    R4,0(R1,R4)             Point to next record
+         BCT   R3,FIL003               And loop
+FIL999   DS    0H
+         LM    R2,R14,SAVEFILL         Restore registers
+         BR    R14                     Return to caller
+         LTORG ,
+         DROP
+         TITLE 'Print the output listing'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        R P F P R T:   Routine to print the output listing           *
+*        in this section a print data set will be allocated           *
+*        and the to be browsed data set will be printed               *
+*        If the allocation fails the a returncode of 4 will be placed *
+*        in register 15.                                              *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFPRT   CSECT
+         USING WORKAREA,R13            Address working storage
+         USING COMMAREA,R11            Address RPFCOMM
+         STM   R2,R14,SAVEPRT          Save return register
+         LR    R12,R15                 Setup base register
+         USING RPFPRT,R12              Make this routine addressable
+         MVC   SYSCLS,COMOUTCL         Move default output class
+         MVI   HEAD3VTX,C' '           Blank the fields
+         MVC   HEAD3VTX+1(7),HEAD3VTX    ,,   ,,   ,,
+         MVC   HEAD3VER,HEAD3VTX         ,,   ,,   ,,
+         MVC   HEAD3MOD,HEAD3VTX         ,,   ,,   ,,
+         MVI   HEAD3DOT,C' '             ,,   ,,   ,,
+         L     R15,=V(CLOSE)           Close input and free buffers
+         BALR  R14,R15                 Execute
+         CLI   BUFFER+6,C'A'           Test SYSOUT class
+         BL    PRT001                  Default if not
+         CLI   BUFFER+6,C'9'           A-Z or 0-9 ***DEFAULT CLS C***
+         BH    PRT001
+         MVC   SYSCLS,BUFFER+6         Move different SYSOUT class
+PRT001   DS    0H
+         LA    R14,RPFD08
+         USING DAPB30,R14              Address parm block
+         XC    RPFD08,RPFD08           Allocate a SYSOUT data set
+         MVI   DA30CD+1,X'30'          Entry code 0030
+         MVC   DA30DDN(8),=CL8'INTRD'  DDNAME to allocate
+         MVC   DA30UNIT,=CL8' '        No UNIT
+         MVC   DA30SER,=CL8' '         No VOLUME
+         MVC   DA30PGNM,=CL8' '        No PGM name (like INTRDR)
+         MVC   DA30FORM,=CL8' '        No FCB / FORM
+         LR    R1,R14                  Parameter for CALLTS
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R14                     RPFD08
+         LTR   R15,R15                 Test if allocation ok
+         BNZ   PRT995                  Set rc=4 and go to caller
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         RDJFCB RPFPRINT,MF=(E,COMOPN)  Read JFCB
+         MVI   HEADDSN,C' '            Clear complete ....
+         MVC   HEADDSN+1(L'HEADDSN-1),HEADDSN             field
+         MVC   HEADDSN(44),JFCB        Move DSName of RPFPRINT
+         CLI   JFCB+44,C' '            No member provided?
+         BE    PRT011                  Yes: branch
+         LA    R3,HEADDSN+43           Point after DSName
+         LA    R4,43                   Number of tries
+PRT003   DS    0H
+         CLI   0(R3),C' '              Blank found ?
+         BNE   PRT005              No: last significant byte DSN found
+         BCTR  R3,0                    Decrease by 1
+         BCT   R4,PRT003               Loop until last byte found
+         B     PRT011                  No DSName: this is not possible
+PRT005   DS    0H
+         MVI   1(R3),C'('              Move start paranthese
+         MVC   2(8,R3),JFCB+44         Move member name
+         LA    R3,9(,R3)               Point to last byte member name
+         LA    R4,8                    Max number of tries
+PRT007   DS    0H
+         CLI   0(R3),C' '              Blank found ?
+         BNE   PRT009              No: last significant byte DSN found
+         BCTR  R3,0                    Decrease by one
+         BCT   R4,PRT007               Loop until last byte found
+PRT009   DS    0H
+         MVI   1(R3),C')'              Complete: Form= 'DSN(MEMBER)'
+PRT011   DS    0H
+         MVC   HEAD2VOL(6),JFCB+118    Move volume serial from JFCB
+         MVC   HEAD2UID(7),COMMUSER    Userid into header
+         TIME  DEC                     Get time of day
+         SRL   R0,4                    Shift out hundreds of seconds
+         ST    R0,TIMEWORK
+         OI    TIMEWORK+3,X'0F'        Insert sign
+         MVC   TIMEDISP,PATT1          Pattern into output field
+         ED    TIMEDISP(10),TIMEWORK
+         MVC   HEAD2TME,TIMEDISP+2
+         XC    JULDATE,JULDATE         Use current date
+         MVI   OUTPUT,X'FF'            Julian date is 4 bytes
+         L     R15,EPCNVDT             RPFCNVDT routine
+         LA    R1,PRMCNVD1             Parm
+         BALR  R14,R15                 Invoke RPFCNVDT
+         MVI   HEAD2DTE,C' '           Clear date
+         MVC   HEAD2DTE+1(10),HEAD2DTE            field
+         MVC   HEAD2DTE(2),DD          Move day number of month
+         MVC   HEAD2DTE+3(3),M#NAME1   Month name
+         MVC   HEAD2DTE+7(4),YY
+         NI    SWITCH,X'FF'-$PRTH3     Reset flag
+         CLC   BRODDN,=CL8'RPFWORK'    RPFBRO used as Browse?
+         BNE   PRT023                  No: do not print 3rd header
+         TM    COMMFLG1,$COMMSEQ       Sequential data set?
+         BO    PRT023                  Yes: do not print 3rd header
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  RPFWORK2,MF=(E,COMOPN)   Open PDS(E)
+         MVC   BLDLM,JFCB+44           Move member name
+         MVC   BLDLLIST(4),=X'00010036' Search 1 member entry max 54
+         BLDL  RPFWORK2,BLDLLIST       Try to find member
+         LTR   R15,R15                 Rc =0?
+         BNZ   PRT021                  No: close the data set
+         NI    BLDLC,B'00011111'       Clear first 3 bits in C byte
+*
+*        Test if there are ISPF stats in the directory entry
+*
+         CLI   BLDLC,X'0F'             15 halfwords userdata?
+         BE    PRT017                  Yes: ISPF stats in header
+         CLI   BLDLC,X'14'             20 halfwords userdata?
+         BNE   PRT021                  Close if no extended stats
+PRT017   DS    0H
+         TM    SPFDATEU+3,X'0C'        Does date update contain a sign?
+         BNO   PRT021                  No: definitely no ISPF stats
+         TM    SPFDATEI+3,X'0C'        Does date create contain a sign?
+         BNO   PRT021                  No: definitely no ISPF stats
+         CLI   SPFDATEU,X'00'          Time DEC format (19xx)?    @2000
+         BNE   *+8                     No: branch                 @2000
+         MVI   SPFDATEU,X'19'          20th century               @2000
+         CLI   SPFDATEU,X'01'          Time DEC format (20xx)     @2000
+         BNE   *+8                     No branch                  @2000
+         MVI   SPFDATEU,X'20'          21th century               @2000
+         MVC   JULDATE(4),SPFDATEU     Load date
+         MVI   OUTPUT,X'FF'            Input is 4 byte julian date
+         L     R15,EPCNVDT             RPFCNVDT routine
+         LA    R1,PRMCNVD1             Parm
+         BALR  R14,R15                 Invoke RPFCNVDT
+         MVI   HEAD3DTE,C' '           Clear date
+         MVC   HEAD3DTE+1(10),HEAD3DTE            field
+         MVC   HEAD3DTE(2),DD          Move day number of month
+         MVC   HEAD3DTE+3(3),M#NAME1   Month name
+         MVC   HEAD3DTE+7(4),YY
+         XR    R7,R7                   Clear reg (00000000)
+         ICM   R7,6,SPFTIME            Time      (00TTTT00)
+         IC    R7,=X'F0'               Add sign  (00TTTTF0)
+         SRL   R7,R4                   and shift (000TTTTF)
+         ST    R7,DBW                  Store the result
+         MVC   TIMEDISP,PATT2          Pattern into work field
+         ED    TIMEDISP(07),DBW+1      Edit the time
+         MVC   HEAD3TME,TIMEDISP+2     .. and move in header line
+         MVC   HEAD3UID(7),SPFUID      ID of last saver
+         XR    R7,R7                   Clear register 7
+         ICM   R7,3,SPFRECU            # records in ISPF stats
+         TM    SPFFLGS,SPFEXT          Extended stats?
+         BNO   *+8                     No: carry
+         ICM   R7,15,SPFERECU          Move 4 byte # lines ext. sect.
+         CVD   R7,DBW                  Convert to packed decimal
+         MVC   HEAD3REC,=X'40206B2020206B202120' Move edit pattrn
+         ED    HEAD3REC,DBW+4          .. and convert to display
+         ZAP   $CARDS,DBW              Save number of records
+         XR    R7,R7                   Register 7 = zero
+         IC    R7,SPFVERS              ISPF stats version number
+         CVD   R7,DBW                  Conver to packed decimal
+         OI    DBW+7,X'0F'             Make absolute
+         UNPK  HEAD3VER,DBW            Convert to display format
+         IC    R7,SPFMOD               ISPF stats MOD
+         CVD   R7,DBW                  To packed decimal
+         OI    DBW+7,X'0F'             Make absolute
+         UNPK  HEAD3MOD,DBW            .. and convert to display format
+         MVI   HEAD3DOT,C'.'           Place a period between VV and MM
+         MVC   HEAD3VTX,=C',vv.mm= '   Move text into line
+         OI    SWITCH,$PRTH3           Mark print of header 3
+PRT021   MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFWORK2,MF=(E,COMCLS)  Close the data set
+PRT023   MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (SYSOUT,(OUTPUT)),MF=(E,COMOPN) Allocation OK, open
+         L     R15,=V(OPEN)            Routine address
+         BALR  R14,R15                 Execute
+         NI    SWITCH,255-$EOF         RestT EOF flag
+         ZAP   LINECNT,=P'99'          Init line counter
+         ZAP   PAGECNT,=P'0'           Init page counter
+*
+*        Write data set to the allocated SYSOUT data set
+*
+PRT051   DS    0H
+         L     R15,=V(GETINP)          Read a record from input
+         BALR  R14,R15                 branch to routine
+         TM    SWITCH,$EOF             End of file?
+         BNZ   PRT990                  Yes: end of listing
+         MVI   LINE-1,X'40'            ASA cc: skip 1 line
+         TM    SWITCH,$NOCC            Already a Print data set?
+         BNO   PRT053                  Write no headers if yes
+         CP    LINECNT,$LINES          More than '$LINES' lines?
+         BNL   PRT091                  Yes: write header(s)
+PRT053   DS    0H                      Loop to fill INTRD
+         LA    R6,LINE                 Pickup record               @rp8
+         TR    1(255,R6),COMTRTAB      Remove invalid chars col 2-256
+         TM    SWITCH,$NOCC            No control characters in input?
+         BNO   PRT065                  Normal write if control chars.
+         TR    0(1,R6),COMTRTAB        Remove invalid char from col.1
+         TM    SWITCH,$CARDIM          Do we have a card image data set
+         BNO   PRT061                  No: write.
+         LA    R3,LINE                 Load line to calculate      @rp8
+         LA    R4,80                   )Start position
+         LA    R5,1                    Init counter to 1
+PRT057   CLI   0(R3),C' '              Blank found?
+         BNE   PRT059                  No: start of 1st significant
+*                                      position found
+         LA    R5,1(,R5)               Count blank
+         LA    R3,1(,R3)               Next position in 'LINE'
+         BCT   R4,PRT057               Loop until all blanks skipped
+         B     PRT061                  Line contains all blanks
+PRT059   DS    0H
+         CVD   R5,DBW                  Convert start column to packed
+         MVC   86(4,R6),=X'40202020'   Move pattern                @rp8
+         ED    86(4,R6),DBW+6          Edit start column           @rp8
+PRT061   DS    0H
+         BCTR  R6,0                    Point to ASA control character
+PRT065   DS    0H
+         LR    R1,R6                   A(Record)
+         BAL   R14,PUTSYSO             Write                       @rp8
+         AP    LINECNT,=P'1'           Increase line counter
+         B     PRT051                  Next record in RPFPRINT
+PRT091   ZAP   LINECNT,=P'0'           Reset line counter
+         AP    PAGECNT,=P'1'           Increase page count
+         MVI   HEADTPGS,C' '           Clear ...
+         MVC   HEADTPGS+1(L'HEADTPGS-1),HEADTPGS  rest ...
+         MVC   HEAD1OF,HEADTPGS                           of header
+         MVC   HEADPAGE,=X'4020202020202120' Move edit pattrn
+         ED    HEADPAGE,PAGECNT        Move page number
+         TM    SWITCH,$PRTH3           No RPF/ISPF stats?
+         BNO   PRT093                  Yes: write header
+         TM    SWITCH,$CARDIM          Is it card image?
+         BNO   PRT093                  No: write header
+         CVB   R15,$CARDS              Make # records binary
+         XC    DBW,DBW                 Clear double word
+         MVC   DBW+6(2),$LINES         # lines on a page
+         CVB   R1,DBW                  # lines on a page in reg.1
+         SL    R1,=F'7'                Minus headers and minus 1
+         LA    R15,0(R1,R15)           Add to # records
+         LA    R1,1(,R1)               Reset to # lines on a page
+*---------------------------------------------------------------------*
+*  The listing has $LINES-6 detail lines per page
+*  At this point the number of pages will be calculated and
+*  set into the header in the field 'HEADTPGS'
+*  Reg. 15  is number of records plus number of detail lines minus 1
+*  Reg. 1   is the # of detail lines per page
+*---------------------------------------------------------------------*
+         XR    R14,R14                 Clear even register
+         DR    R14,R1                  Divide with number of lines
+*---------------------------------------------------------------------*
+* Quotient is number of pages of the member
+* and can be found in register 15
+*---------------------------------------------------------------------*
+         MVC   HEAD1OF,=C'Of'          Move word 'OF'
+         MVC   HEADTPGS,=X'4020202020202120' Move pattern
+         CVD   R15,DBW                 Convert
+         ED    HEADTPGS,DBW+4          Edit number of pages
+PRT093   LA    R1,HEAD1                Header 1 in register 1
+         BAL   R14,PUTSYSO             Write
+         LA    R1,HEAD2                Header 2 in register 1
+         BAL   R14,PUTSYSO             Write 2nd header
+         AP    LINECNT,=P'2'           Increase line counter with 2
+         TM    SWITCH,$PRTH3           Should header 3 be printed?
+         BNO   PRT095                  No: skip
+         LA    R1,HEAD3                Header 3 in register 1
+         BAL   R14,PUTSYSO             Write 3rd header
+         AP    LINECNT,=P'1'           Increase line counter
+PRT095   DS    0H
+         LA    R6,LINE                 Point to record             @rp8
+         BCTR  R6,0                    Point to CC Char            @rp8
+         MVI   0(R6),C'0'              Move Control character      @rp8
+         AP    LINECNT,=P'1'           Increase line counter
+         TM    SWITCH,$CARDIM          Card image data set?
+         BNO   PRT053                  No: write, else 2nd header
+         LA    R1,SCALE                Scale line in register 1
+         BAL   R14,PUTSYSO             Write scale                 @rp8
+         AP    LINECNT,=P'2'           Increase line count
+         B     PRT053                  Write line
+PRT990   DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE SYSOUT,MF=(E,COMCLS)    Close SYSOUT
+         FREEPOOL SYSOUT               And free the buffers
+         XC    RPFD18,RPFD18           Clear unallocation parm block
+         LA    R14,RPFD18              Unallocation IKJDAIR
+         USING DAPB18,R14              Address parm block
+         MVI   DA18CD+1,X'18'          X'18' = unallocation
+         MVC   DA18DDN,=CL8'INTRD'     Ddname to unallocate
+         MVC   DA18MNM,=CL8' '         No member
+         MVC   DA18SCLS,=CL8' '        2 byte field
+         MVC   DA18SCLS(1),SYSCLS      Move right SYSOUT class
+         LR    R1,R14                  Parameter for CALLTS
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R14                     RPFD18
+         L     R15,=V(CLOSE)           Close input and free buffers
+         BALR  R14,R15                 Execute
+         XR    R15,R15                 Return code = 0
+         B     PRT999                  Finish routine
+PRT995   DS    0H                      Allocation failed
+         LA    R15,4                   Notify error to user
+PRT999   DS    0H                      End of PRINT routine
+         LM    R2,R14,SAVEPRT          Restore registers (except 15)
+         BR    R14                     Return to caller
+*
+PUTSYSO  DS    0H
+         ST    R14,R14SYSO             Save register 14
+         LR    R15,R1                  Pickup record address
+         RPFSA24                       Enter address mode 24
+         PUT   SYSOUT,(15)             Write record
+         RPFSA31                       Restore addressing mode
+         L     R14,R14SYSO             Restore register 14
+         BR    R14                     Return
+$LINES   DC    PL2'54'                 Linecount of print
+PATT1    DC    X'402021207A20207A2020' Pattern TIME in HEAD2
+PATT2    DC    X'402021207A2020404040' Pattern TIME in HEAD3
+*
+SCALE    DC    CL133'0----+----1----+----2----+----3----+----4----+----C
+               5----+----6----+----7----+----8  *START COLUMN*'
+         LTORG ,
+         DROP
+         TITLE 'Open the input (RPFPRINT)'
+OPEN     CSECT
+         USING WORKAREA,R13            Working storage
+         USING COMMAREA,R11            RPFCOMM
+         ST    R14,R14OPEN             Save return register
+         ST    R12,R12OPEN             Save base register
+         LR    R12,R15                 Setup base register
+         USING OPEN,R12
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  RPFPRINT,MF=(E,COMOPN)  Open input
+         NI    SWITCH,255-$EOF         Clear end-of-file marker
+         L     R12,R12OPEN             Restore base register
+         L     R14,R14OPEN             Restore return register
+         BR    R14                     Return
+         DROP  ,
+*
+         TITLE 'Close the input and free the buffers (RPFPRINT)'
+CLOSE    CSECT
+         USING WORKAREA,R13            Working storage
+         USING COMMAREA,R11            RPFCOMM
+         ST    R14,R14CLOSE            Save return register
+         ST    R12,R12CLOSE            Save base register
+         LR    R12,R15                 Setup base register
+         USING CLOSE,R12
+         TM    RPFPRINT+DCBOFLGS-IHADCB,DCBOFOPN Is DCB really opened?
+         BNO   CLOSE2                  No: do not try to close
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFPRINT,MF=(E,COMCLS)  Close input
+         FREEPOOL RPFPRINT             and free the buffers
+CLOSE2   DS    0H                                                  @rp2
+         L     R12,R12CLOSE            Restore base register
+         L     R14,R14CLOSE            Restore return register
+         BR    R14                     Return
+         DROP  ,
+*
+         TITLE 'Read input data set'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:   GETINP.                                           *
+*        Function:  Read a record of the source data or output listing*
+*                   If end-of-file, set flag $EOF.                    *
+*                   If RECFM=V then the RDW will be skipped        @rp2
+*                   After successful read return the record length is *
+*                   in register 1 and the record in LINE.             *
+*                   NOTE: the length can be 0 if using V(B) records.  *
+*                                                                     *
+*                   If in ASCII mode (set by the ASCII primary        *
+*                   command), translate the data from ASCII to EBCDIC.*
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+GETINP   CSECT
+         USING WORKAREA,R13            Our working storage
+         USING COMMAREA,R11            RPFCOMM
+         ST    R14,R14GTINP            Save register 14
+         ST    R12,R12GTINP            Save register 12
+         LR    R12,R15                 Setup base register
+         USING GETINP,R12              Make routine addressable
+         MVI   LINE,C' '               Blank                       @rp8
+         MVC   LINE+1(L'LINE-1),LINE        line                   @rp8
+         RPFSA24                       Enter addressing mode 24
+         GET   RPFPRINT                Retrieve a F or V record    @rp8
+         RPFSA31                       Restore addressing mode
+         L     R15,RECL                Return length unless ...
+         LA    R14,LINE                Record
+         TM    RPFPRINT+DCBRECFM-IHADCB,DCBRECV  variable record?  @rp2
+         BNO   GET001                  NO: Branch                  @rp2
+         S     R14,=F'4'               Minus 4 to store RDW        @rp8
+         LH    R15,0(R1)               Length from RDW
+         CH    R15,=H'255'             Longer than 255?
+         BNH   *+8                     No
+         LA    R15,255                 Truncate to 255
+GET001   BCTR  R15,0                   Minus 1 for EX
+         EX    R15,LINEMVE             Move data into record
+         LA    R15,1(,R15)             Restore length
+         TM    RPFPRINT+DCBRECFM-IHADCB,DCBRECV  variable record?  @rp2
+         BNO   *+8                     NO: Branch                  @rp2
+         SH    R15,=H'4'               Subtract RDW from length
+         B     GET990                  Return
+GET005   DS    0H                      EODAD/SYNAD address RPFPRINT
+         RPFSA31                       Restore addressing mode
+         OI    SWITCH,$EOF             Mark end-of-file
+         B     GET999
+GET990   DS    0H
+         TM    SWITCH,$ASCII           Do we have ASCII data?
+         BNO   GET999                  Yes: xlate ASCII to EBCDIC
+         LR    R1,R15                  Load the record length
+         BCTR  R1,0                    Decrease for EX
+         EX    R1,TRASCII              Xlate ASCII to EBCDIC
+GET999   DS    0H
+         LR    R1,R15                  Load the answer (record length)
+         L     R12,R12GTINP            Restore register 12
+         L     R14,R14GTINP            Restore register 14
+         BR    R14                     Return to caller
+LINEMVE  MVC   0(0,R14),0(R1)          << Executed >>
+TRASCII  TR    LINE(0),ASCII           << Executed >>
+*
+ASCII    DC    X'00010203372D2E2F1605250B0C0D0E0F'
+         DC    X'101112133C3D322618193F271C1D1E1F'
+         DC    X'404F7F7B5B6C507D4D5D5C4E6B604B61'
+         DC    X'F0F1F2F3F4F5F6F7F8F97A5E4C7E6E6F'
+         DC    X'7CC1C2C3C4C5C6C7C8C9D1D2D3D4D5D6'
+         DC    X'D7D8D9E2E3E4E5E6E7E8E94AE05A5F6D'
+         DC    X'79818283848586878889919293949596'
+         DC    X'979899A2A3A4A5A6A7A8A9C06AD0A107'
+         DC    X'3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F'
+         DC    X'3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F'
+         DC    X'3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F'
+         DC    X'3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F'
+         DC    X'3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F'
+         DC    X'3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F'
+         DC    X'3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F'
+         DC    X'3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F3F'
+         LTORG ,
+         DROP
+         COPY   TPUTS
+         CSR    MF=E
+         TITLE 'P F K  SEARCH ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        P F K    Routine to check the AIDbyte with the PFK definition*
+*                 in RPFCOMM. if the PFK is found the command         *
+*                 in the PFK will be placed into the field pointed    *
+*                 to by register 2                                    *
+*        Register 1 points to the AID byte                            *
+*        Register 2 points to the output BUFFER                       *
+*                                                                     *
+*        Returncodes: 00 PFK found confirmation is no                 *
+*                     04 PFK found confirmation is yes                *
+*                     08 PFK not defined or not found                 *
+*                     12 Invalid PFK definition                       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+PFK      CSECT
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Our working storage
+         STM   R2,R14,SAVEPFK          Save registers 2-14
+         LR    R12,R15                 Setup base
+         USING PFK,R12
+         LA    R4,COMPFK01             PFK definitions in RPFCOMM
+         LA    R5,24                   Max 24 PFK's
+PFK01    CLC   0(1,R4),0(R1)           Test PFK against AID byte
+         BE    PFK05                   YES: FOUND
+         LA    R4,26(,R4)              Next PFK
+         BCT   R5,PFK01                Test next PFK
+         LA    R15,8                   PFK not found
+         B     PFK99                   Return
+PFK05    CLI   1(R4),C'X'              PFK not defined ?
+         BNE   PFK06                   Tell that to programmer if not
+         LA    R15,8                   Return code - PFK not defined
+         B     PFK99                   Return
+PFK06    DS    0H
+         MVI   1(R2),C' '              Clear output
+         MVC   1(22,R2),1(R2)          .. command field except 1st byte
+         TM    0(R2),X'94'             'M' or 'm' in command (scroll)
+         BNO   PFK08                   No: ignore
+         CLC   2(4,R4),=C'DOWN'        Scroll forward?
+         BNE   PFK07                   No: try UP
+         MVC   0(6,R2),=C'BOTTOM'      Yes: BOTTOM command
+         XR    R15,R15                 Rc = 0
+         B     PFK99
+PFK07    CLC   2(2,R4),=C'UP'          Scroll backward?
+         BNE   PFK08                   No: ignore
+         MVC   0(3,R2),=C'TOP'         Yes: TOP command
+         XR    R15,R15                 Rc = 0
+         B     PFK99
+PFK08    MVC   0(24,R2),2(R4)          Move command under PFK in screen
+         CLI   1(R4),C'N'              Confirm?
+         BNE   PFK09                   No: Rc = 0, execute immediately
+         XR    R15,R15                 Rc = 0                      @rpa
+         B     PFK99
+PFK09    CLI   1(R4),C'Y'              Confirm?
+         BNE   PFK11                   No: invalid PFK definition
+         LA    R15,4                   Rc = 4, confirm.. wait ....
+         B     PFK99
+PFK11    DS    0H
+         LA    R15,12                  Invalid PFK definition
+PFK99    LM    R2,R14,SAVEPFK          Restore registers
+         BR    R14                     Return to caller
+         LTORG ,
+         DROP  ,
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         DROP  ,
+         TITLE 'Browse panel'
+SCR5TXT  CSECT
+         DC    X'27'                   Escape character TPUT FULLSCR
+SCR5CMD  DC    X'00C2'                 EW or EWA
+SBA5#00  DC    X'1100001DF8'           Row 1, column 1
+SCR5HEAD DS    CL174                   Contains 'HELP' or 'BROWSE'
+SBA5#0   DC    X'110000'               r01,c56+
+MSG5X    DC    CL25' '
+SBA5#1   DC    X'110000',X'1DF8',C'Cmd =>',X'1DC113',AL3(USCORE) r2,c1
+REP5     DC    CL40' ',X'1DF0',AL3(HDEFAULT),CL9' '
+         DC    CL22' '                 to remove hyphens on narrow scr
+SBA5#2   DC    X'110000'                             r03,c01       @gp1
+SCR5LEN  EQU   *-SCR5TXT
+LNE5     EQU   *                       Start of scale and data portion
+         TITLE 'HELP screen'
+SCREENH  CSECT
+         DC    X'27'                   Escape character TPUT FULLSCR
+SCRHTXT  DC    X'00C21100001DF8'       Write erase r1,c1
+         DC    CL79'RPF Browse utility. Primary commands --------------X
+               ----------------------------'
+         DC    X'1DF0'
+R2C1     DC    X'110000',X'1DF8',C'Cmd =>',X'1DC113'
+         DC    C' ',X'1DF011C3F0'
+*
+R4C1     DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4'  1 ',AL3(TURQ)
+         DC    CL14'ASCII       ',AL3(GREEN)
+         DC    CL60'Toggle ASCII mode on or off'
+R4C1L    EQU   *-R4C1
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4'  2 ',AL3(TURQ)
+         DC    CL14'BOTTOM      ',AL3(GREEN)
+         DC    CL60'Scroll to the bottom of the data set'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4'  3 ',AL3(TURQ)
+         DC    CL14'C xxxx      ',AL3(GREEN)
+         DC    CL60'Scroll to column xxxx'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4'  4 ',AL3(TURQ)
+         DC    CL14'DOWN/UP     ',AL3(GREEN)
+         DC    CL60'Scroll 1 page or from/to cursor forward/backward'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4'  5 ',AL3(TURQ)
+         DC    CL14'END/RETURN  ',AL3(GREEN)
+         DC    CL60'Terminate View/Browse'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4'  6 ',AL3(TURQ)
+         DC    CL14'F str/F X''hh''',AL3(GREEN)
+         DC    CL60'Search for specified (HEX) string, alias = FIND'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4'  7 ',AL3(TURQ)
+         DC    CL14'HELP        ',AL3(GREEN)
+         DC    CL60'Display this screen'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4'  8 ',AL3(TURQ)
+         DC    CL14'HEX         ',AL3(GREEN)
+         DC    CL60'Turn on/Turn off HEX display'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4'  9 ',AL3(TURQ)
+         DC    CL14'LEFT/RIGHT  ',AL3(GREEN)
+         DC    CL60'Scroll Left or Right'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4' 10 ',AL3(TURQ)
+         DC    CL14'PFK         ',AL3(GREEN)
+         DC    CL60'Alter PFK definitions'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4' 11 ',AL3(TURQ)
+         DC    CL14'PRINT c     ',AL3(GREEN)
+         DC    CL60'Print data set to SYSOUT class c'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4' 12 ',AL3(TURQ)
+         DC    CL14'SUB(MIT)    ',AL3(GREEN)
+         DC    CL60'Submit the data set to the JOB execution queue'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4' 13 ',AL3(TURQ)
+         DC    CL14'TOP         ',AL3(GREEN)
+         DC    CL60'Scroll to the top of the data set'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4' 14 ',AL3(TURQ)
+         DC    CL14'TSO         ',AL3(GREEN)
+         DC    CL60'Execute TSO commands'
+*
+         DC    X'110000'
+         DC    AL3(WHITE)
+         DC    CL4' 15 ',AL3(TURQ)
+         DC    CL14'=n/=n.n     ',AL3(GREEN)
+         DC    CL60'Exit Browse and execute function n or n.n'
+*
+R21C1    DC    X'110000',AL3(WHITE)
+         DC    CL7' Note: ',AL3(TURQ)
+         DC    C'If ',AL3(WHITE),C'm ',AL3(TURQ)
+         DC    C'is specified in the command field and the '
+         DC    AL3(WHITE),C'DOWN ',AL3(TURQ)
+         DC    C'or ',AL3(WHITE),C'UP ',AL3(TURQ)
+R22C1    DC    X'110000'
+         DC    C'       PFK is pressed, ',AL3(WHITE)
+         DC    C'Bottom ',AL3(TURQ),C'or '
+         DC    AL3(WHITE),C'Top ',AL3(TURQ),C'will be executed.'
+*
+RLC1     DC    X'110000'        R last c1+
+         DC    CL5' Hit ',AL3(WHITE)
+         DC    CL6'Enter ',AL3(TURQ),C'to proceed.'
+SCRHLEN  EQU   *-SCRHTXT
+SCREENHL EQU   *-SCREENH
+*
+         TITLE 'Large areas'
+RPFMSG   CSECT
+SCALE2   DC    CL105'----+----1----+----2----+----3----+----4----+----5C
+               ----+----6----+----7----+----8----+----9----+----10---+'
+         DC    CL105'----11---+----12---+----13---+----14---+----15---+C
+               ----16---+----17---+----18---+----19---+----20---+----2'
+         DC    CL45'1---+----22---+----23---+----24---+----25---+'
+         ENTRY SCALE2
+*
+CMDTBLE  DS    0F
+         ENTRY CMDTBLE
+         DC    A(5),CL8'ASCII',A(RPFT062)
+         DC    A(2),CL8'B',A(RPFT027)
+         DC    A(6),CL8'BOTTOM',A(RPFT027)
+         DC    A(2),CL8'C',A(RPFT005)
+         DC    A(4),CL8'DOWN',A(RPFT020)
+         DC    A(3),CL8'END',A(RPFT014)
+         DC    A(2),CL8'F',A(RPFT039A)
+         DC    A(4),CL8'FIND',A(RPFT039)
+         DC    A(4),CL8'HELP',A(RPFT019)
+         DC    A(3),CL8'HEX',A(RPFT060)
+         DC    A(4),CL8'LEFT',A(RPFT052)
+         DC    A(3),CL8'PFK',A(RPFT017)
+         DC    A(5),CL8'PRINT',A(RPFT016)
+         DC    A(6),CL8'RETURN',A(RPFT013)
+         DC    A(5),CL8'RIGHT',A(RPFT054)
+         DC    A(3),CL8'SUB',A(RPFT050)
+         DC    A(2),CL8'T ',A(RPFT015)
+         DC    A(3),CL8'TOP',A(RPFT015)
+         DC    A(4),CL8'TSO',A(RPFT070)
+         DC    A(2),CL8'UP',A(RPFT023)
+         DC    A(1),CL8'=',A(RPFT012)
+         DC    A(1),CL8'?',A(RPFT002)
+         DC    A(2),CL8' ',A(RPFT002)
+CMDS#    EQU   (*-CMDTBLE)/16
+*
+         TITLE 'Working storage'
+WORKAREA DSECT                         Our working storage
+SAVE     DS    18F                     Our save area
+RECFMSVE DS    13F                     Save registers 2-14 RECFMU
+SAVEHX   DS    13F                     Save registers HEXFIND
+SAVEFILL DS    13F                     Save registers FILLPAGE
+SAVEPFK  DS    13F                     Save registers PFK
+DBW      DS    D
+SBAR0R1  DS    D                       Workfield RCTOSBA routine
+$CARDS   DS    D
+PAGESPC  DS    F                       Address of 1 page of data, that
+*                                      will be displayed on the screen.
+COUNTER  DS    F                       Record counter
+*
+*        #LNEISPC is the number of lines in the dataspace
+*        That is normally the number of lines on the screen minus
+*        the 3 headers, but can be less on the last screen.
+*        If the $HEX flag is on, #LNEISPC is devided by 4.
+*        The dataspace will be displayed on the screen.
+*
+#LNEISPC DS    F                       Number of data lines on the
+*                                      current screen
+SAVEPRT  DS    13F
+RECL     DS    F                       Current LRECL of input file
+LENSTR   DS    F                       Length of last FIND char string
+COLUMN   DS    F                       Start column
+LENGTH   DS    F                       Line length code
+PAGELEN  DS    F                       Length of pagespace (getm).
+DATALINE DS    F                       Length of 1 line in workspc @rp6
+TPUTLEN  DS    F                       Length of TPUT SCR5TXT
+ASCREEN  DS    F                       Address of GETMAIN'd screen
+LSCREEN  DS    F                       Length of GETMAIN'd screen
+ASCRH    DS    F                       Address of HELP screen
+PRMCNVD1 DS    F                       \____ Parm 1 RPFCNVDT ________/
+PRMCNVD2 DS    F                       /     Parm 2 RPFCNVDT         \
+PRM1     DS    2F                      Two fullwords PARM
+R8TPUT   DS    F                       Save register 8 TPUT
+R12CLOSE DS    F                       Save register 12 CLOSE
+R12GTINP DS    F                       Save register 12 GETINP
+R12OPEN  DS    F                       Save register 12 OPEN
+R12TS    DS    F                       Save register 12 CALLTS
+R14CLOSE DS    F                       Save register 14 CLOSE
+R14CONV  DS    F                       Save register 14 CONVIN
+R14GTINP DS    F                       Save register 14 GETINP
+R14HEXC  DS    F                       Register 14 HEXCONV
+R14OPEN  DS    F                       Save register 14 OPEN
+R14SYSO  DS    F                       Save register 14 PUTSYSO
+R14TPUT  DS    F                       Save register 14 RPFTPUT
+R14TS    DS    F                       Save register 14 CALLTS
+CBPRM1   DS    F                       Pointer to buffer length
+CBPRM2   DS    F                       Pointer to screen size/width
+CBPRM3   DS    F                       Pointer to buffer(upd. in place)
+FINDCNT  DS    F                       Number of successful FINDS
+*                                      in 1 page (dataspace)
+LN3270   DS    F                       Length of uncompressed stream
+*                                      After executing RPFC3270 this
+*                                      length is the length of the
+*                                      compressed data stream
+         CSR   MF=L
+RPFPRINT DS    CL(MDLPRTL)             DCB
+SYSOUT   DS    CL(MDLOUTL)             DCB
+RPFWORK2 DS    CL(MDLWRK2L)            DCB
+RPFWORK  DS    CL(MDLWRKL)             DCB
+RPFPRT2  DS    CL(MDLPRT2L)            DCB
+EXLST    DS    F
+LNKLST   LINK  EP=*,SF=L
+LLNK     EQU   *-LNKLST
+DECBU    READ  DECB2,SF,0,0,'S',MF=L
+DECBLEN  EQU   *-DECBU
+BUFFER   DS    CL40
+SC@BUFF  DS    CL40                    \_____ copy of _____/
+         DC    CL40' '                 /  command buffer   \
+ECB      DS    F                       IKJDAIR ECB
+RPFDAPL  DS    5F                      DAIR parameter list
+RPFD08   DS    CL84                    DAIR allocation parm block
+RPFD18   DS    CL40                    IKJDAIR unallocation parm block
+*
+AREA     DS    F
+BLKOFFS  DS    F                       Contains offset in input block
+BLKLEN   DS    H                       Calculated length of input blk
+RECLEN   DS    H                       LRECL - 4 of output record
+DATLEN   DS    H                       LRECL - 14 of output record
+OUTAREA  DS    0CL204                  Output record
+RDW      DS    AL4
+RECORD   DS    CL200                   data
+RECHEX1  DS    CL200
+RECHEX2  DS    CL200
+*
+         ORG   RDW
+         DS    CL4                     \______ RDW ______/
+LINE     DS    CL254                   /      Data       \
+         DS    CL256
+         ORG   ,                       Reset location counter
+*
+JOBNAME  DS    CL8
+#LINES   DS    H                       # Data lines (21 up to 96)
+AIDBYTE  DS    C
+*
+JULDATE  DS    PL4                     Date packed signed (YY)YYDDD
+OUTPUT   DS    0CL49                   Date to be given back
+DAYNUM   DS    CL2                     01 is Sunday 07 is Saturday
+DAYNAME1 DS    CL09                    Dayname in English
+DAYNAME2 DS    CL09                    Dayname in Dutch
+         DS    CL1
+DD       DS    CL2                     Date (e.g. 28 for e.g. 28 Dec)
+         DS    CL1
+MM       DS    CL2                     01 is January 12 is December
+M#NAME1  DS    CL09                    Monthname in English
+M#NAME2  DS    CL09                    Monthname in Dutch
+         DS    CL1
+YY       DS    CL4                     4 digit Year
+*
+TIMEWORK DS    F                       Work area TIME routine
+TIMEDISP DS    CL10                    Work area TIME routine
+HEXINP   DS    C                       Input conversion character  @rp9
+HEXOUT   DS    CL2                     Output conversion character @rp9
+MSG5     DS    CL25
+MSG2TXT  DS    CL25                    Line xxx, col xxxxx
+*
+HEXSTR   DS    CL40                    To contain string
+HEXSTR2  DS    CL20                    Converted string
+*
+JFCB     DS    CL176
+BLDLLIST DS    0H                      To OBTAIN ISPF/RPF stats
+N1       DC    AL2(1)                  Number of entries to OBTAIN
+L1       DC    AL2(54)                 Length of entry
+BLDLM    DS    CL8                     Member name to OBTAIN
+         DS    CL5                     TTR + 'K' and 'Z' byte
+BLDLC    DS    C                       'C' byte
+BLDLNEW  DS    0CL40                   ISPF stats
+SPFVERS  DS    X                           Version
+SPFMOD   DS    X                           Mofification number
+SPFFLGS  DS    X                           Flags
+SPFEXT   EQU   32                          Extended section exists
+SPFSECU  DS    PL1                         Seconds of time last upd
+SPFDATEI DS    PL4                         Date created           @2000
+SPFDATEU DS    PL4                         Date updated
+SPFTIME  DS    XL2                         Time last update
+SPFRECU  DS    XL2                         Current number of lines
+SPFRECI  DS    XL2                         Initial number of lines
+SPFRECM  DS    XL2                         Records modified
+SPFUID   DS    CL7                         Userid
+         DS    CL1                         Always blank
+SPFERECU DS    CL4                         Extended current # lines
+SPFERECI DS    CL4                         Extended initial # lines
+SPFERECM DS    CL4                         Extended records modified
+*
+BROPARM  DS    0CL25                   Parameter from COMMPRM
+BRODDN   DS    CL8                     Bytes 0-7: DD-name
+BROPRT   DS    CL8                     Bytes 8-15: string PRINT
+BROPROG  DS    CL8                     Bytes 16-23: Program name
+         DS    C
+*
+SWITCH   DC    X'00'                   Flags
+$NOCC    EQU   X'80'                   Input data set has no cc's
+$CARDIM  EQU   X'40'                   Input data set has LRECL=80
+$PRTH3   EQU   X'20'                   Mark print header 3
+$EOF     EQU   X'10'                   Input data set is end-of-file
+$BOTTOM  EQU   X'08'                   BOTTOM command executing
+$ASCII   EQU   X'02'                   If on: we have ASCII data
+$MSG     EQU   X'04'                   If on: do not give MSG2TXT
+$HEX     EQU   X'01'                   Hex on command given        @rp9
+SW2      DC    X'00'                   Flags 2
+$RECFMU  EQU   X'80'                   We are browsing a RECFM=U datas.
+$HEXFIND EQU   X'40'                   An F x'hhh..' command given.
+$RDBACK  EQU   X'20'                   If on, go back 1 or more screens
+*
+PAGECNT  DS    PL4
+STRING   DS    CL38                    Character string
+WORKFLD  DS    CL38                    Work field for xlating to caps
+MSGSTR   DS    CL10                    10 bytes FIND string for MSG3TXT
+DLM      DS    C
+LINECNT  DS    PL3
+SYSCLS   DS    C                       Default SYSOUT class
+*
+SCR5TX1  DS    0CL174                                              @gp1
+         DC    CL7'Browse '
+SCR5DSN  DS    CL44
+         DC    86C'-'                                              @gp1
+         DC    37C'-'
+*
+SCR5TX3  DS    0CL174                  Header if program specified
+         DC    CL11'Listing of '              in COMMPRM (bytes 16-23)
+SCR5UTIL DS    CL8                     Name of creating utility
+         DC    C' '
+SCR5DDN  DS    CL8                     Name of utility output DDNAME
+         DC    CL7' output'
+         DC    CL22'----------------------'
+         DC    80C'-'                                              @gp1
+         DC    37C'-'
+*
+HEAD1    DS    0CL133                  Headers of data sets with no ASA
+*                                      or Machine Control Characters
+         DC    CL53'1(C)-2025 Skybird Systems: output listing of dataseX
+               t '
+HEADDSN  DS    CL54
+         DC    CL7'   Page'
+HEADPAGE DS    CL8
+         DC    CL1' '
+HEAD1OF  DS    CL2
+HEADTPGS DS    CL8
+HEAD2    DS    0CL133                  2nd header print data set
+         DC    CL09' Volume= '
+HEAD2VOL DS    CL6                     Volume into header
+         DC    CL07',date= '
+HEAD2DTE DS    CL11                    Date into header           @2000
+         DC    CL07',time= '
+HEAD2TME DS    CL08                    Time into header
+         DC    CL09',userid= '
+HEAD2UID DS    CL7
+         DC    CL69' '
+HEAD3    DS    0CL133                  ISPF/RPF stats header
+         DC    CL12' Saved with '
+HEAD3EDT DC    CL4'ISPF'
+         DC    CL12' by userid= '
+HEAD3UID DS    CL7
+         DC    CL10' on date= '
+HEAD3DTE DS    CL11                                               @2000
+         DC    CL08' ,time= '
+HEAD3TME DS    CL8
+         DC    CL20',number of records ='
+HEAD3REC DS    CL10
+         DC    C' '
+HEAD3VTX DC    CL8',vv.mm= '
+HEAD3VER DS    CL2                     ISPF version (VV)
+HEAD3DOT DS    CL1                     Period or blank
+HEAD3MOD DS    CL2                     ISPF modification level (MM)
+         DC    CL17' '
+WORKL    EQU   *-WORKAREA
+         TITLE 'Screen area, address is in ASCREEN, mapped by SCR5TXT'
+SCREEN   DSECT
+         DS    CL(SCR5LEN)             Headers
+*
+*        The data lines of the screen are below. These are max 96 lines
+*        (99 max - 3 header lines)
+*        Each data line contains 3 bytes extended color + max 200
+*        bytes (max. screen width) data. The first data line is the
+*        scale line.
+*        If a smaller screen is used (ex. 43 lines x 80 bytes) less
+*        storage is allocated and you should read the statement below
+*        as 'DS    CL((80+3)*(43-3))'
+*
+         DS    CL((200+3)*(99-3))      Handle up to 99 x 200       @gp1
+*
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+         PRINT NOGEN
+         IKJCPPL
+         IKJECT
+         CVT   DSECT=YES,LIST=NO
+         IKJDAPL                       DAIR parameter list
+         IKJDAP08                      DAIR allocation parm block
+         IKJDAP18                      DAIR unallocation parm block
+         IKJDAP30                      DAIR alloc. SYSOUT parm block
+         DCBD  DSORG=PS,DEVD=DA
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10                      Base register 2
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12                      Base register 1
+R13      EQU   13                      Address of working storage
+R14      EQU   14
+R15      EQU   15
+         END

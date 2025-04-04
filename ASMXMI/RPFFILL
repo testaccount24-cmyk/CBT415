@@ -1,0 +1,472 @@
+RPFFILL  TITLE 'Move fill characters or translate to upper/lower case'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFFILL                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFEDIT                                       *
+*                                                                     *
+*        Function:      Set fill characters in the EDIT workspace or  *
+*                       translate characters to upper- or lowercase.  *
+*                                                                     *
+*                       Possible commands are:                        *
+*                       FILL /string/n,m  Insert 'string' in lines    *
+*                                         'n' thru 'm'.               *
+*                       UC n,m            Translate lines 'n' thru    *
+*                                         'm' to upper case.          *
+*                       LC n,m            Translate lines 'n' thru    *
+*                                         'm' to lower case.          *
+*                       The fill characters will be inserted in the   *
+*                       EDIT boundaries (set by EDIT BNDS command.    *
+*                       The length of the fill string cannot exceed   *
+*                       the EDIT boundaries (fields COMBNDS and       *
+*                       COMBNDSL in RPFCOMM)                          *
+*                                                                     *
+*                       The translations to upper- and lowercase will *
+*                       only be done whithin the edit boundaries too. *
+*                                                                     *
+*                       A pointer to the FILL, UC or LC command       *
+*                       will be found in COMMPRM in RPFCOMM and will  *
+*                       be loaded in register 10.                     *
+*                                                                     *
+*                       If flag $COMLC or $COMUC is on, The UC or LC  *
+*                       command is given in RPFEDIT.                  *
+*                       If both flags are off, RPFFILL expects        *
+*                       a FILL command.                               *
+*                                                                     *
+*                       On return a suitable message will be placed   *
+*                       into COMMPRM in RPFCOMM.                      *
+*                                                                     *
+*        Return codes set in register 15:                             *
+*                       00 FILL, UC or LC successfully executed       *
+*                          A message with the number of lines         *
+*                          filled or translated will be set in        *
+*                          field COMMPRM in RPFCOMM.                  *
+*                       08 Error(s) detected. An error message is     *
+*                          set in field COMMPRM in RPFCOMM.           *
+*                                                                     *
+*        Registers:     Register 12 is the base register              *
+*                       Register 13 points to the dynamic area, the   *
+*                       first 18 fullwords is our save area.          *
+*                       Register 11 points to the RPFCOMM control blk *
+*                                                                     *
+*        Change log:                                                  *
+*        Dec 17,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Apr 14,2019 RPr: Accept LRECL > 80                           *
+*        May 12,2019 RPr: FILL string can contain lower case characters
+*        Jun 30,2019 RPr: Numbered data (except Cobol) always does    *
+*                         have line numbers in last 8 bytes           *
+*                         independent of LRECL of data set/member     *
+*        Feb 16,2020 RPr: Table UCXLATE moved to RPFCOMM (COMTCAPS)   *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFFILL  CSECT
+RPFFILL  AMODE 31                      *                         @rpa01
+RPFFILL  RMODE ANY                     *                         @rpa01
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFFILL,R12             Provide addressability
+         LR    R3,R1                   Save A(RPFCOMM)
+         GETMAIN R,LV=WORKL            Obtain workarea
+         ST    R1,8(,13)               Forward pointer
+         ST    R13,4(,R1)              Backward pointer
+         LR    R13,R1                  Load this save area
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         USING WORKAREA,R13            Address our workarea with the
+*                                      SAVEAREA in the first 72 bytes
+         L     R11,0(,R3)              Pickup RPFCOMM
+         USING COMMAREA,R11            Address RPFCOMM
+         MVC   ERRMSGS,INPMSGS         Move messages to dynamic area
+         ZAP   FILLCNT,=P'0'           Initialize counter
+         MVC   FIRSTLNE,COMMFSCR       Cmd starts default from current
+         MVC   LASTLNE,COMMLAST        and ends at last record
+         ICM   R10,15,COMMPRM          Pick FILL, UC or LC command
+         TM    COMMFLG2,$COMUC+$COMLC  Is this a UC or LC command?
+         BZ    TXT001                  No: process FILL command
+         LA    R3,1                    UC or LC string has length=1
+         ST    R3,SAVE3TXT             Save the length
+         LA    R2,3(,R10)              Point after 'LC' or 'UC' command
+         LR    R3,R2                   1st operand UC or LC if present
+         B     TXT008
+TXT001   DS    0H
+         LA    R2,5(,R10)              Address of FILL char. string
+         MVC   DLMCHAR,0(R2)           Move delimiter
+         LA    R2,1(,R2)               Point after delimiter
+         XR    R3,R3                   Count length in register 3
+         LA    R4,42                   Scan max. 42 bytes
+TXT003   DS    0H                      ** start loop **
+         CLC   0(1,R2),DLMCHAR         End DLM found ?
+         BE    TXT006                  Yes: end of loop
+         LA    R2,1(,R2)               Next position in string
+         LA    R3,1(,R3)               Count position
+         BCT   R4,TXT003               Branch back
+         BCTR  R2,0                    R2 on last position of string
+*
+*        A FILL command is given without an end delimiter
+*        and no operands.
+*        E.g. FILL /string
+*
+TXT004   DS    0H                      No end DLM found
+         CLI   0(R2),X'40'             Trailing blank?
+         BE    TXT005                  Yes: test previous char
+         CLI   0(R2),X'00'             Trailing null?
+         BNE   TXT031                  No: exit
+TXT005   DS    0H                      No end DLM found
+         BCTR  R2,0                    1 position back in string
+         BCT   R3,TXT004               Test previous blank
+         B     TXT055                  Setc Rc=8 and return to caller
+TXT006   DS    0H                      No end DLM found
+         ST    R3,SAVE3TXT             Save length of string
+         LA    R3,1(,R2)               Start address to scan
+*
+*        End of scan FILL string
+*
+TXT008   DS    0H
+         BAL   R14,LINE                Scan operands and find line #'s
+         B     TXT009(R15)             Initiate branchlist
+TXT009   B     TXT012                  Rc=0, no errors
+         B     TXT073                  Rc=4, invalid line(s)
+         B     TXT073                  Rc=8, lines not numeric
+TXT012   DS    0H
+         CLC   LN2FLD,C0000            LN2 entered (2nd operand)?
+         BNE   TXT013                  Yes: skip
+         MVC   LN2FLD,LN1FLD           No Fill/UC/LC in 1 line
+TXT013   DS    0H
+         CLI   LN1FLD,C'*'             * - current line ?
+         BE    TXT014                  Yes: current line
+         CLC   LN1FLD,C0000            LN1 entered (1st operand)?
+         BNE   TXT015                  Yes: skip
+TXT014   DS    0H
+         L     R3,COMMFSCR             Default current line
+         USING WORKSPCE,R3             Address workspace record
+         MVC   LN1FLD+2(6),WORKSLIN    Number into LN1FLD
+         MVC   LN1FLD(2),=C'00'        Leading zeroes
+         CLC   LN2FLD,C0000            LN2 entered ?
+         BNE   TXT015                  Yes: skip
+         L     R3,COMMLAST             Default end of workspace
+         MVC   LN2FLD+2(6),WORKSLIN    Number into LN2FLD
+         MVC   LN2FLD(2),=C'00'        Leading zeroes
+         DROP  R3
+TXT015   DS    0H
+         MVI   ERRPTXT+14,C'1'         Move Line-id 1 into message
+         LA    R1,LN1FLD+2             Parm for SRCHLINE routine
+*
+*        SRCHLINE is a CSECT in RPFEDIT
+*
+         L     R15,EPSRCH              Entry point SRCHLINE
+         BALR  R14,R15                 Execute to find line
+         LTR   R15,R15                 Line found ?
+         BNZ   TXT085                  No: issue errmsg
+         LR    R7,R1                   A(found line)
+         MVI   ERRPTXT+14,C'2'         Move id in msg
+         LA    R1,LN2FLD+2             Parm for SRCHLINE routine
+         L     R15,EPSRCH              Entry point SRCHLINE
+         BALR  R14,R15                 Execute to find line
+         LTR   R15,R15                 Line found ?
+         BNZ   TXT085                  No: issue error message
+         LR    R8,R1                   A(found line)
+         ST    R7,FIRSTLNE             First line to scan
+         ST    R8,LASTLNE              Last line to scan
+         L     R3,SAVE3TXT             Restore length of string
+TXT031   DS    0H                      ** end loop **
+         LTR   R3,R3                   No string found?
+         BZ    TXT055                  Set Rc=8 and return to caller
+         C     R3,COMBNDSL             String length > COMBNDSL?
+         BH    TXT079                  Yes: error
+         STCM  R3,3,LENSTR             Save length of string
+         BCTR  R3,0                    Minus 1 for EX
+         LA    R2,6(,R10)              Address of string
+         MVI   STRING,C' '             Clear ...
+         MVC   STRING+1(L'STRING-1),STRING      string
+         EX    R3,TXTMOV1              Move FILL string into field
+         TM    COMMFLG2,$COMUC+$COMLC  'LC' or 'UC' command?
+         BZ    TXT041                  No: process 'FILL' command
+         L     R3,COMBNDSL             Length of BNDS
+         STCM  R3,3,LENSTR             Save this length
+         B     TXT041                  Branch over MVC to execute
+TXTMOV1  MVC   STRING(0),0(R2)         << executed >>
+TXT041   DS    0H
+         L     R2,FIRSTLNE             Register 2 = first line
+         USING WORKSPCE,R2             Address workspace entry
+         LA    R2,WORKDATA             Point to data portion in workspc
+         DROP  R2                      Kill addressability WORKSPCE
+         L     R5,LASTLNE              Register 5 = last record
+         LA    R5,79(,R5)              Point after last record
+         L     R4,COMWRKEN             Increment is max 263
+         ST    R2,SAVE02               Save register 2
+         LH    R6,LENSTR               Length of string
+         BCTR  R6,0                    Minus 1 for fill/xlate
+TXT043   L     R7,COMBNDSL             Length of BNDS
+         L     R2,SAVE02               First character of record
+         AL    R2,COMBNDS              Adjust with BNDS start
+TXT045   DS    0H
+         TM    COMMFLG2,$COMLC+$COMUC  'UC' or 'LC' command?
+         BZ    TXT047                  No: process FILL command
+         TM    COMMFLG2,$COMLC         'LC' command?
+         BNO   TXT046                  No: xlate to upper case
+         EX    R6,LCTRAN               Xlate to lower case
+         B     TXT048
+TXT046   DS    0H
+         EX    R6,UCTRAN               Xlate to upper case
+         B     TXT048                  Branch
+TXT047   DS    0H
+         EX    R6,TXTMOV2              Move FILL string
+TXT048   DS    0H
+         L     R2,SAVE02               Restore start address record
+         CLC   =CL3'ON',COMMNUM        Do we have numbered data?
+         BNE   TXT049                  No: good
+         TM    COMMFLG1,$COMCOB        Cobol data (line # in col 1-6)?
+         BO    TXT049                  Yes: do not alter last 2 pos.
+         TM    COMMFLG4,$COMVB         Variable data (line# in col 1-8)
+         BO    TXT048A                 Yes: change column 1-8     s.
+         L     R14,COMMRECL            LRECL of data set or member
+         BCTR  R14,0                   Minus 2
+         BCTR  R14,0                           (ISPF mm)
+         LA    R14,0(R2,R14)           Point to last 2 bytes of record
+         MVC   0(2,R14),COMMEMM        Move EBCDIC ISPF mm in last 2
+         B     TXT049
+TXT048A  DS    0H
+         MVC   6(2,R2),COMMEMM         Move EBCDIC ISPF mm in col 7-8
+TXT049   DS    0H
+         AP    FILLCNT,=P'1'           Increment FILL/UC/LC counter
+         BXLE  R2,R4,TXT050            Loop until all done
+         B     TXT051                  Line-2 reached or end of wrkspc
+TXT050   DS    0H
+         ST    R2,SAVE02               Save register 2
+         B     TXT043                  Next line to Xlate/Fill
+TXTMOV2  MVC   0(0,R2),STRING          << executed >>
+LCTRAN   TR    0(0,R2),LCXLATE         << executed >>
+UCTRAN   TR    0(0,R2),COMTCAPS        << executed >>
+TXT051   DS    0H
+         UNPK  ERRXTXT+07(5),FILLCNT   Unpack LC/UC/FILL counter
+         OI    ERRXTXT+11,X'F0'        Clear sign
+         MVC   ERRYTXT+07(5),ERRXTXT+7
+         MVC   COMMPRM(25),ERRXTXT     Msg: xxx lines filled
+         TM    COMMFLG2,$COMLC+$COMUC  'LC' or 'UC' command given?
+         BZ    TXT052                  Yes: branch
+         MVC   COMMPRM(25),ERRYTXT     Msg: xxx lines xlated
+TXT052   DS    0H
+         XR    R15,R15                 Rc = 0, FILL,UC or XC success
+         B     TXT099                  Return
+TXT055   LA    R15,8
+         MVC   COMMPRM(25),ERRWTXT     Msg: Invalid char. string
+         B     TXT099
+TXT073   LA    R15,8                   Msg: Line-x invalid
+         MVC   COMMPRM(25),ERRJTXT
+         B     TXT099
+TXT079   LA    R15,8
+         MVC   COMMPRM(25),ERRETXT     Msg: Boundary too small
+         B     TXT099
+TXT085   LA    15,8
+         MVC   COMMPRM(25),ERRPTXT     Msg: Line-x not found
+         B     TXT099
+TXT099   EQU   *                       End or routine RPFFILL
+         LR    R3,R13                  Our workarea
+         L     R13,4(,R3)              Callers save area
+         LR    R2,R15                  Save return code
+         FREEMAIN R,LV=WORKL,A=(3)     Release our work area
+         LR    R15,R2                  Restore return code
+         RETURN (14,12),RC=(15)        Return to caller
+*---------------------------------------------------------------------*
+*                                                                     *
+*        N U M T S T - subroutine, numeric test of a 8 char. field    *
+*                                                                     *
+*                    INPUT:  NUMFLD, Field to be tested               *
+*                    OUTPUT: NUMFLD, Remains unchanged                *
+*                            REG.15, Return code 0000 - numeric       *
+*                                                0008 - Not numeric   *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+NUMTST   DS    0H
+         LA    R1,8                    Length of number
+         LA    R4,NUMFLD               Field to be tested
+NUMTST01 CLI   0(R4),X'F0'             < 0?
+         BL    NUMTST03                Yes: not numeric
+         CLI   0(R4),X'F9'             >0?
+         BH    NUMTST03                Yes: not numeric
+         LA    R4,1(,R4)               Next character
+         BCT   R1,NUMTST01             Loop until characters done
+         XR    R15,R15                 Rc = 0 - numeric
+         B     NUMTST99                Exit
+NUMTST03 LA    R15,8                   Rc = 8 - not numeric
+NUMTST99 DS    0H
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        S H I F T - Subroutine, chop off trailing spaces and replace *
+*                    them with leading characters from FILLCHAR.      *
+*                                                                     *
+*                    INPUT:  NUMFLD, field to be shifted, max 8 char, *
+*                            FILLCHAR, fill character.                *
+*                    OUTPUT: NUMFLD, Trailing spaces replaced with    *
+*                                    Leading FILLCHAR                 *
+*                            Reg.15, Rc= 0000 - No errors             *
+*                                    Rc= 0004 - All spaces            *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SHIFT    DS    0H
+         LA    R1,8                    Maximum 8 characters
+         XR    R15,R15                 RC= 0000
+SHIFT01  CLI   NUMFLD+7,X'40'          Last character is a space?
+         BNE   SHIFT99                 No: exit
+         MVC   WRKFLD+1(7),NUMFLD      Move first 7 chars into WRKFLD+1
+         MVC   WRKFLD(1),FILLCHAR      Insert leading FILLCHAR
+         MVC   NUMFLD,WRKFLD           Restore NUMFLD
+         BCT   R1,SHIFT01              Shift max 8 times
+         LA    R15,4                   Rc = 4 - all spaces
+SHIFT99  DS    0H
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        S C A N - Subroutine, Scans area for ' ' or ',' and places   *
+*                              preceding characters into NUMFLD       *
+*                                                                     *
+*                  Input:  Reg.3,  points to 1st character to SCAN    *
+*                  OUTPUT: NUMFLD, Characters preceding ' ' or ','    *
+*                          REG.3,  Points to last character scanned   *
+*                          REG.15, Return code 0 - characters found   *
+*                                              8 - no characters found*
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SCAN     DS    0H
+         LA    R15,8                   Rc = 8 initial, no chars found
+         LA    R4,9                    Maximum 9 characters to scan
+         LA    R5,NUMFLD               Point to NUMFLD
+         MVI   NUMFLD,C' '             Clear ...
+         MVC   NUMFLD+1(L'NUMFLD-1),NUMFLD      field
+SCAN01   CLI   0(R3),X'40'             Space found?
+         BE    SCAN03                  Yes: end of scan
+         CLI   0(R3),X'6B'             Comma?
+         BE    SCAN03                  Yes: end of scan
+         CLI   0(R3),X'00'             Null?
+         BE    SCAN03                  Yes: end of scan
+         MVC   0(1,R5),0(R3)           Move 1 character into NUMFLD
+         LA    R3,1(,R3)               Next character to scan
+         LA    R5,1(,R5)               Next character NUMFLD
+         BCT   R4,SCAN01               Loop max. 9 times
+         B     SCAN99                  Exit, no characters found
+SCAN03   XR    R15,R15                 Rc = 0 - Scan successful
+SCAN99   BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        L I N E - scan input buffer for line numbers                 *
+*                                                                     *
+*                  Input:  Register 3, start address to scan          *
+*                  Output: LN1FLD, line-1                             *
+*                          LN2FLD, line-2                             *
+*                          Reg.15, rc= 0000 - all lines valid,        *
+*                                  rc= 0004 - invalid line found,     *
+*                                  rc= 0008 - lines not numeric.      *
+*                          ERRJTXT, error indicating line number      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+LINE     DS    0H
+         ST    R14,SAVE14LN            Save register 14
+         MVI   ERRJTXT+16,C'1'         Move Line-id 1 into error msg
+         BAL   R14,SCAN                Scan for LN1FLD
+         LTR   R15,R15                 Rc = 0?
+         BNZ   LINE73                  No: line-1 invalid
+         CLI   NUMFLD,C'*'             * - current line?
+         BE    LINE04                  Yes: skip NUMTST
+         MVI   FILLCHAR,X'F0'          '0' into FILLCHAR
+         BAL   R14,SHIFT               Chop trailing spaces and
+*                                      replace by leadig FILLCHAR
+         LTR   R15,R15                 Rc <> 0, all spaces?
+         BNZ   LINE03                  Yes: no line specified
+         CLC   NUMFLD,C0000            Line-1 zero?
+         BE    LINE73                  Error if yes
+LINE03   BAL   R14,NUMTST              Numeric test
+         LTR   R15,R15                 Rc = 0?
+         BNZ   LINE75                  No: line-1 not numeric
+LINE04   MVC   LN1FLD,NUMFLD           Save LN2 into LN1FLD
+         LA    R3,1(,R3)               Point to line-2
+         MVI   ERRJTXT+16,C'2'         Move Line-id 2 in error msg
+         BAL   R14,SCAN                Scan for LN2FLD
+         LTR   R15,R15                 Rc = 0?
+         BNZ   LINE73                  No: error line-2 invalid
+         MVI   FILLCHAR,X'F0'          '0' into FILLCHAR
+         BAL   R14,SHIFT               Chop trailing spaces and
+*                                      replace by leadig FILLCHAR
+         LTR   R15,R15                 Rc <> 0, all spaces?
+         BNZ   LINE05                  Yes: no line specified
+         CLC   NUMFLD,C0000            Line-2 zero?
+         BE    LINE73                  Yes: error
+LINE05   BAL   R14,NUMTST              Run numeric test
+         LTR   R15,R15                 Rc = 0?
+         BNZ   LINE75                  No: Line-1 not numeric
+         MVC   LN2FLD,NUMFLD           Save LN2 into LN2FLD
+         XR    R15,R15                 Rc = 0 - scan successful
+         B     LINE99                  Exit
+LINE73   LA    R15,4                   Rc = 4 - invalid line(s) found
+         B     LINE99                  Exit
+LINE75   LA    R15,8                   Rc = 8 - lines not numeric
+         B     LINE99                  Exit
+LINE99   L     R14,SAVE14LN            Restore register 14
+         BR    R14                     Return
+INPMSGS  DS    0CL150
+ERREXTXT DC    CL25'------ Boundary too small'
+ERRJXTXT DC    CL25'---------- Line-X invalid'        Offset 16
+ERRPXTXT DC    CL25'-------- Line-X not found'        Offset 14
+ERRWXTXT DC    CL25' Invalid character string'
+ERRXXTXT DC    CL25'------ XXXXX lines filled'        Offset 07
+ERRYXTXT DC    CL25'------ XXXXX lines xlated'        Offset 07
+C0000    DC    C'00000000'
+         TITLE 'TRANSLATE TABLES FOR ''LC'' AND ''UC'' COMMAND'
+LCXLATE  DC    256AL1(*-LCXLATE)
+         ORG   LCXLATE+X'C1'
+         DC    X'818283848586878889'
+         ORG   LCXLATE+X'D1'
+         DC    X'919293949596979899'
+         ORG   LCXLATE+X'E2'
+         DC    X'A2A3A4A5A6A7A8A9'
+         ORG   ,
+         LTORG
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area
+SAVE02   DS    F
+FIRSTLNE DS    F
+LASTLNE  DS    F
+LENSTR   DC    H'0'
+STRING   DC    CL48' '
+DLMCHAR  DC    C' '
+ERRMSGS  DS    0CL150
+ERRETXT  DC    CL25'------ Boundary too small'
+ERRJTXT  DC    CL25'---------- Line-X invalid'        Offset 16
+ERRPTXT  DC    CL25'-------- Line-X not found'        Offset 14
+ERRWTXT  DC    CL25' Invalid character string'
+ERRXTXT  DC    CL25'------ XXXXX lines filled'        Offset 07
+ERRYTXT  DC    CL25'------ XXXXX lines xlated'        Offset 07
+SAVE14LN DS    F                       Save register 14 LINE
+SAVE3TXT DS    F                       Save register 3
+MAXLINES DS    F
+FILLCNT  DS    PL3                     # lines filled or xlated
+FILLCHAR DS    CL1                     Fill character SHIFT routine
+NUMFLD   DS    CL8                     Work field NUMTST/SHIFT
+WRKFLD   DS    CL8                     Work field NUMTST/SHIFT
+LN1FLD   DS    CL8                     Line-1 COPY/LINE
+LN2FLD   DS    CL8                     Line-2 COPY/LINE
+WORKL    EQU   *-WORKAREA
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END

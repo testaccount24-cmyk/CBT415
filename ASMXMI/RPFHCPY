@@ -1,0 +1,1450 @@
+RPFHCPY  TITLE 'RPF VTAM/Data set hardcopy monitor'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFHCPY.                                      *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFEDIT and RPFPDS.                           *
+*                                                                     *
+*        Subroutines:   RPFCNVDT convert Julian date.                 *
+*                       RPFBRO: browse and print PRINT output         *
+*                                                                     *
+*        Function:      Process the 'HAR' command issued by RPFEDIT   *
+*                       or process the 'PRINT' command issued by      *
+*                       RPFEDIT.                                      *
+*                       The 'HAR' command is printing EDIT workspace  *
+*                       lines to a VTAM printer. An ACB of APPLID =   *
+*                       RPFHCPY will be opened.                       *
+*                       The 'PRINT' command is writing EDIT workspace *
+*                       lines into a temporary data set, which will   *
+*                       dynamically allocated. After populating the   *
+*                       data set, RPFBRO will be invoked to browse the*
+*                       result. In Browse you can give the PRINT      *
+*                       command to get a listing of your modifications*
+*                                                                     *
+*                       The syntax of the 'HAR' command is:           *
+*                       1. HAR printername,n,m. Print lines n-m.      *
+*                       2. HAR printername,*,N. Print n lines starting*
+*                          with the current line                      *
+*                       3. HAR printername      Print the lines       *
+*                          present on the screen (1 screen page)      *
+*                       4. HAR printername,n,m,<TITLE|NOTITLE>,       *
+*                          <EJECT|NOEJECT>,<INDENT|NOINDENT>,         *
+*                          <C=CC>,<F='TEXT'>,                         *
+*                          <P=NN>,SCS|DSC (Cross domain)              *
+*                          With 'NOTITLE' you do not get header lines *
+*                          on the printed pages.                      *
+*                          With 'NOEJECT' no skip will be made.       *
+*                          With 'C=cc' you can print more copies.     *
+*                          With 'INDENT' the hardcopy print will be   *
+*                          shifted 8 positions to the right, so you   *
+*                          can easy drill holes in the left side      *
+*                          of the paper.                              *
+*                                                                     *
+*                       Notes of the 'HAR' command:                   *
+*                       SCS/DSC should be specified if the printer    *
+*                       does not  belong to another domain (MSNF)     *
+*                       P=nn specifies the number of lines on a       *
+*                       page (default P=72)                           *
+*                       'TITLE' force header lines on the printed     *
+*                       With 'NOTITLE' the headers are omitted (def.) *
+*                       With F='text', on each page a footnote will   *
+*                       be printed.                                   *
+*                                                                     *
+*                       The syntax of the 'PRINT' command is:         *
+*                       1. PRINT n,m. Print lines n thru m to a       *
+*                          data set.                                  *
+*                          If 'n,m' are omitted, the current screen   *
+*                          of RPFEDIT will be printed.                *
+*                       2. PRINT *,m. Print n lines starting with     *
+*                          the current line                           *
+*                       3. PRINT      Print current screen            *
+*                                                                     *
+*                       A pointer to the 'HAR'/'PRINT' command in in  *
+*                       bytes 0-3 in 'COMMPRM' in the RPFCOMM dsect.  *
+*                       The HAR or PRINT command is an area of 48     *
+*                       bytes (Field BUFFER in RPFEDIT)               *
+*                       After completion a message or suitable error  *
+*                       message will be set in 'COMMPRM'.             *
+*                                                                     *
+*        Registers:      R12,R10, Base registers.                     *
+*                        R13, Address of working storage.             *
+*                        R11, Address of RPFCOMM area.                *
+*                        R9,  Address of the operands of the 'HAR'    *
+*                             command given in RPFEDIT.               *
+*                        R2-R8 are work registers                     *
+*                                                                     *
+*        Return codes in register 15:                                 *
+*                       00 Hardcopy or Print made (msg in COMMPRM)    *
+*                       08 Error detected (error message in COMMPRM)  *
+*                                                                     *
+*        Modifications:                                               *
+*        Dec 19,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Apr 15,2019 RPr: Test card image and refuse HARDCOPY if      *
+*                         LRECL of the data is not 80 bytes.          *
+*        Oct 16,2019 RPr: Support PRINT n,m command.                  *
+*        Aug 13,2021 RPr: DATE routine replaced by call to RPFCNVDT.  *
+*        Nov 30,2022 RPr: Some issues fixed in HAR command,           *
+*                         Allow non card image files and made         *
+*                         RPFHCPY re-entrant and re-usable.           *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFHCPY  CSECT
+RPFHCPY  AMODE 31                      *                         @rpa01
+RPFHCPY  RMODE 24                      *                         @rpa01
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFHCPY,R12             Provide addressability
+         LA    R10,4095(,R12)          Second
+         LA    R10,1(,R10)                   base register
+         USING RPFHCPY+4096,R10
+         L     R11,0(,R1)              Pick up RPFCOMM
+         GETMAIN R,LV=WORKL            Obtain working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1                  New save area
+         USING COMMAREA,R11            Address RPFCOMM area
+         USING WORKAREA,R13            Our working storage
+         ST    R11,PRMCOMM             For LINK macro
+         GETMAIN R,LV=512              Room for GCB/MODCB/SHOWCB
+         ST    R1,ABLK                 Save its address
+         MVI   SWMODE,0                Init flags
+         MVC   ERR5,ERR5TXT            Copy error message
+         MVC   ERR6,ERR6TXT            Copy error message
+         MVC   ERR7,ERR7TXT            Copy error message
+         MVC   ERR9,ERR9TXT            Copy error message
+         MVI   APPLID1,X'08'           Length
+         MVC   APPLID1+1(8),=CL8'RPFHCPY'    + applid
+         MVC   VFC,VFCTXT              Vertical forms control
+         LA    R0,PRT1TXT              Output field
+         LA    R1,PRT1LEN              Length of output field
+         LA    R2,PRTATXT              Input field
+         LA    R3,PRTALEN              Length of input field
+         MVCL  R0,R2                   Copy to working storage
+         MVC   PRT2TXT(2),=X'F548'     Command: write erase
+         MVC   PRT3TXT(5),=X'F548150C19' EW, New line, FF, End of msg
+         MVC   PRT4TXT(2),=X'F548'     Command: write erase
+         LA    R1,PRT4TXT+2            Start of footnote lines
+         LA    R14,4                   4 lines
+START01  DS    0H
+         MVI   0(R1),C' '              Blank ....
+         MVC   1(79,R1),0(R1)                line
+         MVI   80(R1),X'15'            New line control character
+         LA    R1,81(,R1)              Next line
+         BCT   R14,START01             Clear all 4 lines
+         MVI   0(R1),X'19'             End-of-message control character
+         LA    R1,PRT2LNE              First data line in block
+         ST    R1,PRT2NEXT             A(data lines)
+         ST    R1,PRT2FRST
+         LA    R1,PRT2LST              Last line to print
+         ST    R1,PRT2LAST             Save this pointer
+         LA    R1,PRT2LNE              First line of 10 lines block
+         LA    R14,10                  10 lines
+START03  DS    0H
+         MVI   0(R1),C' '              Blank line ...
+         MVC   1(79,R1),0(R1)                     in output
+         LA    R1,PRT2ENT(,R1)         Next line
+         BCT   R14,START03             Loop until 10 lines cleared
+         MVC   PRTDCB(MDLDCBL),MDLDCB  Copy print output DCB
+         ZAP   LINECNT,=PL3'999'       Force page skip the first time
+         ZAP   PAGESIZE,=PL3'0'        Init pagesize
+         LA    R1,JULDATE              Parm 1 RPFCNVDT
+         ST    R1,PRMCNVD1             Save
+         LA    R1,OUTPUT               Parm 2 RPFCNVDT
+         ST    R1,PRMCNVD2             Save
+         XC    ACB1ADDR,ACB1ADDR       Clear ACB address         @rpa01
+         XC    RPLWADDR,RPLWADDR       Clear RPL address         @rpa01
+         XC    NIBWADDR,NIBWADDR       Clear NIB address
+         ICM   R9,15,COMMPRM           Pickup pointer to 'HAR' command
+         TIME  DEC                     Get time of day
+         SRL   R0,4                    Shift out hundreds of seconds
+         ST    R0,TIMEWORK
+         OI    TIMEWORK+3,X'0F'        Insert sign
+         MVC   TIMEDISP,PATT1          Pattern into output field
+         ED    TIMEDISP(10),TIMEWORK
+         XC    JULDATE,JULDATE         Use current date
+         MVI   OUTPUT,X'FF'            Parm 1 is 4 bytes
+         L     R15,EPCNVDT             RPFCNVDT routine
+         LA    R1,PRMCNVD1             Parm
+         BALR  R14,R15                 Invoke RPFCNVDT
+         MVC   PRT1HDR1+24(4),YY       Insert
+         MVI   PRT1HDR1+28,C'/'
+         MVC   PRT1HDR1+29(2),MM             date
+         MVI   PRT1HDR1+31,C'/'
+         MVC   PRT1HDR1+32(2),DD                 after string
+         MVC   PRT1HDR1+42(8),TIMEDISP+2 Time into header
+         MVC   PRT1HDR1+8(7),COMMUSER  TSO userid into header
+         MVC   PRT1HDR2+8(8),COMMBR    Member into header
+         ST    R11,PARMFLD             Parameter for DSNPARS
+         LA    R1,COMMDSN              DSN w/o prefix or with quotes
+         ST    R1,PARMFLD+4
+         LA    R1,PRT1HDR2+28          DSN with prefix and w/o quotes
+         ST    R1,PARMFLD+8
+         L     R15,EPDSNPA             Routine address
+         LA    R1,PARMFLD              Parameter
+         BALR  R14,R15                 Execute
+         MVC   PRT1HDR4(80),HDRNUM     Default a numbered scale line
+         CLC   =C'PRINT',0(R9)         PRINT command?
+         BE    PRINT                   Yes: process print command
+         TITLE 'Print workspace records to a VTAM printer'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Execute the HAR(DCOPY) function.                             *
+*        Scan the keywords in the HAR command.                        *
+*        Allocate the VTAM ACB, RPL and NIB                           *
+*        Open the ACB and execute a MODCB of the NIB with the printer *
+*        name and the ACB address.                                    *
+*        Afterwards perform an OPNDST to open the RPL.                *
+*        Write the data to the VTAM printer.                          *
+*        Execute the CLDST of the RPL and CLOSE of the ACB if the     *
+*        hardcopy is finished and free the VTAM blocks (ACB,RPL,NIB)  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         CLC   COMMRECL,=F'80'         Record length > 80
+         BH    INIT03                  Yes: skip blank test
+         CLC   =CL3'ON',COMMNUM        Numbered data?
+         BE    INIT03                  Yes: skip blank test
+*------- ----- ---------------------- Check if last 8 columns are blank
+         L     R3,COMWSTRT             Start workspace
+         USING WORKSPCE,R3             Address workspace line
+         L     R4,COMWRKEN             Length one line in workspace
+         LA    R3,0(R4,R3)             Point after first line
+         L     R5,COMMLAST             Last record in workspace
+         LA    R5,1(,R5)               Force BXLE to compare
+INIT01   DS    0H
+         LA    R1,WORKDATA             Data portion in EDIT workspace
+         AL    R1,COMMRECL             + record length
+         SL    R1,=F'8'                Point to last 8 bytes
+         CLC   0(8,R1),=CL8' '         Are last 8 columns blank?
+         BNE   INIT03                  No: exit
+         BXLE  R3,R4,INIT01            Loop until all tested
+         DROP  R3
+         OI    SWMODE,$INDENT          Default Indent
+*------- ----- ----------------------- Generate VTAM control blocks
+INIT03   DS    0H
+         LA    R9,4(,R9)               Point to operands (After 'HAR ')
+         LA    R1,1
+         ST    R1,COPIES               Default: COPIES=1
+         MVI   SWMODE,$EJECT           Default: NOTITLE,EJECT,NOINDENT
+         RPFSA24                       Switch to amode 24        @rpa01
+         BAL   R14,GENBLOCK            Generate VTAM blocks      @rpa01
+         RPFSA31                       Restore addressing mode   @rpa01
+         B     LIST(15)                Initiate branch list      @rpa01
+LIST     B     TEST                    Rc = 0000                 @rpa01
+         B     ERROR3                  RC = 0004                 @rpa01
+         B     ERROR5                  RC = 0008                 @rpa01
+TEST     DS    0H
+         TR    0(44,R9),COMTCAPS       Xlate to upper case
+         LR    R4,R9                   Point to LU-name in command
+         MVC   LUNAME,=CL8' '          Blank LU-name
+         LA    R5,LUNAME               Address LU-name
+         LA    R6,9                    Max 8 characters in length
+TEST03   CLI   0(4),C' '               Blank?
+         BE    HAR                     Yes: exit
+         CLI   0(4),C','               Comma?
+         BE    HAR                     Yes: exit
+TEST05   MVC   0(1,R5),0(R4)           Move 1 character
+         LA    R4,1(,R4)               Next character input
+         LA    R5,1(,R5)               Next character output
+         BCT   6,TEST03                Move next character
+HAR      DS    0H
+*------- ----- ----------------------- Scan for keywords
+         LR    R3,R9                   Start op operand(s)
+         LA    R4,1                    Increment
+         LA    R5,43(,R9)              End of command
+HAR01A   CLC   0(6,R3),=C',TITLE'      Titles?
+         BNE   HAR01B                  No: try other oparands
+         OI    SWMODE,$TITLE           Indicate TITLE present
+HAR01B   CLC   0(7,R3),=C'NOTITLE'     No TITLE?
+         BNE   HAR01C                  No: test other operands
+         NI    SWMODE,X'FF'-$TITLE     Reset TITLE switch
+HAR01C   CLC   0(6,R3),=C',EJECT'      Eject?
+         BNE   HAR01D                  No: test other operands
+         OI    SWMODE,$EJECT           Indicate EJECT
+HAR01D   CLC   0(7,R3),=C'NOEJECT'     No EJECT?
+         BNE   HAR01E                  No: test other operands
+         NI    SWMODE,X'FF'-$EJECT     Indicate no EJECT
+HAR01E   CLC   0(7,R3),=C',INDENT'     INDENT?
+         BNE   HAR01F                  No: test other operands
+         OI    SWMODE,$INDENT          Indicate indentation
+HAR01F   CLC   0(8,R3),=C'NOINDENT'    No indentation
+         BNE   HAR01G                  No: test other keywords
+         NI    SWMODE,X'FF'-$INDENT    Indicate indentation off
+HAR01G   CLC   0(3,R3),=C'SCS'         SCS printer (LU type 1)
+         BNE   HAR01H                  No: test other keywords
+         OI    SWMODE,$SCS             Indicate SCS (LU type 1)
+HAR01H   CLC   0(3,R3),=C'DSC'         DSC printer (LU type 3)?
+         BNE   HAR01Z                  No: loop
+         OI    SWMODE,$DSC             Indicate DSC
+HAR01Z   DS    0H
+         BXLE  R3,R4,HAR01A            Next characters
+*------- ----- ----------------------- Search for operand(s)
+         LR    R3,R9                   Start of operands
+         LA    R4,1                    Increment
+         LA    R5,43(,R9)              End of command
+*------- ----- ----------------------- Skip 1st operand (LU or SYSOUT)
+HAR03    CLI   0(R3),C' '              Space?
+         BE    HAR05                   Yes: exit
+         CLI   0(R3),C','              Comma found?
+         BE    HAR05                   Yes: exit
+         BXLE  R3,R4,HAR03             Loop
+*------- ----- ----------------------- Search for line number(s)
+HAR05    DS    0H
+         L     R4,COMMFSCR             Default: first line on screen
+         L     R1,COMMSIZE             # rows on screen
+         BCTR  R1,0                    Minus 1
+         L     R0,COMWRKEN             Length of workspace entry
+         MR    R0,R0                   Calculate end of 1 screen
+         LA    R5,0(R4,R1)             Default: last line on screen
+         C     R5,COMMLAST             Beyond last record?
+         BNH   *+8                     No
+         L     R5,COMMLAST             Point to last record
+         LA    R3,1(,R3)               Point after LU-name
+         CLI   0(R3),X'F0'             .LT. zero?
+         BL    HAR22                   Yes: line number(s) not there
+         CLI   0(R3),X'F9'             .GT. nine?
+         BH    HAR22                   Yes: line number(s) not there
+         ST    R3,SAVE3                Save register 3 for copies rout.
+         BAL   R14,LINE                Get line numbers
+         B     HARL(15)                Branchlist
+HARL     B     HAR07                   00 - find lines in workspace
+         B     ERROR6                  04 - Invalid line(s)
+         B     ERROR7                  08 - Line(s) not numeric
+*------- ----- ----------------------- Process # of lines from *
+HAR07    DS    0H
+         CLI   LN1FLD,C'*'             Current line?
+         BNE   HAR09
+         CLC   LN2FLD,C9999            Last line?
+         BNE   HAR08
+         L     R4,COMMFSCR             Address of current line
+         L     R5,COMMLAST             Address last line
+         B     HAR22                   Start of print
+HAR08    DS    0H
+         PACK  WORKFLD,LN2FLD          Pack number of lines
+         CVB   R4,WORKFLD              Binary number of lines
+         LTR   R4,R4                   Line-2 = 0?
+         BNZ   HAR08B
+         LA    R4,1                    Default 1 line
+HAR08B   BCTR  R4,0                    Discount with 1
+         L     R5,COMWRKEN             Length of workspace entry
+         MR    R4,R4                   Offset into register 5
+         L     R4,COMMFSCR             First line to print
+         AR    R5,R4                   Address last line to print
+         C     R5,COMMLAST             Bottom line?
+         BL    HAR22                   Print lines
+         MVI   ERR9+14,C'2'            Msg: line-2 not found
+         B     ERROR9
+*------- ----- ----------------------- Process from 'nnnn' to 'mmmm'
+HAR09    DS    0H
+         CLC   LN2FLD,C9999            Last line?
+         BNE   HAR10
+         USING WORKSPCE,R3             Address workspace line
+         L     R3,COMMLAST             Last line in workspace
+         MVC   LN2FLD+2(6),WORKSLIN    Line number last line
+         MVC   LN2FLD(2),=C'00'        Insert leading zeroes
+HAR10    L     R3,COMWSTRT             First line in EDIT workspace
+         XR    R4,R4
+         XR    R5,R5
+HAR11    CLC   WORKSLIN,LN1FLD+2       Compare line-1
+         BNE   HAR13
+         LR    R4,R3                   Current entry in EDIT workspace
+         XR    R5,R5
+HAR13    CLC   WORKSLIN,LN2FLD+2       Compare line-2
+         BNE   HAR15
+         LR    R5,R3                   Current entry in EDIT workspace
+         B     HAR17                   Line 1/2 EDIT workspace found
+HAR15    DS    0H
+         L     R1,COMWRKEN             Length of entry in workspace
+         LA    R3,0(R1,R3)             Next entry in workspace
+         C     R3,COMMLAST             Beyond last record in workspace?
+         BNH   HAR11                   Continue compare
+         DROP  R3
+HAR17    MVI   ERR9+14,C'1'            Line-1 not found
+         LTR   R4,R4                   R4 contains workspc ent of LNE1?
+         BZ    ERROR9                  No: line 1 not found
+         MVI   ERR9+14,C'2'            Line-2 not found
+         LTR   R5,R5                   R4 contains workspc ent of LNE2?
+         BZ    ERROR9                  No: line 2 not found
+*------- ----- ----------------------- Save line addresses
+HAR22    DS    0H
+         ST    R4,NEXTLINE             Address first record
+         ST    R5,LASTLINE             Address last record to print
+         ST    R4,COPYNEXT             Save register 4 for COPY
+         ST    R5,COPYLAST             Save register 5 for COPY
+*------- ----- ----------------------- Search for COPIES (C=nn)
+HAR25    DS    0H
+         LR    R3,R9                   Start operands
+         LA    R4,1                    Increment
+         LA    R5,43(,R9)              End of command
+HAR25A   CLC   0(2,R3),=C'C='          Copies specified?
+         BE    HAR25C                  Yes: search for 'C=' (copies)
+         BXLE  R3,R4,HAR25A            Loop
+         B     HAR26                   Not found: skip copies
+*------- ----- ----------------------- Process C (Copies) keyword
+HAR25C   DS    0H
+         LA    R3,2(,R3)               Point to number of copies
+         BAL   R14,SCAN                Scan number of copies
+         LTR   R15,R15                 Rc = 0?
+         BNZ   ERROR10                 No: error
+         MVI   FILLCHAR,X'F0'          Chop off trailing blanks
+         BAL   R14,SHIFT               ... and insert leading zeroes
+         BAL   R14,NUMTST              Run NUMTST routine
+         LTR   R15,R15                 Rc = 0?
+         BNZ   ERROR11                 No: error (not numeric)
+         PACK  DOUBLE,NUMFLD           Pack copies for BCT instruction
+         CVB   R1,DOUBLE               Make binary
+         ST    R1,COPIES               ... and save
+HAR26    LR    R3,R9                   Start operands in 'HAR' command
+         LA    R4,1                    Increment
+         LA    R5,43(,R9)              End of command
+HAR26A   CLC   0(2,R3),=C'P='          Pagesize (P=) keyword found?
+         BE    HAR26C                  Yes: got it
+         BXLE  R3,R4,HAR26A            Loop to scan
+         B     HAR27                   Not found: skip page size
+*------- ----- ----------------------- Process page size
+HAR26C   DS    0H
+         LA    R3,2(,R3)               Point to page size number
+         BAL   R14,SCAN                Scan pagesize
+         LTR   R15,R15                 Rc =0?
+         BNZ   ERROR10                 No: error
+         MVI   FILLCHAR,X'F0'          Leading zero to shift in
+         BAL   R14,SHIFT               Chop off spaces and insert '000'
+         BAL   R14,NUMTST              Numeric test
+         LTR   R15,R15                 Numeric?
+         BNZ   ERROR11                 No: error
+         PACK  PAGESIZE(3),NUMFLD      Pack page size
+*------- ----- ----------------------- Scan for footnote (F=) keyword
+HAR27    LR    R3,R9                   Start operands
+         LA    R4,1                    Increment
+         LA    R5,43(,R9)              End of command
+HAR28    CLC   0(2,R3),=C'F='          Foot note?
+         BE    HAR29                   Yes: found footnote
+         BXLE  R3,R4,HAR28             Loop until done
+         B     TEST11                  No: skip
+HAR29    DS    0H
+         OI    SWMODE,$FOOT            Indicate footnote
+         MVI   SEPCHAR,X'40'           Blank in SEPCHAR
+         LA    R3,2(,R3)               Point after 'F='
+         LA    R5,43(,R9)              Point to end of command
+         LA    R6,PRT4FTN              Start Foot note
+         MVI   0(R6),C' '              Clear
+         MVC   1(79,R6),0(R6)                foot note
+         TM    SWMODE,$INDENT          INDENT?
+         BZ    HAR29C                  No: skip
+         LA    R6,8(,R3)               Yes: indent foot note
+HAR29C   DS    0H
+         CLI   0(R3),X'7D'             Quote found?
+         BNE   HAR30
+         MVI   SEPCHAR,X'7D'           Quote in SEPCHAR
+         LA    R3,1(,R3)               Point after quote
+HAR30    DS    0H
+         CLC   0(1,R3),SEPCHAR         End of footnote?
+         BE    TEST11                  Yes: exit
+         CLI   0(R3),X'00'             End of message?
+         BE    TEST11                  Yes: exit
+         MVC   0(1,R6),0(R3)           Move 1 character foot-note
+         LA    R6,1(,R6)               Nex character
+         BXLE  R3,R4,HAR30             Scan
+         B     ERROR12                 Error: footnote invalid
+*------- ----- ----------------------- Obtain session parameters
+TEST11   DS    0H
+         L     R2,RPLWADDR             Point to work RPL
+         L     R3,NIBWADDR             Point to work NIB
+         LA    R4,LUNAME               Pickup LU-name (printer)
+         L     R1,ABLK                 Workarea
+         MODCB AM=VTAM,NIB=(3),NAME=(*,0(4)),LOGMODE=C' ',             X
+               MF=(G,(1))
+         LTR   15,15                   Ok?
+         BNZ   ERROR3                  No: ACB error
+         TM    SWMODE,$DSC+$SCS        LU-type (SCS/DSC) specified?
+         BNZ   TEST37                  Yes: skip session parameters
+TEST21   DS    0H
+         XC    SESSAREA(36),SESSAREA   Clear session parameters
+         XC    SESSAREA+36(255),SESSAREA+36 Clear user data
+         LA    R3,SESSAREA
+         L     R1,ABLK                 Workarea
+         MODCB AM=VTAM,RPL=(2),OPTCD=(SESSPARM,SYN),                   C
+               AREA=(3),AREALEN=291,                                   C
+               MF=(G,(1))
+         LTR   R15,R15
+         BNZ   ERROR3                  VTAM CB error
+         INQUIRE RPL=(2)               Get session parameters
+         LTR   R15,R15                 INQUIRE ok?
+         BNZ   ERROR1                  No: VTAM CB error
+         LTR   R0,R0
+         BNZ   ERROR1                  No: VTAM CB error
+TEST23   DS    0H
+         LA    R3,LUTTAB               Start LU-type table       (BXLE)
+         LA    R4,LUTENT               Length if 1 entry         (BXLE)
+         LA    R5,LUTTAB+(LUTLEN-LUTENT) Address last entry      (BXLE)
+TEST36S  DS    0H
+         CLC   SESSAREA+13(1),0(R3)    LU-type found?
+         BE    TEST36X                 Yes: get print control chars
+         BXLE  R3,R4,TEST36S           No: try next entry
+         B     ERROR2                  Invalid printer name
+TEST36X  DS    0H
+         CLI   0(R3),B'00000001'       LU1 (SCS)?
+         BNE   TEST37                  No: skip
+         OI    SWMODE,$SCS             Indicate SCS (LU1)
+TEST37   DS    0H
+         L     R1,ABLK                 Workarea
+         MODCB AM=VTAM,RPL=(2),OPTCD=(ACQUIRE,SPEC,SYN),               C
+               MF=(G,(1))
+         LTR   R15,R15                 Ok?
+         BNZ   ERROR3                  No: printer not available
+         OPNDST RPL=(2)                Connect to the printer
+         LTR   R15,R15                 OPNDST ok?
+         BNZ   ERROR1                  No: hardcopy failed
+         LTR   R0,R0                   Printer available?
+         BNZ   ERROR1                  No: hardcopy failed
+         OI    SWMODE,$BB              Indicate begin bracket
+         CLC   PAGESIZE(3),=PL3'0'     Page size = 0?
+         BNE   TEST38                  No: good
+         MVC   PAGESIZE(3),=PL3'72'    Set page size
+TEST38   DS    0H
+         TM    SWMODE,$SCS             SCS (LU1) printer?
+         BZ    TEST39                  No: skip
+         XC    DOUBLE,DOUBLE           Clear field
+         MVC   DOUBLE+5(3),PAGESIZE
+         CVB   R1,DOUBLE
+         STC   R1,VFC+5
+         LA    R6,VFC                  Vertical forms control
+         LA    R7,L'VFC
+         BAL   R14,PRT                 Send vertical forms control
+         LTR   R15,R15                 VFC ok?
+         BNZ   ERROR1                  No: error
+TEST39   DS    0H
+         TM    SWMODE,$FOOT            Footnote?
+         BNO   HAR31                   No: skip
+         SP    PAGESIZE,=PL3'4'        4 lines to print for footnote
+*------- ----- ----------------------- Format header
+HAR31    DS    0H
+         L     R8,COPIES               Get number of copies
+         TM    SWMODE,$INDENT          Indentation needed?
+         BO    HAR34                   Yes: use NUM scale line
+         CLC   =CL3'ON',COMMNUM        Line numbers found?
+         BE    HAR34                   Yes: use NUM scale line too
+         MVC   PRT1HDR4(80),HDRNON     NONUM scale line
+*------- ----- ----------------------- Print block of lines
+HAR34    DS    0H
+*
+*        If the workspace line contains ¬EJECT then force a page skip
+*
+         L     R6,NEXTLINE             Get address of line in workspace
+         USING WORKSPCE,R6             Address this line
+         CLC   WORKDATA(1),CMDCHAR     Command line in workspace?
+         BNE   HAR34C                  No: skip
+         OC    WORKDATA+1(5),=CL8' '   XLATE command line to uppercase
+         CLC   WORKDATA+1(5),=C'EJECT' Force to new page?
+         BNE   HAR34C                  No: skip
+         L     R1,COMWRKEN             Length of entry in workspace
+         LA    R6,0(R1,R6)             Skip command line
+         ST    R6,NEXTLINE
+         ZAP   LINECNT,=PL3'999'       Force page skip
+         DROP  R6
+HAR34C   DS    0H
+         CP    LINECNT,PAGESIZE        Page full?
+         BL    HAR35                   No: skip headers
+         CLC   PRT2NEXT,PRT2FRST       Incomplete block?
+         BE    HAR34D                  No: skip
+*------- ----- ----------------------- Print incomplete block
+         LA    R6,PRT2TXT              Block of lines
+         L     R7,PRT2NEXT
+         MVI   0(R7),X'19'             Insert end-of-message
+         LA    R7,1(,R7)               Adjust length
+         SR    R7,R6
+         BAL   R14,PRT                 Send block of data to printer
+         LTR   R15,R15                 Test result
+         BNZ   ERROR1
+         MVC   PRT2NEXT,PRT2FRST
+         TM    SWMODE,$FOOT            Should a footnote be printed?
+         BZ    HAR34D                  No: next block of lines
+*------- ----- ----------------------- Send footnote
+         LA    R6,PRT4TXT              Footnote lines
+         LA    R7,PRT4LEN
+         BAL   R14,PRT                 Send lines with footnote
+         LTR   R15,R15
+         BNZ   ERROR1
+         ZAP   LINECNT,=PL3'999'       Force new page
+HAR34D   DS    0H
+         ZAP   LINECNT,=PL3'4'         Set line count to 4 (headers)
+         TM    SWMODE,$EJECT           EJECT?
+         BZ    HAR34T                  No: skip
+*------- ----- ----------------------- Send form feed
+HAR34E   DS    0H
+         LA    R6,PRT3TXT              Address of text
+         LA    R7,PRT3LEN              Length of text
+         BAL   R14,PRT                 Send to printer (NL/FF)
+         LTR   R15,R15
+         BNZ   ERROR1                  Hardcopy failed
+HAR34T   DS    0H
+         TM    SWMODE,$TITLE           Title requested?
+         BZ    HAR35                   No: skip
+*------- ----- ----------------------- Send title to the printer
+         LA    R6,PRT1TXT              Address text to send
+         LA    R7,PRT1LEN              and length
+         BAL   R14,PRT                 Send headers to printer
+         LTR   R15,R15
+         BNZ   ERROR1                  Error: hardcopy failed
+         AP    LINECNT,=PL3'4'         Increment line count
+*------- ----- ----------------------- Line workspace to print area
+HAR35    DS    0H
+         L     R3,PRT2NEXT             Address next print line
+         C     R3,PRT2LAST             Print area full?
+         BH    HAR46                   Yes: send print area to printer
+         L     R6,NEXTLINE             Address next line in workspace
+         USING WORKSPCE,R6             Address workspace line
+         C     R6,LASTLINE             All done?
+         BH    HAR46                   Send last (incomplete) block
+*
+*        If the record length > 80 truncate the print to the first
+*        80 columns.
+*
+         L     R1,COMMRECL             Record length
+         C     R1,=F'80'               Record length <= 80?
+         BNH   HAR35A                  Yes: good
+         LA    R1,80                   Else truncate to 80 bytes
+HAR35A   DS    0H
+         SL    R1,=F'8'                Minus 8 for linenumbers/INDENT
+         BCTR  R1,0                    Minus 1 for EX
+         TM    SWMODE,$INDENT          INDENT?
+         BO    HAR37                   Yes: insert blanks
+         CLC   =CL3'ON',COMMNUM        Line numbers?
+         BNE   HAR38                   No: NONUM
+*------- ----- ----------------------- Numbered
+HAR36    DS    0H
+         MVI   0(R3),X'40'             Blank to print
+         MVC   1(6,R3),WORKSLIN        Line number to print
+         MVI   7(R3),X'40'             Blank to print
+         EX    R1,MOVEDAT1             Data to print
+         LA    R1,8(,R1)               Add length linenbrs
+         B     HAR39
+MOVEDAT1 MVC   8(0,R3),WORKDATA        << executed >>
+*------- ----- ----------------------- Indent
+HAR37    MVC   0(8,R3),=CL8' '         Indent with blanks
+         EX    R1,MOVEDAT1             Data to print
+         B     HAR39
+*------- ----- ----------------------- Nonum
+HAR38    DS    0H
+         LA    R1,8(,R1)               Nonum: so set R1 back to LRECL-1
+         EX    R1,MOVEDAT2             Data to print
+HAR39    DS    0H
+         LR    R14,R1                  Save register 1
+         EX    R1,TRDAT1               Data to print
+         LR    R1,R14                  Restore register 1
+         MVI   80(R3),X'15'            Insert New Line character
+         L     R1,COMWRKEN             Length of entry in workspace
+         LA    R6,0(R1,R6)             Next entry in workspace
+         ST    R6,NEXTLINE             Save address of this line
+         LA    R3,PRT2ENT(,R3)         Next line in PRINT area
+         ST    R3,PRT2NEXT             Save this address
+         AP    LINECNT,=PL3'1'         Increment line count
+         B     HAR34                   Next line
+MOVEDAT2 MVC   0(0,R3),WORKDATA        Data to print
+TRDAT1   TR    0(80,R3),COMTRTAB       Remove invalid characters
+         DROP  R6
+*------- ----- ----------------------- Send data
+HAR46    DS    0H
+         LA    R6,PRT2TXT              Address block of lines
+         L     R7,PRT2NEXT             Point after last entry used
+         MVI   0(R7),X'19'             Insert end of message
+         LA    R7,1(,R7)               Adjust length
+         SR    R7,R6                   Length into register 7
+         BAL   R14,PRT                 Send data to printer
+         LTR   R15,R15
+         BNZ   ERROR1                  Error: Hardcopy failed
+         MVC   PRT2NEXT,PRT2FRST       Reset pointer to next prt line
+         CLC   NEXTLINE,LASTLINE       All done?
+         BH    HAR46F                  Yes: check footnote
+         CP    LINECNT,PAGESIZE        Page full?
+         BL    HAR47                   No: print next block of lines
+HAR46F   DS    0H
+         TM    SWMODE,$FOOT            Should a footnote be printed?
+         BZ    HAR47                   No: send next block of lines
+*------- ----- ----------------------- Send footnote
+         LA    R6,PRT4TXT              Footnote text
+         LA    R7,PRT4LEN
+         BAL   R14,PRT                 Send to printer
+         LTR   R15,R15
+         BNZ   ERROR1
+         ZAP   LINECNT,=PL3'999'       Force a nex page
+         B     HAR47                   Next block of lines
+*------- ----- ----------------------- Check if all done
+HAR47    DS    0H
+         CLC   NEXTLINE,LASTLINE       All lines printed?
+         BH    HAR48                   Yes: check copies
+         B     HAR34                   No: print next block of lines
+*------- ----- ----------------------- Copies
+HAR48    DS    0H
+         MVC   NEXTLINE,COPYNEXT       Reset next line to print
+         MVC   LASTLINE,COPYLAST       Reset last line to print
+         ZAP   LINECNT,=PL3'999'       Force new page
+         BCT   R8,HAR34                Next copy
+         LA    R6,PRT3TXT              Address text to send
+         LA    R7,PRT3LEN              ... and length
+         OI    SWMODE,$EB              ... and send an end bracket
+         BAL   R14,PRT                 Send End bracket (close printer)
+         LTR   R15,R15
+         BNZ   ERROR1                  Hardcopy failed
+         MVC   COMMPRM(25),MSG1        Msg: Hardcopy made
+         XR    R15,R15                 Rc = 0, no errors
+         B     RETURN
+         TITLE 'Print workspace records to a temporary data set'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  PRINT                                              *
+*        Function: Execute the PRINT n,m command from RPFEDIT.        *
+*                  Determine which lines should be printed;           *
+*                  allocate a temporary data set with LRECL=132;      *
+*                  write the requested lines to this data set;        *
+*                  invoke RPFBRO to Browse/Print this data set;       *
+*                  unallocate the temporary data set.                 *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+PRINT    DS    0H
+         LA    R3,6(,R9)               Point after 'PRINT ' in command
+         L     R4,COMMFSCR             Default: first line on screen
+         L     R1,COMMSIZE             # rows on screen
+         BCTR  R1,0                    Minus 1
+         L     R0,COMWRKEN             Length of workspace entry
+         MR    R0,R0                   Calculate end of 1 screen
+         LA    R5,0(R4,R1)             Default: last line on screen
+         C     R5,COMMLAST             Beyond last record?
+         BNH   *+8                     No
+         L     R5,COMMLAST             Point to last record
+         CLI   0(R3),X'40'             No operands?
+         BE    PRINT23                 Yes: write # screen lines from
+*                                      COMMFSCR
+         BAL   R14,LINE                Get line numbers
+         B     PRINT01(R15)            Branchlist
+PRINT01  B     PRINT03                 00 - find lines in workspace
+         B     ERROR6                  04 - Invalid line(s)
+         B     ERROR7                  08 - Line(s) not numeric
+PRINT03  DS    0H
+         CLI   LN1FLD,C'*'             Current line?
+         BNE   PRINT11
+         CLC   LN2FLD,C9999            Last line?
+         BNE   PRINT05
+         L     R4,COMMFSCR             Address of current line
+         L     R5,COMMLAST             Address last line
+         B     PRINT23                 Start of print
+PRINT05  DS    0H
+         PACK  WORKFLD,LN2FLD          Pack number of lines
+         CVB   R4,WORKFLD              Binary number of lines
+         LTR   R4,R4                   Line-2 = 0?
+         BNZ   PRINT07
+         LA    R4,1                    Default 1 line
+PRINT07  DS    0H
+         BCTR  R4,0                    Discount with 1
+         L     R5,COMWRKEN             Length workspace entry
+         MR    R4,R4                   Offset into register 5
+         L     R4,COMMFSCR             First line to print
+         AR    R5,R4                   Address last line to print
+         C     R5,COMMLAST             Bottom line?
+         BNH   PRINT23                 Print lines
+         MVI   ERR9+14,C'2'            Msg: line-2 not found
+         B     ERROR9
+*------- ----- ----------------------- Process from 'nnnn' to 'mmmm'
+PRINT11  DS    0H
+         CLC   LN2FLD,C9999            Last line?
+         BNE   PRINT13
+         USING WORKSPCE,R3             Address workspace line
+         L     R3,COMMLAST             Last line in workspace
+         MVC   LN2FLD+2(6),WORKSLIN    Line number last line
+         MVC   LN2FLD(2),=C'00'        Insert leading zeroes
+PRINT13  DS    0H
+         L     R3,COMWSTRT
+         XR    R4,R4                   Clear start address to write
+         XR    R5,R5                   Clear end address to write
+PRINT15  DS    0H
+         CLC   WORKSLIN,LN1FLD+2       Compare line-1
+         BNE   PRINT17
+         LR    R4,R3                   Found: save start address
+         XR    R5,R5
+PRINT17  DS    0H
+         CLC   WORKSLIN,LN2FLD+2       Compare line-2
+         BNE   PRINT19
+         LR    R5,R3                   Found: save end address
+         B     PRINT21
+PRINT19  DS    0H
+         L     R1,COMWRKEN             Length of workspace entry
+         LA    R3,0(R1,R3)             Next entry in workspace
+         C     R3,COMMLAST             Beyond last record in workspace?
+         BNH   PRINT15                 No: continue test line numbers
+         DROP  R3
+PRINT21  DS    0H
+         MVI   ERR9+14,C'1'
+         LTR   R4,R4                   Start address zero?
+         BZ    ERROR9                  Yes: error
+         MVI   ERR9+14,C'2'
+         LTR   R5,R5                   End address zero?
+         BZ    ERROR9                  Yes: error
+PRINT23  DS    0H
+         ST    R4,NEXTLINE             Address first record
+         ST    R5,LASTLINE             Address last record to print
+         MVC   RECORDL,=H'132'         Default record length
+         MVC   BLOCKL,=AL2(5940)       Default Block size
+         CLC   COMWRKEN,=F'88'        Do we have a card image data set?
+         BNE   PRINT25                 No: do not change LRECL/BLKSIZE
+         MVC   RECORDL,=H'80'          Change record length
+         MVC   BLOCKL,=AL2(8000)       ... and Block size
+PRINT25  DS    0H
+         LA    R14,RPFD08              Point to allocation parm block
+         USING DAPB08,R14              Address this DSECT
+         XC    RPFD08,RPFD08           Clear allocation parm block
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFEDPRT'  DDNAME to allocate
+         MVC   DA08PDSN,=A(EDDSNL)  Length and temporary data set name
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVI   DA08PQTY+3,X'09'        09 cylinders primary
+         MVI   DA08SQTY+3,X'09'        09 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         LR    R1,R14                  Parameter for CALLTS
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Allocation successful?
+         BZ    PRINT27                 Good: continue
+         LA    R14,RPFD08              Reload allocation parm block
+         SYCONVHX IN=DA08DARC,OUT=ERRCDE,L=2,RENT=YES
+         DROP  R14                     RPFD08
+         B     ERROR14                 Display error msg and terminate
+PRINT27  DS    0H
+         USING WORKSPCE,R3             Address workspace line
+         MVC   PRTDCB+DCBLRECL-IHADCB(2),RECORDL
+         MVC   PRTDCB+DCBBLKSI-IHADCB(2),BLOCKL
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (PRTDCB,(OUTPUT)),MF=(E,COMOPN)
+         MVI   SESSAREA,C' '           Blank output
+         MVC   SESSAREA+1(131),SESSAREA  ... area
+         MVC   SESSAREA(80),PRT1HDR1   Move header1
+         BAL   R14,WRITEIT             Write record
+         MVC   SESSAREA(80),PRT1HDR2   Move header2
+         BAL   R14,WRITEIT             Write record
+         L     R3,NEXTLINE             First line to write
+         L     R4,COMWRKEN             Increment
+         LA    R5,1(,R5)               1 byte after last line for BXLE
+PRINT29  DS    0H
+         MVI   SESSAREA,C' '           Blank output
+         MVC   SESSAREA+1(131),SESSAREA  ... area
+         CLC   COMWRKEN,=F'140'        Workspace entry > 140?
+*                                      (= LRECL + 8)
+         BH    PRINT31                 Yes: write 2 lines
+         L     R1,COMWRKEN             Workspace entry (= LRECL+8)
+         S     R1,=F'9'                Discount to LRECL-1 for EX
+         EX    R1,MOVEREC1             Move record
+         BAL   R14,WRITEIT             Write record
+         B     PRINT35                 and branch
+PRINT31  DS    0H
+         LA    R1,131                  132 (-1 for EX)
+         EX    R1,MOVEREC1             Move record
+         BAL   R14,WRITEIT             Write record
+         MVI   SESSAREA,C' '           Blank output
+         MVC   SESSAREA+1(131),SESSAREA  ... area
+         L     R2,COMWRKEN             Workspace ent len (LRECL+8)
+         S     R2,=F'140'              Minus first part
+         BCTR  R2,0                    Discount for EX
+         LA    R6,WORKDATA             Point to record in workspace
+         LA    R6,132(,R6)             Point to second part
+         EX    R2,MOVEREC2             Move to output record
+         BAL   R14,WRITEIT             Write 2nd part of record
+PRINT35  DS    0H
+         BXLE  R3,R4,PRINT29           Loop until records written
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE PRTDCB,MF=(E,COMCLS)    Close data set
+         FREEPOOL PRTDCB
+*
+*        Invoke the Browse processor (RPFBRO)
+*
+         MVC   COMMPRM(8),=CL8'RPFEDPRT' DDname to browse
+         MVI   COMMPRM+8,X'40'         No PRINT
+         RPFSA24                       Go to amode 24
+         LA    R1,PRMCOMM              Contains address of RPFCOMM
+         LINK  EP=RPFBRO               Invoke Browse
+         RPFSA31                       Restore addressing mode
+         XC    RPFD18,RPFD18           Clear parameter block
+         LA    R14,RPFD18              Point to unallocation parm blk
+         USING DAPB18,R14              Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'RPFEDPRT'  DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         LR    R1,R14                  Unalloc.   parameter block
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R14                     RPFD18
+         MVI   COMMPRM,C'-'            Clear
+         MVC   COMMPRM+1(21),COMMPRM        COMMPRM
+         XR    R15,R15                 Rc = 0, successful print
+         B     RETURN                  Return to caller
+MOVEREC1 MVC   SESSAREA(0),WORKDATA    Move record
+MOVEREC2 MVC   SESSAREA(0),0(R6)       Move 2nd part of record
+         DROP  R3
+         TITLE 'Error routines'
+ERROR1   DS    0H
+         MVC   COMMPRM(25),ERR1        ACB error xxxxxxxx
+         XC    SHOWAREA,SHOWAREA
+         LA    R3,SHOWAREA
+         L     R1,ABLK                 Workarea
+         SHOWCB AM=VTAM,RPL=(2),FIELDS=(RTNCD,FDBK2),                  C
+               AREA=(3),LENGTH=8,MF=(G,(1))
+         LTR   15,15
+         BNZ   RETURN8             VTAM CB ERROR
+         SYCONVHX IN=SHOWAREA+3,OUT=COMMPRM+18,L=1,RENT=YES
+         SYCONVHX IN=SHOWAREA+7,OUT=COMMPRM+20,L=1,RENT=YES
+         CLC   COMMPRM+21(4),=C'0008' LU NOT AVAILABLE?
+         BE    ERROR1E
+         CLC   COMMPRM+21(4),=C'1000' LU NOT AVAILABLE?
+         BE    ERROR1E
+         B     RETURN8
+ERROR1E  DS    0H
+         MVC   COMMPRM(25),ERR4        Msg: LU not available
+         B     RETURN8
+ERROR2   MVC   COMMPRM(25),ERR2        Msg: Invalid printer name
+         MVC   COMMPRM+9(8),LUNAME     LU name of printer in message
+         B     RETURN8
+ERROR3   MVC   COMMPRM(25),ERR3        Msg: MODCB/GENCB failed
+         B     RETURN8
+ERROR5   MVC   COMMPRM(25),ERR5        Msg: ACB in use
+         B     RETURN
+ERROR6   MVC   COMMPRM(25),ERR6        Msg: Line-x invalid
+         B     RETURN8
+ERROR7   MVC   COMMPRM(25),ERR7        Msg: line-x not numeric
+         B     RETURN8
+ERROR9   MVC   COMMPRM(25),ERR9        Msg: line-x not found
+         B     RETURN8
+ERROR10  MVC   COMMPRM(25),ERR10       Msg: Invalid copy
+         B     RETURN8
+ERROR11  MVC   COMMPRM(25),ERR11       Msg: Copies not numeric
+         B     RETURN8
+ERROR12  MVC   COMMPRM(25),ERR12       Msg: footnote invalid
+         B     RETURN8
+ERROR14  MVC   COMMPRM(25),ERR14       Msg: Alloc. error xxxx print
+         MVC   COMMPRM+15(2),ERRCDE
+         B     RETURN8
+RETURN8  DS    0H
+         LA    R15,8                   Rc = 8, errors detected
+         TITLE 'Return to RPFEDIT or RPFPDS'
+*------- ----- ----------------------- Return
+RETURN   DS    0H
+         LR    R4,R15                  Save return code
+         ICM   R2,B'1111',RPLWADDR     RPL allocated?
+         BZ    RETURN05                No: test if NIB allocated
+         ICM   R3,B'1111',ACB1ADDR     ACB allocated?
+         BZ    RETURN05                No: test if NIB allocated
+         CLSDST RPL=(2)                and close the RPL (printer)
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE ((3)),MF=(E,COMCLS)     and close the ACB
+         L     R0,ACB1LEN
+         FREEMAIN R,LV=(0),A=(3)       Get rid of ACB
+RETURN05 DS    0H
+         ICM   R1,B'1111',NIBWADDR     Is a NIB allocated?
+         BZ    RETURN11                No: free RPL if there ...
+         L     R0,NIBWLEN              ... and length of NIB
+         FREEMAIN R,LV=(0),A=(1)       Get rid of NIB
+RETURN11 ICM   R1,B'1111',RPLWADDR     Is there an RPL allocated?
+         BZ    RETURN99                No: return
+         L     R0,RPLWLEN              ... and length of RPL
+         FREEMAIN R,LV=(0),A=(1)       Get rid of RPL
+RETURN99 LR    R2,R13                  Copy address working storage
+         L     R3,ABLK                 GENCB/MODCB/SHOWCB area
+         FREEMAIN R,LV=512,A=(3)       Release
+         L     R13,4(,R13)             Callers save area
+         FREEMAIN R,LV=WORKL,A=(2)     Release our working storage
+         LR    R15,R4                  Restore return code
+         RETURN (14,12),RC=(15)
+         TITLE 'Subroutines'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine: WRITEIT                                             *
+*                                                                     *
+*        Function: Write record SESSAREA onto data set with ddname    *
+*                  RPFEDPRT                                           *
+*                                                                     *
+*        Return codes:                                                *
+*              00 - always zero                                       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+WRITEIT  DS    0H
+         ST    R14,R14COMMN            Save register 14
+         RPFSA24                       Enter amode 24
+         PUT   PRTDCB,SESSAREA         Write record
+         RPFSA31                       Restore addressing mode
+         XR    R15,R15                 Rc = 0
+         L     R14,R14COMMN            Restore register 14
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine: GENBLOCK                                            *
+*                                                                     *
+*        Function: allocate the ACB, NIB and RPL                      *
+*                                                                     *
+*        Return codes:                                                *
+*              00 - all blocks allocated and successful open of ACB.  *
+*              04 - one or more blocks not allocated.                 *
+*              08 - OPEN of ACB failed.                               *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+GENBLOCK DS    0H
+         ST    R14,R14BLOCK            Save return reg.
+         L     R1,ABLK                 Workarea
+         LA    R4,APPLID1              Application ID
+         GENCB BLK=ACB,AM=VTAM,APPLID=(4),MACRF=NLOGON,                X
+               MF=(G,(1))
+         LTR   R15,R15
+         BNZ   GENERR3                 ACB not created           @rpa01
+         ST    R1,ACB1ADDR             Save ACB address
+         ST    R0,ACB1LEN              ... and length
+         LR    R2,R1                   ACB address intor register 2
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  ((2)),MF=(E,COMOPN)     Open ACB
+         LTR   R15,R15
+         BZ    GENBLK2                 ACB not opened
+         L     R1,ABLK                 Workarea
+         LA    R3,OPENERR              To contain open error
+         SHOWCB ACB=(2),FIELDS=ERROR,AREA=(3),                         C
+               LENGTH=4,AM=VTAM,MF=(G,(1))
+         ICM   R1,15,OPENERR           Load open error
+         BZ    GENBLK2                 R15<>0 but error code =0
+         CVD   R1,DOUBLE               Make packed
+         UNPK  ERR5+17(8),DOUBLE       Make zoned
+         OI    ERR5+24,X'F0'           Clear sign
+         B     GENERR5
+GENBLK2  DS    0H
+         L     R1,ABLK                 Workarea
+         GENCB BLK=NIB,AM=VTAM,MODE=RECORD,LISTEND=YES,                X
+               MF=(G,(1))
+         LTR   R15,R15                 Node Initialization Block there?
+         BNZ   GENERR3                 NIB not created           @rpa01
+         ST    R1,NIBWADDR             Address work NIB
+         ST    R0,NIBWLEN              Length work NIB
+         L     R2,NIBWADDR             Point to work NIB
+         L     R3,ACB1ADDR             Point to VTAM ACB
+         L     R1,ABLK                 Workarea
+         GENCB BLK=RPL,AM=VTAM,ACB=(3),NIB=(2),                        C
+               OPTCD=(ACQUIRE,SPEC,SYN),MF=(G,(1))
+         LTR   R15,R15
+         BNZ   GENERR3                 Error GENCB, RPL not created
+         ST    R1,RPLWADDR              Save address of work RPL
+         ST    R0,RPLWLEN               ... and length
+         XR    R15,R15                 RC = 0000                 @rpa01
+         B     GENEND                  Return                    @rpa01
+GENERR3  DS    0H                                                @rpa01
+         LA    R15,4                   RC = 0004                 @rpa01
+         B     GENEND                                            @rpa01
+GENERR5  DS    0H                                                @rpa01
+         LA    R15,8                   RC = 0008                 @rpa01
+GENEND   DS    0H                                                @rpa01
+         L     R14,R14BLOCK            Restore register 14
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*            Routine: PRT, Send data to the VTAM printer.             *
+*                                                                     *
+*            - REG.2 = Address send RPL                               *
+*            - REG.3 = Address VTAM ACB                               *
+*            - REG.6 = Address message area (must be set by caller)   *
+*            - REG.7 = Length message area (must be set by caller)    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+PRT      DS    0H
+         ST    R14,R14PRT
+         RPFSA24                       Switch to amode 24        @rpa01
+         L     R2,RPLWADDR             Point to Send/Receive RPL
+         L     R3,ACB1ADDR             Point to VTAM ACB
+         TM    SWMODE,$SCS             Do we have a LU1 printer?
+         BZ    PRT03                   No: skip
+         LA    R6,2(,R6)               Skip WCC
+         SH    R7,=H'3'                Adjust length (2-WCC + 1-EM)
+PRT03    DS    0H
+         L     R1,ABLK                 Workarea
+         MODCB AM=VTAM,RPL=(2),ACB=(3),AREA=(6),RECLEN=(7),            C
+               STYPE=REQ,CONTROL=DATA,CHAIN=ONLY,BRACKET=(NBB,NEB),    C
+               POST=RESP,OPTCD=(CS,SYN),RESPOND=(NEX,FME,NRRN),        C
+               CHNGDIR=(NCMD),RTYPE=DFSYN,MF=(G,(1))
+         LTR   R15,R15
+         BNZ   PRT99
+         TM    SWMODE,$BB              Begin bracket?
+         BNO   PRT04                   No: skip BB
+         L     R1,ABLK                 Workarea
+         MODCB AM=VTAM,RPL=(2),BRACKET=(BB,NEB),                       C
+               MF=(G,(1))
+         LTR   R15,R15                 Rc = 0?
+         BNZ   PRT99                   No: exit
+         B     PRT06
+PRT04    TM    SWMODE,$EB              End bracket?
+         BNO   PRT06                   No: skip end bracket
+         L     R1,ABLK                 Workarea
+         MODCB AM=VTAM,RPL=(2),BRACKET=(NBB,EB),                       C
+               MF=(G,(1))
+         LTR   R15,R15                 Rc = 0?
+         BNZ   PRT99                   No: exit
+PRT06    DS    0H
+         SEND  RPL=(2)                 Send data to printer
+PRT99    DS    0H
+         NI    SWMODE,X'FF'-$BB-$EB    Reset bracket indicators
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R14,R14PRT              Restore register 14
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        N U M T S T - SUBROUTINE, Numeric test of a 8 character field*
+*                                                                     *
+*                    Input:  NUMFLD, field contains characters to test*
+*                    Output: NUMFLD, remains unchanged                *
+*                            Reg.15, return code 00 - numeric         *
+*                                                08 - not numeric     *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+NUMTST   ST    R14,R14COMMN            Save register 14
+         LA    R3,8                    Length to test
+         LA    R4,NUMFLD               NUMFLD to be tested
+NUMTST01 CLI   0(R4),X'F0'             < 0?
+         BL    NUMTST03                Yes: not numeric
+         CLI   0(R4),X'F9'             >9?
+         BH    NUMTST03                Yes: not numeric
+         LA    R4,1(,R4)               Point to next character
+         BCT   3,NUMTST01              Loop until all characters tested
+         XR    R15,R15                 Rc = 0 - numeric
+         B     NUMTST99                Go to exit
+NUMTST03 LA    R15,8                   Rc = 8 - not numeric
+NUMTST99 L     R14,R14COMMN            Restore register 14
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        S H I F T - Subroutine, chop off trailing space and replace  *
+*                    them with leading character(s) specified in      *
+*                    FILLCHAR                                         *
+*                                                                     *
+*                    Input:  NUMFLD, field to be shifted, max 8 chars *
+*                            FILLCHAR, fill character.                *
+*                    Output: NUMFLD, Trailing spaces replaced with    *
+*                                    leading FILLCHAR(s)              *
+*                            REG.15, RC = 00 - No errors              *
+*                                    RC = 04 - All spaces             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SHIFT    DS    0H
+         LA    R1,8                    Maximum 8 characters to scan
+         XR    R15,R15                 Rc = 0 (default)
+SHIFT01  CLI   NUMFLD+7,X'40'          Is last character a space?
+         BNE   SHIFT99                 No: good, finished
+         MVC   WRKFLD+1(7),NUMFLD      Move chars 1-7 into WRKFLD+1
+*                                      and chop off trailing space
+         MVC   WRKFLD(1),FILLCHAR      Insert leading zero
+         MVC   NUMFLD,WRKFLD           Restore NUMFLD
+         BCT   R1,SHIFT01              Loop until all done
+         LA    R15,4                   Rc = 4 - all spaces
+SHIFT99  DS    0H
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        S C A N - SUBROUTINE, Scan command area for ' ' or ',' and   *
+*                              put preceding characters in NUMFLD.    *
+*                                                                     *
+*                  Inout:  REG.3,  Points to 1s character to scan     *
+*                  OUTPUT: NUMFLD, Characters preceding ' ' or ','    *
+*                          REG.3,  Points to last character scanned   *
+*                          REG.15, Return code 00 - Characters found  *
+*                                              08 - Characters not fnd*
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SCAN     DS    0H
+         ST    R14,R14COMMN            Save register 14
+         LA    R15,8                   Rc = 08, initial:
+         LA    R4,9                    Scan max 9 characters
+         LA    R5,NUMFLD               Point to NUMFLD
+         MVC   NUMFLD,=CL8' '          Clear NUMFLD
+SCAN01   DS    0H
+         CLI   0(R3),X'40'             Space?
+         BE    SCAN03                  Yes: end of scan
+         CLI   0(R3),X'6B'             Comma?
+         BE    SCAN03                  Yes: end of scan
+         MVC   0(1,R5),0(R3)           Move 1 character into NUMFLD
+         LA    R3,1(,R3)               Next character to scan
+         LA    R5,1(,R5)               Next character in NUMFLD
+         BCT   R4,SCAN01               Scan max 9 times
+         B     SCAN99                  Exit: no characters found
+SCAN03   XR    R15,R15                 Rc= 0, scan successful
+SCAN99   L     R14,R14COMMN            Restore register 14
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        L I N E - Scan input buffer for line numbers                 *
+*                                                                     *
+*                  INPUT:  REG.3, START ADDRESS SCAN,                 *
+*                  OUTPUT: LN1FLD, LINE-1                             *
+*                          LN2FLD, LINE-2                             *
+*                          LN3FLD, LINE-3                             *
+*                          REG.15, Rc= 0000 - all lines valid,        *
+*                                  RC= 0004 - invalid line found,     *
+*                                  RC= 0008 - lines not numeric.      *
+*                          ERR6 and ERR7, error indicating line number*
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+LINE     DS    0H
+         ST    R14,R14LINE             Save register 14
+         MVI   ERR6+16,C'1'            Move line-id in both
+         MVI   ERR7+12,C'1'            error messages
+         BAL   R14,SCAN                Scan for LN1FLD
+         LTR   R15,R15                 Rc= 0?
+         BNZ   LINE73                  No: LN1 invalid
+         ST    R3,SAVE3                Save register 3
+         CLI   NUMFLD,C'*'             * - current line?
+         BE    LINE04                  Yes: skip NUMTST
+         MVI   FILLCHAR,X'F0'          '0' into FILLCHAR
+         BAL   R14,SHIFT               Chop off trailing spaces and
+*                                      replace by leading zero(es)
+         LTR   R15,R15                 Rc= 0 - OK?
+         BNZ   LINE03                  No: all spaces
+         CLC   NUMFLD,C0000            Line-1 zero?
+         BE    LINE73                  Yes: invalid line number
+LINE03   BAL   R14,NUMTST              Numeric test
+         LTR   R15,R15                 Rc= 0?
+         BNZ   LINE75                  No: LN1 not numeric
+LINE04   MVC   LN1FLD,NUMFLD           Save NUMFLD into LN1FLD
+         L     R3,SAVE3                Restore register 3
+         LA    R3,1(,R3)               Point to LN2
+         MVI   ERR6+16,C'2'            Move line-id in both
+         MVI   ERR7+12,C'2'            error messages
+         BAL   R14,SCAN                Scan for LN2FLD
+         LTR   R15,R15                 Rc= 0?
+         BNZ   LINE73                  No: LN2 invalid
+         ST    R3,SAVE3                Save register 3
+         MVI   FILLCHAR,X'F0'          FILLCHAR set to '0'
+         BAL   R14,SHIFT               Chop off trailing spaces and
+*                                      replace by leading zero(es)
+         LTR   R15,R15                 Rc= 0 - OK?
+         BNZ   LINE05                  No: all spaces
+         CLC   NUMFLD,C0000            Line-2 zero?
+         BE    LINE73
+LINE05   BAL   R14,NUMTST              Run the numeric test
+         LTR   R15,R15                 Rc= 0?
+         BNZ   LINE75                  No: LN2 not numeric
+         MVC   LN2FLD,NUMFLD           Save LN2 into LN1FLD
+         XR    R15,R15                 Rc= 0000 - scan successful
+         B     LINE99                  Exit
+LINE73   LA    R15,4                   Rc= 0004 - invalid line(s) found
+         B     LINE99                  Exit
+LINE75   LA    R15,8                   Rc= 0008 - line(s) not numeric
+         B     LINE99                  Exit
+LINE99   L     R14,R14LINE             Restore register 14
+         BR    R14                     Return
+         TITLE 'Constants'
+MSG1     DC    CL25'----------- Hardcopy made'
+ERR1     DC    CL25' Hardcopy failed: Rc=XXXX' +21
+ERR2     DC    CL25'---- LU= XXXXXXXX invalid'
+ERR3     DC    CL25'------ GENCB/MODCB failed'
+ERR4     DC    CL25'--- Printer in use, retry'
+ERR5TXT  DC    CL25'-- ACB open err. xxxxxxxx' +17
+ERR6TXT  DC    CL25'---------- Line-x invalid' +16
+ERR7TXT  DC    CL25'------ Line-x not numeric' +12
+ERR9TXT  DC    CL25'-------- Line-x not found' +14
+ERR10    DC    CL25'---------- Copies invalid'
+ERR11    DC    CL25'------ Copies not numeric'
+ERR12    DC    CL25'------- Invalid foot note'
+ERR14    DC    CL25'-- Alloc error xxxx PRINT'  +15
+MDLDCB   DCB   DDNAME=RPFEDPRT,MACRF=PM,DSORG=PS,RECFM=FB
+MDLDCBL  EQU   *-MDLDCB
+EDDSNL   DC    AL2(10)                 Real length EDDSN
+EDDSN    DC    CL44'&&&&RPFEDPRT'
+*
+*
+VFCTXT   DC    XL7'00002BC2020000' VERTICAL FORMS CONTROL (0000VFC00)
+*              Leading 2-zeroes and trailing 1-zero are deleted by PRT
+*
+PRTATXT  DC    X'F548'                Command: Erase Write (EW)
+PRTAHDR1 DC    CL80'Userid= XXXXXXX , Date= XXXX/XX/XX, Time= XX:XX:XX'
+         DC    X'15'
+PRTAHDR2 DC    CL80'Member= XXXXXXXX, Data set= XXXXXXXXXXXXXXXXXXXXX'
+         DC    X'15'
+PRTAHDR4 DC    CL80' '
+         DC    X'15'
+         DC    CL80' '
+         DC    X'15'
+         DC    X'19'
+PRTALEN  EQU   *-PRTATXT
+HDRTXT   DC    CL88' ...... ----+----1----+----2----+----3----+----4---C
+               -+----5----+----6----+----7----+----8'
+         ORG   HDRTXT
+HDRNUM   DS    CL80
+         ORG   HDRTXT+8
+HDRNON   DS    CL80
+         ORG
+PATT1    DC    X'F02021207A20207A2020' PATTERN TIME
+CMDCHAR  DC    CL1'¬'                  Command character
+C0000    DC    C'00000000'
+C9999    DC    C'99999999'
+LUTTAB   EQU   *
+LUTENT   EQU   1
+         DC    B'00000000'             LU0
+         DC    B'00000001'             LU1 - SCS
+         DC    B'00000011'             LU3 - DSC
+LUTLEN   EQU   *-LUTTAB
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         LTORG
+         DROP
+*
+         COPY  CALLTS
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Our save area
+CNVHX01  DS    2D                      SYCONVHX work area
+SHOWAREA DS    3D                      Workarea SHOWCB
+DOUBLE   DS    D
+LN1FLD   DS    D                       Line-1 COPY/LINE
+LN2FLD   DS    D                       Line-2 COPY/LINE
+LN3FLD   DS    D                       Line-3 COPY/LINE
+WORKFLD  DS    D                       Work area
+COPIES   DS    F
+PRMCNVD1 DS    F                       \____ Parm 1 RPFCNVDT ________/
+PRMCNVD2 DS    F                       /     Parm 2 RPFCNVDT         \
+RPFDAPL  DS    5F                      DAPL
+ECB      DS    F
+PARMFLD  DS    3F                      3 parameters for DSNPARS
+RPFD08   DS    CL84                    IKJDAIR allocation parm block
+RPFD18   DS    CL40                    IKJDAIR unallocation parm block
+OPENERR  DS    F                       OPEN error code
+PRMCOMM  DS    F                       Contains address of RPFCOMM
+ABLK     DS    F                       Work area GENCB/MODCB/SHOWCB
+R12TS    DS    F                       Save register 12 CALLTS
+R14PRT   DS    F                       Save register 14 PRT (VFC)
+R14BLOCK DS    F                       Save register 14 GENBLOCK
+R14COMMN DS    F                       Save register 14 common routines
+R14LINE  DS    F                       Save register 14 LINE
+R14TS    DS    F                       Save register 14 CALLTS
+SAVE3    DS    F                       Save area register 3 SCAN
+NEXTLINE DS    F                       Save area current line (HAR)
+LASTLINE DS    F                       Save area last line (HAR)
+COPYNEXT DS    F                       Save area current line (HAR)
+COPYLAST DS    F                       Save area last line (HAR)
+NUMFLD   DS    CL8                     Workfield NUMTST/SHIFT routine
+WRKFLD   DS    CL8                     Workfield NUMTST/SHIFT routine
+NIBWADDR DS    F                       Address work NIB
+NIBWLEN  DS    F                       Length work NIB
+RPLWADDR DS    F                       Address work RPL
+RPLWLEN  DS    F                       Length work RPL
+ACB1ADDR DS    F                       Address of ACB
+ACB1LEN  DS    F                       Length of ACB
+PRT2NEXT DS    A                       Current print line
+PRT2FRST DS    A                       First print line
+PRT2LAST DS    A                       Last print line
+PRTDCB   DS    CL(MDLDCBL)
+DEVCAREA DC    CL8' '                  Device characteristics
+TIMEWORK DC    F'0'                    Work area TIME routine
+TIMEDISP DC    CL10' '                 Output area TIME routine
+*
+JULDATE  DS    PL4                     Date packed signed (YY)YYDDD
+OUTPUT   DS    0CL49                   Date to be given back
+DAYNUM   DS    CL2                     01 is Sunday 07 is Saturday
+DAYNAME1 DS    CL09                    Dayname in English
+DAYNAME2 DS    CL09                    Dayname in Dutch
+         DS    CL1
+DD       DS    CL2                     Date (e.g. 28 for e.g. 28 Dec)
+         DS    CL1
+MM       DS    CL2                     01 is January 12 is December
+M#NAME1  DS    CL09                    Monthname in English
+M#NAME2  DS    CL09                    Monthname in Dutch
+         DS    CL1
+YY       DS    CL4                     4 digit Year
+*
+LUNAME   DS    CL8
+         DS    CL2
+ERRCDE   DS    CL2
+LINECNT  DS    PL3                     Line count (HAR)
+PAGESIZE DS    PL3                     Maximum lines per page
+FILLCHAR DS    CL1                     Fill character SHIFT routine
+APPLID1  DS    X                       Length APPLID
+         DS    CL8                     Name of APPLID
+SWMODE   DC    XL1'00'                 MODE switch
+*                                      1... ....  TITLE
+*                                      .1.. ....  EJECT
+*                                      ..1. ....  INDENT
+*                                      ...1 ....  FOOT NOTE
+*                                      .... 1...  BEGIN BRACKET
+*                                      .... .1..  END BRACKET
+*                                      .... ..1.  SCS printer (LU1)
+*                                      .... ...1  DSC printer (LU3)
+$TITLE   EQU   128
+$EJECT   EQU   64
+$INDENT  EQU   32
+$FOOT    EQU   16
+$BB      EQU   8
+$EB      EQU   4
+$SCS     EQU   2
+$DSC     EQU   1
+SEPCHAR  DS    X                       Separator character
+SESSAREA DS    CL291                   Session parameters
+ERR5     DS    CL25                    Copy of ERR5TXT
+ERR6     DS    CL25                    Copy of ERR6TXT
+ERR7     DS    CL25                    Copy of ERR7TXT
+ERR9     DS    CL25                    Copy of ERR9TXT
+RECORDL  DS    AL2                     LRECL print data set
+BLOCKL   DS    AL2                     BLKSIZE print data set
+VFC      DS    XL7                     Vertical forms cont (0000VFC00)
+*
+PRT1TXT  DS    XL2                     Command: Erase Write (EW)
+PRT1HDR1 DS    CL80
+         DS    X                       New line (x'15')
+PRT1HDR2 DS    CL80
+         DS    X                       New line (x'15')
+PRT1HDR4 DS    CL80
+         DS    X                       New line (x'15')
+         DS    CL80
+         DS    X                       New line (x'15')
+         DS    X                       End of message (x'19')
+PRT1LEN  EQU   *-PRT1TXT
+*
+PRT2TXT  DS    XL2                     Command: write erase
+PRT2ENT  EQU   81                      Length 1 entry
+PRT2LNE  DS    10CL(PRT2ENT)           First print line
+PRT2LST  EQU   *-PRT2ENT
+         DS    X                       End of message (x'19')
+PRT2LEN  EQU   *-PRT2TXT
+*
+PRT3TXT  DS    XL5                     EW + New Line/Form feed + EOM
+PRT3LEN  EQU   *-PRT3TXT
+*
+PRT4TXT  DC    X'F548'                 Command: Erase Write (EW)
+         DC    CL80' ',X'15'           Three
+         DC    CL80' ',X'15'                blank
+         DC    CL80' ',X'15'                     lines
+PRT4FTN  DC    CL80' ',X'15'           Footnote
+         DC    X'19'                   End of message
+PRT4LEN  EQU   *-PRT4TXT
+         DS    0D
+WORKL    EQU   *-WORKAREA              Length of working storage
+         TITLE 'RPFCOMM Dsect'
+COMMAREA RPFCOMM
+         TITLE 'Other DSECTs'
+         IKJCPPL
+         IKJECT
+         CVT   DSECT=YES,LIST=NO
+         IKJDAPL                       DAIR parameter list
+         IKJDAP08                      DAIR allocation parm block
+         IKJDAP18                      DAIR unallocation parm block
+         PRINT NOGEN
+         DCBD  DSORG=PS,DEVD=DA
+         END

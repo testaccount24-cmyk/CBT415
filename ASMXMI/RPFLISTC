@@ -1,0 +1,749 @@
+RPFLISTC TITLE 'Create a data set selection list with Super LOCATE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFLISTC                                      *
+*                                                                     *
+*        Called by:     RPFVTOC (if only data set LEVEL specified)    *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Function:      Build a Catalog Parameter List and GETMAIN    *
+*                       a Catalog Work Area (CTGWKA).                 *
+*                       Perform a Super LOCATE with the CATALOG       *
+*                       SVC with a given prefix (COMMPFX) appended    *
+*                       with a period. In this case max.1456 data sets*
+*                       can be located in one time (64K workarea).    *
+*                       Execute for each found data set, a normal     *
+*                       LOCATE and a subsequent OBTAIN for the        *
+*                       VOLUME, SPACE and DCB information and place   *
+*                       this information in the EDIT workspace.       *
+*                       If the data set is on tape, no SPACE and DCB  *
+*                       info will set in the workspace record.        *
+*                       See DSECT VTOCAREA for the layout.            *
+*                       Each data set uses two lines in the RPF       *
+*                       workspace.                                    *
+*                                                                     *
+*                       After completion of RPFLISTC control will     *
+*                       be passed to RPFVTOC1 (via RPFVTOC) to        *
+*                       process the data set list.                    *
+*                                                                     *
+*        Input parm     Address of RPFCOMM                            *
+*                                                                     *
+*        Registers:     Register 12 is the base register.             *
+*                       Register 13 points to the dynamic workarea.   *
+*                       Register 11 points to the RPF control block.  *
+*                       Register 10 points an EDIT workspace entry,   *
+*                                   and is 2 entries of 88 bytes long.*
+*                                                                     *
+*        Note:          Set &SMS in member SYSVARS to 1 to get        *
+*                       the advantages of displaying PDSE data sets.  *
+*                                                                     *
+*        Returncodes:   00     - No errors                            *
+*                       04     - Workspace truncated                  *
+*                       08     - No data sets matched with 'hlq'      *
+*                                                                     *
+*        Change log:                                                  *
+*        Jun 14,2019 RPr: support SMS managed data sets if            *
+*                         variables &OS390 and &SMS in member         *
+*                         SYSVARS are set to 1.                       *
+*        Apr 28,2020 RPr: Copy DS1SCALO (allocation type) to          *
+*                         workspace to process in RPFVTOC1.           *
+*        Sep 03,2020 RPr: Include VSAM components in DSLIST.          *
+*        May 31,2021 RPr: Module made reentrant.                      *
+*        Jul 24,2024 RPr: Module rewritten for using SUPER LOCATE.    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFLISTC CSECT                         *
+RPFLISTC AMODE 31                      *
+RPFLISTC RMODE 24                      *
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFLISTC,R12            Make RPFLISTC addressable
+         L     R11,0(,R1)              Save PARM address
+         GETMAIN R,LV=WORKL            Obtain our workarea
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1                  Exchange savearea
+         USING WORKAREA,R13            Address our workarea within the
+*                                      first 72 bytes the save area
+         B     RPFINITT                Branch around savearea
+*
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+RPFINITT DS    0H
+         USING COMMAREA,R11            Adress RPFCOMM
+         USING VTOCAREA,R10
+         L     R10,COMWSTRT            Start of EDIT workspace
+         XC    ACTGWKA,ACTGWKA         Clear address CTGWKA
+         ZAP   DSNCNTR,=P'0'           Clear record counter
+         MVI   INDEXNM,X'40'           Clear the data set
+         MVC   INDEXNM+1(43),INDEXNM                     index
+         MVC   INDEXNM(L'COMMPFX),COMMPFX Data set level from RPFCOMM
+         LA    R1,INDEXNM+44           Point to end of INDEX
+         TRT   INDEXNM,COMSKPNS        Stop at first blank
+*
+*        Check if the data set level contains at least 1 '.'
+*        If not add the '.' at the end to complete a data set level.
+*        In this case searching on SYS1.L returns all data sets
+*        starting with SYS1.L
+*        Searching on level SYS1 should be completed with a '.' at
+*        the end.
+*
+         LA    R14,INDEXNM             Search for a '.'
+         LA    R15,44                  Max 44 times
+DOT      CLI   0(R14),C'.'             Period (complete ds lvl) found?
+         BE    DOTFND                  Yes:
+         CLI   0(R14),C' '             Already at the end?
+         BE    NODOTFND                Yes:
+         LA    R14,1(,R14)             Next position
+         BCT   R15,DOT                 Loop until done or found
+NODOTFND MVI   0(R1),C'.'              Add period at the end
+         LA    R1,1(,R1)               Include end period.
+DOTFND   LA    R0,INDEXNM              Beginning of index
+         SR    R1,R0                   Real length of index
+         ST    R1,INDEXLEN             And save real length
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Build the Catalog Parameter List (CTGPL), Obtain storage     *
+*        for a 64K bytes Catalog Work Area (CTGWKA) and               *
+*        Perform the Super Locate to populate the CTGWKA with max.    *
+*        1456 entries of 45 bytes (1 byte data set type + 44 bytes    *
+*        data set name).                                              *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         XC    CTGPL(CTGPLLEN),CTGPL
+         MVI   CTGOPTN1,CTGNAME+CTGGENLD  DSNAME + generic LOCATE
+*        MVI   CTGOPTN2,CTGRCATN       Don't return catalog name
+         MVI   CTGOPTN3,CTGSUPLT+CTGAM0
+*                                      Super LOCATE + VSAM REQ
+         LA    R0,INDEXNM-1            Index length byte
+         ST    R0,CTGENT               Set address into CTGPL
+         L     R0,=A(X'10000')         Load 64K
+         ST    R0,LCTWKSZ              Save
+         GETMAIN R,LV=(0)              Getmain locate workarea
+         LTR   R15,R15                 Test completion
+         BZ    GETMOK                  Gotcha
+         LA    R15,8                   RC=8, no data set matches
+         B     RETURN                  Return
+GETMOK   BCTR  R15,0                   0 - 1 = High valus
+         LA    R0,4                    Get four
+         STH   R15,0(,R1)              Set work area size
+         STH   R0,2(,R1)               Set work area used
+         ST    R1,ACTGWKA              Save its address
+         CLI   COMMOS,X'9B'            MVS/ESA or later?
+         BNE   LEVSUPER                No, goto SUPERLOCATE
+         MVI   CTGDSORG,CTGF2WKA       Yes, use FMT2 work area
+         L     R15,LCTWKSZ             Get storage size
+         LA    R0,8                    Load 8
+         ST    R15,0(,R1)              Set work area size
+         ST    R0,4(,R1)               Set work area used
+LEVSUPER ST    R1,CTGWKA               Set work area address
+         LA    R1,CTGPL                R1-> Catalog parameter list
+         CATALOG (1)                   Issue CATALOG SVC (26)
+         L     R3,CTGWKA               Point to catalog work area
+         LTR   R15,R15                 OK?
+         BZ    CATALOG0                Yes
+         LA    R15,8                   RC=8 no data sets matched
+         B     RETURN                  Exit
+CATALOG0 LR    R2,R3                   Address of CTG work area
+         XR    R5,R5                   Clear register
+         ICM   R5,3,2(R2)              Pickup work area used
+         CLI   COMMOS,X'9B'            MVS/ESA or later?
+         BNE   CATALOG1                No
+         L     R5,4(R2)                Pickup work area used FW
+CATALOG1 DS    0H
+         LTR   R5,R5                   No entries returned?
+         BNZ   CATALOG2                We have entries
+         LA    R15,8                   RC=8 no data sets matched
+         B     RETURN                  FREEMAIN CTGWKA and exit
+CATALOG2 LA    R4,45                   Entry length
+         LA    R2,4(,R2)               Start address
+         CLI   COMMOS,X'9B'            MVS/ESA or later?
+         BNE   *+8                     No
+         LA    R2,4(,R2)               Start address is at offs. 8
+         LA    R5,0(R2,R5)             End address
+         SLR   R5,R4                   -1 entry for BXLE
+CATALOG3 DS    0H
+         LR    R1,R2                   Data set entry in CTGWKA
+         BAL   R14,FILLEDIT            Place data set in EDIT worksp.
+         LTR   R15,R15                 Workspace truncated?
+         BNZ   RETURN                  Exit
+         BXLE  R2,R4,CATALOG3
+         XR    R15,R15                 Return code=0000
+         CP    DSNCNTR,=P'0'           No data sets?
+         BNE   RETURN                  No: alright
+         LA    R15,8                   No data sets matched with 'hlq'
+RETURN   DS    0H
+         LR    R3,R15                  Save reg.15
+         ICM   R1,15,ACTGWKA           CTGWKA address
+         BZ    RETURN2                 Not obtained
+         L     R2,LCTWKSZ              Length
+         FREEMAIN R,LV=(2),A=(1)       Get rid of CTGWKA
+RETURN2  DS    0H
+         LR    R2,R13                  Our workarea
+         L     R13,4(,R13)             Pickup callers savearea
+         FREEMAIN R,LV=WORKL,A=(2)     Release storage workarea
+         LR    R15,R3                  Restore return code
+         RETURN (14,12),RC=(15)        Return to caller
+         TITLE 'Place data set info in EDIT workspace'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Populate an EDIT workspace entry with a data set from the    *
+*        Catalog Work Area and substitute with SPACE and DCB info.    *
+*                                                                     *
+*        Register 1  points to the data set entry in CTGWKA and       *
+*                    will be copied into register 3.                  *
+*        Register 10 points to an EDIT workspace entry of 176 bytes.  *
+*        Register 11 points to RPFCOMM.                               *
+*        Register 6  Contains the return code.                        *
+*                                                                     *
+*        Return codes:                                                *
+*        00    No errors                                              *
+*        04    Workspace truncated                                    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+FILLEDIT DS    0H
+         STM   R2,R9,R29FILL           Save registers 2-9
+         STM   R12,R14,R1214FIL        Save registers 12-14
+         LR    R3,R1                   Address entry in CTGWKA
+         XR    R6,R6                   Initially return code 0
+         MVI   PREFIX,C' '             Blank
+         MVC   PREFIX+1(175),PREFIX         output area
+         XC    PREFIX+6(2),PREFIX+6    Clear flags
+         XC    PREFIX2+6(2),PREFIX2+6        of both workspace lines
+         CLI   0(R3),C'B'              GDG Base?
+         BE    FILL999                 Yes: skip
+         MVC   DSN,1(R3)               Move data set name to output
+         MVC   LOCDSN,1(R3)            Move data set name
+         XC    CAMLST,CAMLST           Clear LOCATE parameter list
+         MVI   CAMLST,X'44'            CAMLST NAME
+         LA    R0,LOCDSN
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,LOCAREA
+         ST    R0,CAMLST+12            Option 4
+         LOCATE CAMLST                 Locate to get real volume
+         LTR   R15,R15                 Ok?
+         BNZ   FILL999                 Ignore if not
+         MVC   VOL,LOCVOL              Move volume from LOCATE
+         MVC   TYPE,LOCTYPE            Move DEVTPE from LOCATE
+         CLI   LOCTYPE+2,X'20'         Data set on DASD?
+         BNE   FILL900                 No: exit
+         MVC   SMS,=C'No '             Mark default not SMS managed
+         XC    SCALO,SCALO             Default DS1SCALO to 00
+         AP    DSNCNTR,=P'1'           Add found dsname
+         CLI   0(R3),C'C'              Do we have a cluster component?
+         BNE   FILL003                 No: OK, yes: move DSORG
+         MVC   DSORG,=C'VSAM'          Mark VSAM data set, CLUSTER
+         B     FILL900                 Ready
+FILL003  DS    0H
+         CLC   LOCVOL+10,=6X'00'       2nd volume?
+         BE    FILL005                 No: branch
+         MVI   MULT,C'+'               Mark multivolume data set
+         B     FILL900                 Ready
+FILL005  DS    0H
+         MVC   TRKCYL,=H'15'           Default 15 trks/cyl
+         LA    R4,TYPETAB              Table with devtype+Trk/Cyl
+         LA    R5,#TYPES               # entries
+FILL007  DS    0H
+         CLC   0(1,R4),LOCTYPE+3       Match found?
+         BE    FILL009                 Yes: end
+         LA    R4,2(,R4)               Next entry in TYPETAB
+         BCT   R5,FILL007              Branch until found or done
+         B     FILL011
+FILL009  DS    0H
+         MVC   TRKCYL+1(1),1(R4)       Trks/cyl
+FILL011  DS    0H
+         XC    CAMLST,CAMLST           Clear OBTAIN parameter list
+         MVI   CAMLST,X'C1'            CAMLST SEARCH
+         LA    R0,LOCDSN               DSN should be BTL for MVS380
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,LOCVOL
+         ST    R0,CAMLST+8             Option 3
+         LA    R0,DS1FMTID             Format 1 DSCB
+         ST    R0,CAMLST+12            Option 4
+         OBTAIN CAMLST                 OBTAIN for DSCB2 or 3
+         LTR   R15,R15                 Obtain OK ?
+         BNZ   FILL999                 No. READY
+         XC    FORMAT2,FORMAT2
+         CLC   DS1PTRDS,=XL5'0'        No DSCB 2 or 3?
+         BE    FILL013                 Branch
+         MVC   CCHHR,DS1PTRDS          Save CCHHR of DSCB 2 or 3
+         XC    CAMLST,CAMLST           Clear OBTAIN parameter list
+         MVI   CAMLST,X'C0'            CAMLST
+         MVI   CAMLST+1,X'80'                 SEEK
+         LA    R0,CCHHR
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,LOCVOL
+         ST    R0,CAMLST+8             Option 3
+         LA    R0,AREA2                Format 2 area
+         ST    R0,CAMLST+12            Set in CAMLST SEEK
+         ST    R0,FORMAT2              Save ADCON Area2
+         OBTAIN CAMLST                 OBTAIN for DSCB2 or 3
+         XC    FORMAT3,FORMAT3
+         CLC   AREA2+135(5),=XL5'0'    Another DSCB for the data set?
+         BE    FILL013                 No: branch
+         MVC   CCHHR,AREA2+135         Save CCHHR 2nd DSCB
+         LA    R0,AREA3                Format 3 area
+         ST    R0,CAMLST+12            Set in CAMLST
+         ST    R0,FORMAT3              Save ADCON Area3
+         OBTAIN CAMLST                 OBTAIN for 2nd DSCB
+FILL013  DS    0H
+         IC    R15,DS1NOEPV            # extents on volume
+         CVD   R15,DWB                 To packed
+         MVC   DEXT,=X'40202120'       Move edit mask
+         ED    DEXT,DWB+6              Edit the result
+         XR    R4,R4                   Clear register
+         IC    R4,DS1CREDT             Year of creation date
+         CVD   R4,DWB                  Convert to packed
+         UNPK  CREAT(2),DWB            Unpack year
+         OI    CREAT+1,X'F0'           Clear sign
+         ICM   R4,3,DS1CREDT+1         Days of creation date
+         CVD   R4,DWB                  Convert to packed
+         UNPK  CREAT+3(3),DWB          Convert to zoned
+         OI    CREAT+5,X'F0'           Clear sign
+         MVI   CREAT+2,C'.'            Move period
+         XR    R4,R4                   Clear register
+         IC    R4,DS1REFD              Year of reference date
+         CVD   R4,DWB                  Convert to packed
+         UNPK  REFDT(2),DWB            Unpack year
+         OI    REFDT+1,X'F0'           Clear sign
+         ICM   R4,3,DS1REFD+1          Days of reference date
+         CVD   R4,DWB                  Convert to packed
+         UNPK  REFDT+3(3),DWB          Convert to zoned
+         OI    REFDT+5,X'F0'           Clear sign
+         MVI   REFDT+2,C'.'            Move period
+         TM    DS1DSORG+1,DS1ACBM      VSAM data set?           @bandke
+         BNO   *+14                    If not
+         MVC   DSORG,=C'VSAM'          Mark VSAM data set
+         B     DSORGEND                Bypass test DSORG
+         TM    DS1DSORG,DS1DSGIS       Dsorg=IS ?
+         BNO   *+14                    Test next function
+         MVC   DSORG,=C'IS  '          Dsorg=IS
+         B     DSORGEND                End of test
+         TM    DS1DSORG,DS1DSGPS       Dsorg=PS ?
+         BNO   DSORGDA                 Next DSORG if not
+         MVC   DSORG,=C'PS  '          Physical sequential
+*
+         AIF   (NOT &OS390).NOSMS1
+         AIF   (NOT &SMS).NOSMS1
+         TM    DS1SMSFG,DS1STRP        Is it s striped data set?   @sms
+         BNO   DSORGEND                No: branch                  @sms
+         MVC   DSORG,=C'E/SQ'          Mark 'Extended Sequential'  @sms
+.NOSMS1  ANOP
+         B     DSORGEND                End of test
+DSORGDA  DS    0H
+         TM    DS1DSORG,DS1DSGDA       Dsorg=DA ?
+         BNO   *+14                    Next DSORG test
+         MVC   DSORG,=C'DA  '          Direct access
+         B     DSORGEND                End of DSORG test
+         TM    DS1DSORG,DS1DSGPO       Dsorg=PO ?
+         BNO   DSORGUND                DSORG undefined
+         MVC   DSORG,=C'PO  '          Partitioned
+*
+         AIF   (NOT &OS390).NOSMS2
+         AIF   (NOT &SMS).NOSMS2
+         TM    DS1SMSFG,DS1PDSEX       HFS data set                @sms
+         BNO   *+14                    No: branch                  @sms
+         MVC   DSORG,=C'HFS '          OMVS Posix data set         @sms
+         B     DSORGEND                Branch                      @sms
+         TM    DS1SMSFG,DS1PDSE        Is it a PDS/E?              @sms
+         BNO   DSORGEND                NO: BRANCH                  @sms
+         MVC   DSORG,=C'POE '          Mark PDSE in listing        @sms
+.NOSMS2  ANOP
+         B     DSORGEND                End of dsorg test
+DSORGUND DS    0H
+         MVC   DSORG,=C'UND '          No valid DSORG
+DSORGEND DS    0H
+         MVC   SCALO,DS1SCALO          Copy DS1SCALO for RPFVTOC1
+         TM    DS1RECFM,X'C0'          RECFM Undefined?
+         BNO   RECF                    Test next RECFM
+         MVC   RECFM(4),=C'U   '       Recfm=u
+         B     RECEND
+RECF     TM    DS1RECFM,X'80'          Fixed ?
+         BNO   RECV                    Test next RECFM
+         MVI   RECFM,C'F'              Fixed
+         TM    DS1RECFM,X'10'          Blocked ?
+         BNO   RECFS                   No: proceed
+         MVI   RECFM+1,C'B'            Mark blocked
+RECFS    TM    DS1RECFM,X'08'          Standard blocks ?
+         BNO   RECFA                   No: proceed
+         MVI   RECFM+2,C'S'            Standard
+         B     RECEND
+RECFA    TM    DS1RECFM,X'04'          ASA control chars ?
+         BNO   RECFBM                  No: proceed
+         MVI   RECFM+2,C'A'            Asa
+         B     RECEND
+RECFBM   TM    DS1RECFM,X'02'          Mach control char ?
+         BNO   RECEND                  No: proceed
+         MVI   RECFM+2,C'M'            Mach cc
+         B     RECEND
+RECV     TM    DS1RECFM,X'40'          Variable
+         BNO   RECUND                  No valid RECFM
+         MVI   RECFM,C'V'              Fixed
+         TM    DS1RECFM,X'10'          Blocked ?
+         BNO   RECVS                   No: proceed
+         MVI   RECFM+1,C'B'            Mark blocked
+RECVS    TM    DS1RECFM,X'08'          Spanned blocks ?
+         BNO   RECVA                   No: proceed
+         MVI   RECFM+2,C'S'            Standard
+         B     RECEND
+RECVA    TM    DS1RECFM,X'04'          Asa control chars ?
+         BNO   RECVBM                  No: proceed
+         MVI   RECFM+2,C'A'            Asa
+         B     RECEND
+RECVBM   TM    DS1RECFM,X'02'          Mach control char ?
+         BNO   RECEND                  No: proceed
+         MVI   RECFM+2,C'M'            Mach cc
+         B     RECEND
+RECUND   MVC   RECFM(4),=C'UND '
+RECEND   DS    0H
+         XR    R9,R9                                            @bandke
+         ICM   R9,3,DS1LRECL           Lrecl                    @bandke
+         MVC   LRECL,=X'402020202120'  Move edit pattern
+         CVD   R9,DWB                  Convert to decimal
+         ED    LRECL(6),DWB+5          Edit into LRECL
+         XR    R9,R9                   Clear register           @bandke
+         ICM   R9,3,DS1BLKL            Blksize                  @bandke
+         MVC   BLKSIZE,=X'402020202120' Move edit pattern
+         CVD   R9,DWB                  Convert to decimal
+         ED    BLKSIZE(6),DWB+5        Edit into record
+*
+*        Calculate space per extent
+*
+         LA    R2,DS1EXT1              Point to first extent
+         SR    R5,R5
+         LA    R9,3                    3 extents from FORMAT1 DSCB
+         BAL   R14,EXTENT
+         BCT   R9,*-4
+         LA    R1,LIST                 List address
+         L     R3,0(,R1)               1st entry in list
+         LTR   R3,R3                   Another DSCB?
+         BZ    FORM111                 No: no DSCBs anymore
+         CLI   44(R3),C'3'             Format 3
+         BNE   FORM107                 No: skip
+         LR    R2,R3                   Yes: format3 to reg2
+         BAL   R14,FORM109             Compute extents
+FORM107  LA    R1,LIST                 List address
+         L     R4,4(,R1)               2nd entry in list
+         LTR   R4,R4                   Another DSCB
+         BZ    FORM111                 No,total
+         CLI   44(R4),C'3'             Format 3
+         BNE   FORM111                 No,total
+         LR    R2,R4                   Yes: format3 to reg 2
+         BAL   R14,FORM109             Compute extents
+         CLC   DS3PTRDS-IECSDSL3(5,R4),=XL5'0' More F3DSCBs chained ?
+         BE    FORM111                 No: branch
+         MVC   CCHHR,DS3PTRDS-IECSDSL3(R4) move cchhr next DSCB
+         XC    CAMLST,CAMLST           Clear OBTAIN parameter list
+         MVI   CAMLST,X'C0'            CAMLST
+         MVI   CAMLST+1,X'80'                 SEEK
+         LA    R0,CCHHR
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,LOCVOL
+         ST    R0,CAMLST+8             Option 3
+         LA    R0,AREA3                Format 3 Area
+         ST    R0,CAMLST+12            A(Area) in CAMLST to receive F3
+         OBTAIN CAMLST                 OBTAIN for DSCB2 or 3
+         B     FORM107                 Branch
+         EJECT
+*
+*        Extents from Format3 DSCB  R2 ---> A(F3DSCB)
+*
+FORM109  DS    0H
+         ST    R14,SAVE14F             Save register
+         LA    R9,4
+         LA    R2,4(,R2)
+         BAL   R14,EXTENT
+         BCT   R9,*-4                  First four extents
+         LA    R2,1(,R2)               Skip f3 format id
+         LA    R9,R9                   Remaining nine extents
+         BAL   R14,EXTENT
+         BCT   R9,*-4
+         L     R14,SAVE14F             Restore register
+         BR    R14                     Return
+         SPACE 5
+*
+*        Calculate unused space
+*
+FORM111  DS    0H
+         CVD   R5,DWB                  Cum tracks
+         MVC   TRK(6),=X'402020202120' Pattern over field
+         ED    TRK(6),DWB+5            Edit the result
+         MVC   UNUSED+3(3),=C'N/A'
+         TM    DS1DSORG+1,DS1ACBM      Skip VSAM                @bandke
+         BO    FILL900                 Exit
+         LH    R3,DS1LSTAR             Relative adress unused
+         BCTR  R5,0
+         SR    R5,R3
+         C     R5,=F'0'                Negative ?
+         BL    FILL900                 Yes: next entry in CTGWKA
+         CVD   R5,DWB                  Convert to decimal
+         MVC   UNUSED,=X'402020202120' Move edit pattrn
+         ED    UNUSED(6),DWB+5         Edit the result
+         B     FILL900                 Read next record
+FILL900  DS    0H
+         LA    R1,NEXTENT(,R10)
+         ST    R1,COMMLAST             New Last record pointer
+         LA    R10,2*NEXTENT(,R10)     Next entry in workspace (2 recs)
+         L     R1,COMWRKND             End of EDIT workspace
+         SL    R1,=A(2*NEXTENT)        Minus 2 entries (= 1 line)
+         CR    R10,R1                  Compare with COMWRKND
+         BL    FILL999                 No.
+         LA    R6,4                    Return code 4, truncated
+FILL999  DS    0H
+         LR    R15,R6                  Return code
+         LM    R2,R9,R29FILL           Restore registers 2-9
+         LM    R12,R14,R1214FIL        Restore registers 12-14
+         BR    R14                     Return
+         TITLE 'Accumulate the extents of the data set'
+EXTENT   DS    0H
+*
+*        Register  2, Address of the extent description in the
+*                     format1 or format3 DSCB.
+*                     Layout:
+*                     byte 0 = extent identifier.
+*                     byte 1 = extent sequence number.
+*                     bytes 2 - 5  = lower limit CCHH.
+*                     bytes 6 - 9  = upper limit CCHH.
+*                  5, cumulative # tracks.
+*                 14, return address.
+*
+         CLI   0(R2),0                 No extent ident in the field?
+         BE    EXTEND                  Yes: EXIT
+         MVC   DWB(8),2(R2)            Move extent boundaries
+         LH    R4,DWB+4                Upper CC in register 8
+         SH    R4,DWB                  Minus lower CC
+         MH    R4,TRKCYL               Make tracks from the cylinders
+         AH    R4,DWB+6                Add upper HH
+         SH    R4,DWB+2                Minus lower HH
+         LA    R4,1(,R4)               + 1
+         AR    R5,R4                   Add to total tracks
+         LA    R2,10(,R2)              Point to next extent
+EXTEND   BR    R14                     Return
+         TITLE 'Not modified constants'
+*
+TYPETAB  DS    0H                      devtyp4 + trks/cyl
+         DC    X'08',AL1(20)           2314
+         DC    X'09',AL1(19)           3330
+         DC    X'0A',AL1(12)           3340
+         DC    X'0B',AL1(30)           3350
+         DC    X'0C',AL1(12)           3375
+         DC    X'0D',AL1(19)           3330-1
+         DC    X'0E',AL1(15)           3380
+         DC    X'0F',AL1(15)           3390
+TYPEEND  EQU   *
+#TYPES   EQU   (TYPEEND-TYPETAB)/2
+*
+         LTORG  ,
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area RPFLISTC
+R29FILL  DS    8F                      Save area R2-R9 FILLEDIT
+R1214FIL DS    3F                      Save area R12-R14 FILLEDIT
+LCTWKSZ  DS    F                       Length of CTGWKA (64K)
+ACTGWKA  DS    F                       Address of CTGWKA
+CAMLST   DS    XL16                    CAMLST SEEK, SEARCH and NAME
+*
+DWB      DS    D                       Work field
+SAVE14F  DS    F                       Reg.14 FORM109 routine
+TRKCYL   DS    H                       # tracks/cylinder
+DSNCNTR  DS    PL5                     # of found data sets with 'hlq'
+LIST     DS    0F
+FORMAT2  DC    A(AREA2)
+FORMAT3  DC    A(AREA3)
+         DS    0D
+         IECSDSL1 (1)
+CCHHR    DS    CL5                     For CAMLST SEEK
+*
+AREA2    DS    CL144
+AREA3    DS    CL144
+*
+         DS    0D
+LOCAREA  DS    CL2
+LOCTYPE  DS    CL4                     Device type
+LOCVOL   DS    CL6                     Volume
+         DS    CL253                   Rest of LOCAREA
+LOCDSN   DS    CL44
+*
+INDEXLEN DS    F                       Length of index SUPERLOCATE
+INDEXNM  DS    CL44                    Index to search SUPERLOCATE
+*
+*        CTGPL is the CATALOG Parameter list to perform the
+*        SUPER LOCATE
+*
+CTGPL    DS    0D
+* --------------------------------------------------------------------
+CTGOPTN1 DS    XL1                 FIRST OPTION INDICATOR
+CTGBYPSS EQU   X'80'               BYPASS
+CTGMAST  EQU   X'40'               VERIFY MASTER PASSWORD
+CTGCI    EQU   X'20'               VERIFY CONTROL INDICATOR
+CTGUPD   EQU   X'10'               VERIFY UPDATE
+CTGREAD  EQU   X'08'               VERIFY READ
+CTGNAME  EQU   X'04'               1 - 44-BYTE NAME OR VOLSER
+*                                  0 - ENTRY ID NUMBER
+CTGCNAME EQU   X'02'               1 - 44-BYTE NAME
+*                                  0 - ACB ADDRESS
+CTGGENLD EQU   X'01'               GENERIC LOCATE REQUEST
+* --------------------------------------------------------------------
+CTGOPTN2 DS    XL1                 SECOND OPTION INDICATOR
+CTGEXT   EQU   X'80'               EXTEND (UPDATE)
+CTGERASE EQU   X'40'               ERASE (DELETE)
+CTGSMF   EQU   X'40'               WRITE SMF (LSPACE)
+CTGREL   EQU   X'40'               RELEASE (UPDATE)
+CTGGTALL EQU   X'40'               CONCAT SEARCH (LISTCAT)
+CTGPURG  EQU   X'20'               PURGE (DELETE)
+CTGVMNT  EQU   X'20'               VOLUME MOUNT CALLER
+CTGRCATN EQU   X'20'               RTN CAT NAME (GLOC)
+CTGGTNXT EQU   X'10'               GET NEXT (LIST CTLG)
+CTGDISC  EQU   X'08'               DISCONNECT (DELETE)
+CTGOVRID EQU   X'04'               ERASE OVERRIDE (DELETE)
+CTGSCR   EQU   X'02'               SCRATCH SPACE (DELETE)
+*    X'01' - RESERVED
+* --------------------------------------------------------------------
+CTGOPTN3 DS    XL1                 THIRD OPTION INDICATOR
+CTGFUNC  EQU   X'E0'               HIGH ORDER THREE BITS DEFINE
+*                                  FUNCTION
+*   LOCATE     -   001* ****
+CTGLOC   EQU   X'20'               LOCATE - BITS ON
+*   LSPACE     -   010* ****
+CTGLSP   EQU   X'40'               LSPACE - BITS ON
+*   UPDATE     -   011* ****
+CTGUPDAT EQU   X'60'               UPDATE - BITS ON
+*   CMS FUNCTION - 100* ****
+CTGCMS   EQU   X'80'               CMS FUNCTION - BITS ON
+*
+CTGSUPLT EQU   X'10'               SUPER LOCATE
+CTGGDGL  EQU   X'08'               GDG LOCATE FUNCTION (CTGWAGB IN
+*                                       CTGWA)
+CTGSRH   EQU   X'04'               0 - SEARCH MASTER CAT ONLY
+*                                  1 - SEARCH OS CAT FIRST
+CTGNUM   EQU   X'02'               0 - SEARCH BOTH CATALOGS
+*                                  1 - SEARCH ONE CATALOG
+CTGAM0   EQU   X'01'               VSAM REQ VERSUS NONVSAM
+* --------------------------------------------------------------------
+CTGOPTN4 DS    XL1                 FOURTH OPTION INDICATOR
+CTGLBASE EQU   X'80'               LOCATE GDG BASE ONLY
+CTGDOCAT EQU   X'40'               DO NOT OPEN NEEDED CATLG
+CTGNPROF EQU   X'20'               NO (RAC) PROFILE SHOULD BE
+*                                  DEFINED OR DELETED
+CTGCOIN  EQU   X'10'               CONTROLLER INTERCEPT REQUESTED
+CTGBYPMT EQU   X'08'               BYPASS SECURITY PROMPTING TO
+*                                       SYSTEM OPERATOR
+CTGTIOT  EQU   X'04'               CALLER OWNS SYSZTIOT EXCLUSIVE
+*        BITS 6-7 RESERVED
+* --------------------------------------------------------------------
+CTGENT   DS    0A                  USER ENTRY ADDRESS OR POINTER
+*                                  TO VOLUME SERIAL NUMBER(LSPACE)
+* --------------------------------------------------------------------
+CTGFVT   DS    A                   FVT ADDRESS (DEFINE, ALTER)
+* --------------------------------------------------------------------
+CTGCAT   DS    0A                  CATALOG POINTER
+* --------------------------------------------------------------------
+CTGCVOL  DS    A                   CVOL PTR (SUPER LOCATE)
+* --------------------------------------------------------------------
+CTGWKA   DS    A                   WORKAREA ADDRESS
+* --------------------------------------------------------------------
+CTGDSORG DS    CL2                 DATA SET ORG (SUPER LOCATE)
+*   BITS 0-4 DEFINE ORGANIZATION
+CTGOPTNS EQU   X'FC'               TOP 6 BITS
+*   DEFINE          - 0000 1*** **** ****
+CTGDEFIN EQU   X'08'               DEFINE
+*   ALTER           - 0001 0*** **** ****
+CTGALTER EQU   X'10'               ALTER
+*   DELETE          - 0001 1*** **** ****
+CTGDELET EQU   X'18'               DELETE
+*   LIST CATALOG    - 0010 0*** **** ****
+CTGLTCAT EQU   X'20'               LIST CATALOG
+*   CONVERTV        - 0011 0*** **** ****
+CTGCNVTV EQU   X'30'               CONVERTV
+*   FORMAT 2        - **** *1** **** ****
+CTGF2WKA EQU   X'04'               FORMAT-2 WORK AREA (FULLWORD LENGTH)
+*                                  - ADDED WITH MVS/ESA
+*
+*   BITS 6-15 RESERVED
+* --------------------------------------------------------------------
+CTGTYPE  DS    CL1                 ENTRY TYPE-LISTCAT,DELETE
+CTGTDATA EQU   C'D'                DATA - D
+CTGTINDX EQU   C'I'                INDEX - I
+CTGTALIN EQU   C'A'                ALIEN - A
+CTGTUCAT EQU   C'U'                USER CATALOG - U
+CTGTVOL  EQU   C'V'                VOLUME - V
+CTGTCL   EQU   C'C'                CLUSTER - C
+CTGTMCAT EQU   C'M'                MASTER CATALOG - M
+CTGTGBS  EQU   C'B'                GDG BASE - B
+CTGTANM  EQU   C'X'                ALIAS BASE - X
+CTGTPGSP EQU   C'P'                PAGE SPACE - P
+* --------------------------------------------------------------------
+CTGNOFLD DS    XL1                 NUMBER FIELD POINTERS
+CTGDDNM  DS    0A                  DD NAME ADDRESS
+CTGNEWNM DS    0A                  NEWNAME ADDRESS - ALTER
+CTGFDBK  DS    XL2                 SUPER LOCATE FEEDBACK
+CTGFBFLG DS    XL2                 SUPER LOCATE FLAGS
+CTGPAR   EQU   X'80'               PARALLEL MOUNT - SUPER LOC
+CTGKEEP  EQU   X'40'               FORCED KEEP = SUPER LOCATE
+CTGGDGB  EQU   X'20'               GDG BASE LOCATED
+CTGNGDSN EQU   X'10'               GDG NAME GENERATED
+*   BITS 4-15 RESERVED
+* --------------------------------------------------------------------
+CTGJSCB  DS    0A                  JSCB ADDRESS
+CTGPSWD  DS    A                   PASSWORD ADDRESS
+CTGWALEN DS    0F                  WORK AREA LENGTH (FORMAT 2)
+CTGFIELD DS    A                   FIELD POINTERS - MAY BE MORE THAN 1
+CTGPLLEN EQU   *-CTGPL             LENGTH OF CTG WITH ONE FIELD POINTER
+* =====================================================================
+WORKL    EQU   *-WORKAREA              Length of working storage
+*
+VTOCAREA DSECT                         Entry IN workspace
+PREFIX   DS    CL8                     contains linenumber and flags
+DSN      DS    CL44                    Data set name
+         DS    C
+STARTADR DS    CL16                    Start address
+MULT     DS    C                       Contains a '+' if multivol. ds
+VOL      DS    CL6                     Volume
+         DS    C
+TYPE     DS    CL4                     UCB type
+         DS    C
+SMS      DS    CL3                     SMS  (YES or NO)
+OPER     DS    C                       Operation code (see RPFVTOC1)
+         DS    CL2
+PREFIX2  DS    CL8                     Characteristics line
+NODSN    DS    CL27                    Filler
+CREAT    DS    CL6                     data set creation date
+         DS    C
+REFDT    DS    CL6                     last reference date
+         DS    C
+DSORG    DS    CL4
+RECFM    DS    CL4
+LRECL    DS    CL6
+         DS    C
+BLKSIZE  DS    CL6
+DEXT     DS    CL4                     Number of extents
+TRK      DS    CL6                     Data set size in tracks
+UNUSED   DS    CL6                     Unused space in data set
+         DS    CL1
+SCALO    DS    CL1                     Copy of first byte of DS1SCALO
+*                                      used in RPFVTOC1
+*
+         TITLE 'DSECT''s'
+COMMAREA RPFCOMM
+F3DSCB   DSECT
+         IECSDSL1 (3)
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3                       Address of DSN enty in CTGWKA
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10                      Address of 176 byte entry
+*                                      in the EDIT workspace
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12                      1st base register
+R13      EQU   13                      Address of working storage
+R14      EQU   14
+R15      EQU   15
+         END

@@ -1,0 +1,8 @@
+         MACRO
+&NAME    RPFSA24 &REG=14
+&NAME    TM    COMMOS,X'93'            MVS/XA OR LATER?
+         BNO   SA&SYSNDX.1             NO: NO SWITCH NEEDED
+         LA    &REG,SA&SYSNDX.1        CLEAR AM31 BIT
+         DC    Y(11*256+&REG)          BSM 0,XX
+SA&SYSNDX.1 DS    0H
+         MEND

@@ -1,0 +1,89 @@
+         MACRO
+&NAME    CSR   &MF=
+         GBLB  &CSRSW1,&CSRSW2
+         AIF   (T'&MF EQ 'O').LABEL1
+         AIF   ('&MF' EQ 'L').LABEL2
+         AIF   ('&MF' EQ 'E').LABEL1
+         MNOTE 8,'INVALID VALUE FOR MF'
+         MEXIT
+.LABEL1  ANOP
+         AIF   (&CSRSW1).LABEL9
+&CSRSW1  SETB  1
+         TITLE 'Calculate screen row and column from given SBA'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        CSR    Calculate Row number on screen from a given SBA       *
+*               The address of the SBA (without the order) is         *
+*               Register 1                                            *
+*               Upon exit, the answer (the address of the row number) *
+*               will be returned in register 1 or a suitable return   *
+*               code will be set in register 15.                      *
+*               Register 11 points to the RPFCOMM area                *
+*                                                                     *
+*---------------------------------------------------------------------*
+CSR      CSECT
+         USING COMMAREA,R11
+         USING WORKAREA,R13
+         STM   R2,R14,RCSR             Save registers
+         BALR  R12,0                   Base register
+         USING *,R12
+         BAL   R5,SBA                  Convert SBA to row/column
+         LTR   R15,R15                 Rc= 0?
+         BNZ   CSR10                   No: use default
+         XR    R15,R15                 Rc= 0 - line found
+         B     CSR99
+CSR10    DS    0H
+         LA    R15,4                   Rc= 4 - use default
+         B     CSR99
+CSR99    DS    0H
+         LM    R2,R14,RCSR             Restore registers
+         BR    R14                     Return to caller
+*
+*        Convert an SBA from the TGET ASIS to a row/column
+*        A(SBA) is in register 1 (without order)
+*
+SBA      DS    0H
+         XR    R15,R15                 Clear register
+         ICM   R15,3,0(R1)             SBA into register
+         TM    0(R1),X'40'             2nd bit on in SBA?
+         BNO   SBA25                   No: 14 bit SBA, r15 contains
+*                                      already the correct offset
+*        If bit 1 of the SBA is on (X'40'),
+*        we have a 12 bit SBA of an offset of 4095 or below.
+*        If bit 1 is off, we have a 14 bit SBA of an offset
+*        of 4096 to 16383.
+*
+SBA02    DS    0H
+*
+*        Decompose 12 bit SBA - SBA is in register 15
+*
+         SLDL  R14,24                  Convert
+         SLL   R15,2                          address
+         SRDL  R14,6                                 to
+         SRL   R15,20                                  offset
+SBA25    DS    0H
+         XR    R14,R14                 Clear even register
+         D     R14,COMMCOLS            Divide by screen width
+         LA    R14,1(,R14)             Plus 1
+         ST    R14,COL                 Column number (bin)
+         LA    R15,1(,R15)             Plus 1
+         ST    R15,ROW                 Row number (bin)
+         LA    R1,ROW                  Load the answer
+         XR    R15,R15                 RC= 0
+SBA99    DS    0H
+         BR    R5
+         LTORG ,
+         AIF   (T'&MF EQ 'O').LABEL2
+         DROP  ,
+.LABEL2  ANOP
+         AIF   ('&MF' EQ 'E').LABEL9
+.LABEL3  ANOP
+         AIF   (&CSRSW2).LABEL9
+&CSRSW2  SETB  1
+*------- ----- ----------------------- Work fields SBA
+RCSR     DS    13F                     Save registers CSR
+ROW      DS    F                       Row number (BIN)
+COL      DS    F                       Column number (BIN)
+*------- ----- ----------------------- SBA'S
+.LABEL9  ANOP
+         MEND

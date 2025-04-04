@@ -1,0 +1,541 @@
+RPFUTIL  TITLE 'RPF utility menu'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFUTIL  (RPF option 3).                      *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFMAIN                                       *
+*                                                                     *
+*        Function:      Present a menu to perform Utility functions.  *
+*                       The functions are:                            *
+*                       00. Reset ISPF/RPF stats of members in a      *
+*                           PDS(E) (RPFPDS with $COMISPF flag on)     *
+*                       01. Invoke the library manager (RPFPDS)       *
+*                       02. Create or delete a data set (RPFALLOC)    *
+*                       03. Move or copy data sets or members         *
+*                           (RPFMVCPY).                               *
+*                       04. Manipulate with VTOC's (RPFVTOC)          *
+*                       05. Perform librarian maintenance (RPFLIB)    *
+*                       06. Execute the OUTPUT processor (RPFOUT)     *
+*                       07. Interactive monitor program (IM)          *
+*                           Thanks to Greg Price                      *
+*                       08. Search data sets for strings (RPFSRCH)    *
+*                       09. Invoke Rick Fochtman's Archiver (RPFARCH) *
+*                                                                     *
+*        Registers:  Register 12 is the base register.                *
+*                    Register 13 points to the WORKAREA, within the   *
+*                                first 72 bytes the save area.        *
+*                    Register 11 is the pointer to RPFCOMM control blk*
+*                                                                     *
+*        Change log:                                                  *
+*        Nov 13,2002 RPr  Add 7 color support in screen               *
+*        Feb 15,2003 RPr  Extend command area and =n/=n.n cmd added@rp1
+*        Jan 09,2004 RPr  Option 3 (move/copy) added               @rp2
+*        Dec 17,2018 RPr  Make RPF suitable for MVS/380 and up   @rpa01
+*        Mar 23,2019 Rpr: Support added for all kinds of 3270 screens *
+*                         up to 62 lines x 160 columns (3290)         *
+*        Aug 15,2019 Rpr: Add option 0, reset ISPF/RPF statistics     *
+*        Nov 02,2019 Rpr: Add option 8, SEARCH function to search a   *
+*                         string in a sequential data set or PDS(E).  *
+*        Dec 24,2019 Rpr: Link to IMON treated as a 'real' TSO        *
+*                         commmand processor.                         *
+*        Apr 03,2020 Rpr: Option 9 deleted                            *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Jun 30,2020 RPr: Option 9, ARCHIVER added                    *
+*        Aug 25,2020 RPr: Return code RPFSRCH handled correctly.      *
+*        Nov 08,2020 RPr: Test returncode RPFPDS                      *
+*        Jun 05,2021 RPr: Test returncode RPFOUT                      *
+*        Jun 10,2021 RPr: RPFUTIL made reentrant and reusable         *
+*        Mar 03,2024 RPr: Do not display 'Invalid option' if no data  *
+*                         entered.                                    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFUTIL  CSECT
+RPFUTIL  AMODE 31                                                @rpa01
+RPFUTIL  RMODE 24                                                @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFUTIL,R12             Provide addressability
+         L     R11,0(,R1)              Pickup A(RPFCOMM)
+         GETMAIN R,LV=WORKL            Acquire storage for our workarea
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1
+         B     START
+         DC    CL8'&SYSDATE',CL8'&SYSTIME'
+START    DS    0H
+         USING WORKAREA,R13            Make WORKAREA addressable
+         USING COMMAREA,R11            Get addressability
+         ST    R11,PARMLST             Save address of RPFCOMM
+         LA    R0,SCREEN               Utility panel output
+         LA    R1,SCR1LENF             Length of screen
+         L     R2,=V(SCR1TXTF)         Utility panel input
+         LR    R3,R1                   Has the same length
+         MVCL  R0,R2                   Copy to dynamic area
+         MVI   BUFFER,C' '             Clear TGET buffer ...
+         MVC   BUFFER+1(9),BUFFER      ... + overflow area
+         LA    R10,SCREEN              Reload its address
+         USING SCR1TXTF,R10            Make utility panel addressable
+         MVC   BLDLPR(2),=X'0001'      Populate
+         MVC   BLDLPR+2(2),=X'000E'            BLDL list
+         MVC   CMDL,=H'12'             Populate
+         MVC   IMPROG,=CL8'IM'                 command
+         XC    CMDOFFS,CMDOFFS                        buffer IM
+         MVC   SCR1UID(7),COMMUSER     TSO UserID into screen
+         MVC   SCR1TXT(1),COMMCMD      Move EW or EWA
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         LM    R4,R5,COMMSIZE          Pickup lines
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1TXT+3
+*
+         LA    R0,2                    Row 2
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R2C1+1
+*
+         LA    R0,3                    Row 3
+         LA    R1,62                   Column 62
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R3C62+1
+*
+         L     R0,COMMSIZE             Row Last
+         LA    R1,2                    Column 2
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC2+1
+*
+         LA    R3,R4C4                 Point to data area in screen
+         LA    R4,4                    First data line is line4
+         LA    R5,11                   Laste data line is lineX
+         LA    R6,2                    Space between option lines
+         CLC   COMMSIZE,=F'26'         At least 26 lines
+         BH    SCR03                   Yes: carry
+         LA    R6,1                    Else no space in option lines
+SCR03    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,4                    Parameter column (4)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+*
+         LA    R4,0(R6,R4)             Increase line number
+         LA    R3,R4C4L(,R3)           Next line in screen
+         BCT   R5,SCR03                And do complete screen
+*
+*        end of screen setup           ------------------------------*
+*
+PUT1     DS    0H
+         XC    COMMPRM,COMMPRM         Clear COMMPRM in RPFCOMM
+         TM    COMMFLG2,$COMRTRN       Is RETURN indicator on?
+         BO    END                     Yes: return to MAIN
+         CLI   COMUTIPT,C' '           Option was selected in Main?
+         BE    PUT1O                   No: good, branch
+         MVC   BUFFER(1),COMUTIPT      Move option
+         MVI   COMUTIPT,C' '           and reset
+         OI    COMMFLG2,$COMRTRN       Set return indicator in RPFCOMM
+         B     FUNC0                   Scan the option directly
+PUT1O    DS    0H
+         LA    R1,SCR1TXT              Screen address
+         LA    R0,SCR1LEN              Length
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write Utility menu
+GET1     DS    0H
+         LA    R5,BUFFER               Output formatted buffer
+         L     R3,COMMSCR              Load screen address
+         LR    R1,R3                   Duplicate area address
+         LA    R0,40                   Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LR    R4,R1                   and save length
+*
+*        Do a TGET ASIS to obtain the AID byte
+*        After the TGET ASIS remove the SBA's from the output
+*
+         CLI   0(R3),X'F3'             PFK3 (END) pressed?
+         BE    END                     Yes: terminate RPFUTIL
+         CLI   0(R3),X'C3'             PFK15 (END) pressed?
+         BE    END                     Yes: terminate RPFUTIL
+         XR    R2,R2                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   PUT1                    <= 0: redisplay
+         LA    R3,3(,R3)
+         LA    R5,BUFFER               Output address
+*
+*        Input screen is pointed to by R3
+*        Output screen is pointed to by R5
+*        The next section (to CONV099) will remove all the SBA's
+*        In the section CONV100 through CONV101, will be checked
+*        if data is entered. If so, place the options in pos.1 of
+*        the buffer.
+*
+CONV001  CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV099                 All done
+CONV003  LA    R3,3(,R3)               Skip 3 bytes input
+         SH    R4,=H'2'                Decrease BCT register
+         BNP   CONV099                 <=0: terminate conversion
+         BCT   R4,CONV001              Test next byte
+CONV099  LR    R1,R2                   Output length in register 1
+         LTR   R1,R1                   Nothing received?
+         BZ    PUT1                    Display menu if so
+         LA    R1,5                    Max length of BUFFER
+         LA    R2,BUFFER               Address of receive buffer
+CONV100  DS    0H
+         CLI   0(R2),X'40'             Blank?
+         BNE   CONV101                 No: option found in BUFFER
+         LA    R2,1(,R2)               Next byte in BUFFER
+         BCT   R1,CONV100              Loop until option found
+         B     PUT1                    No options entered, redisplay
+CONV101  DS    0H
+         MVC   BUFFER,0(R2)            Move options to beginning
+         CLI   BUFFER,X'6E'            Review code in area?
+         BE    PUT1                    Review screen
+         MVI   MSG1,C'-'               Clear
+         MVC   MSG1+1(L'MSG1-1),MSG1         message
+         TR    BUFFER,COMTCAPS         Translate to uppercase
+         B     FUNC0                   Select function
+ERR1     MVC   MSG1,ERR1TXT            Msg: Invalid option
+ERR2     NI    COMMFLG2,255-$COMRTRN   Reset return ind. Stay in UTIL
+         B     PUT1
+ERR6     MVC   MSG1,ERR6TXT            Msg: I/O error
+         NI    COMMFLG2,255-$COMRTRN   Reset return ind. Stay in UTIL
+         B     PUT1
+FUNC0    DS    0H
+         CLI   BUFFER,C'0'             Reset ISPF/RPF stats?
+         BNE   FUNC1                   No: test next function
+         OI    COMMFLG3,$COMISPF       Tell RPFPDS to reset
+*                                      ISPF/RPF stats only
+         L     R15,EPDATAL             Load Entry point RPFDATAL
+         LA    R1,PARMLST              RPFCOMM
+         BALR  R14,R15                 Invoke RPFDATAL
+         B     *+4(15)                 Branchlist
+         B     FUNC0U                  Rc=0; invoke RPFPDS to reset
+         B     FUNC0U                  Rc=4; invoke RPFPDS to reset
+         B     FUNC0A                  Rc=8; Exit entered
+FUNC0A   DS    0H
+         NI    COMMFLG3,255-$COMISPF   Flag off
+         B     FUNC1V                  Go to menu
+FUNC0U   DS    0H
+         MVC   EPLOC,=CL8'RPFPDS'      Module name to link to
+         BAL   R14,LINK                Invoke RPFPDS
+         NI    COMMFLG3,255-$COMISPF   Flag off
+         LTR   R15,R15                 Rc RPFPDS = 0?
+         BNZ   ERR6                    No: issue the error
+         TM    COMMFLG2,$COMRTRN       Return indicator set?
+         BO    PUT1                    Yes: exit at once (Via PUT1)
+         B     FUNC0                   Else: re-display RESET menu
+FUNC1    CLI   BUFFER,C'1'             Library Functions?
+         BNE   FUNC2                   No: test next function
+         NI    COMMFLG3,255-$COMEDIT   Reset EDIT flag, this flag can
+*                                      be set by the APPEND cmd in EDIT
+         L     R15,EPDATAL             Load Entry point RPFDATAL
+         LA    R1,PARMLST              RPFCOMM
+         BALR  R14,R15                 Invoke RPFDATAL
+         B     *+4(15)                 Initiate branchlist
+         B     FUNC1U                  Rc = 0, OK
+         B     FUNC1U                  Rc = 4, no member name: good
+         B     FUNC1V                  Rc = 8, PF3/PF15 pressed
+FUNC1U   DS    0H
+         MVC   EPLOC,=CL8'RPFPDS'      Module name to link to
+         BAL   R14,LINK                Invoke RPFPDS
+         LTR   R15,R15                 Rc RPFPDS = 0?
+         BNZ   ERR6                    No: issue the error
+         TM    COMMFLG2,$COMRTRN       Return indicator set?
+         BO    PUT1                    Yes: exit at once (Via PUT1)
+         B     FUNC1                   Else: re-display Library menu
+FUNC1V   DS    0H
+         B     PUT1                    Re-disp menu depend. of $COMRTRN
+FUNC2    CLI   BUFFER,C'2'             Create/Delete data set ?
+         BNE   FUNC3                   No: test next function
+         XC    COMPALLO,COMPALLO       No parameter list for RPFALLOC
+         MVC   EPLOC,=CL8'RPFALLOC'    Module name to link to
+         BAL   R14,LINK                And link to RPFALLOC
+         B     PUT1                    Re-disp menu depend. of $COMRTRN
+FUNC3    CLI   BUFFER,C'3'             Move/Copy?
+         BNE   FUNC4                   No: test next function
+         MVC   EPLOC,=CL8'RPFMVCPY'    Module name to link to
+         BAL   R14,LINK                And link to RPFMVCPY
+         B     PUT1                    Re-disp menu depend. of $COMRTRN
+FUNC4    CLI   BUFFER,C'4'             VTOC Manipulation ?
+         BNE   FUNC5                   No: test next function
+         MVC   EPLOC,=CL8'RPFVTOC'     Module name to link to
+         BAL   R14,LINK                And link to RPFVTOC
+         B     PUT1                    Re-disp menu depend. of $COMRTRN
+FUNC5    CLI   BUFFER,C'5'             Librarian maintenance?
+         BNE   FUNC6                   No: test next function
+         MVC   EPLOC,=CL8'RPFLIB'      Module name to link to
+         BAL   R14,LINK                And link to RPFLIB
+         B     PUT1                    Re-disp menu depend. of $COMRTRN
+FUNC6    CLI   BUFFER,C'6'             OUTPUT processor?
+         BNE   FUNC7                   No: test next function
+         MVC   EPLOC,=CL8'RPFOUT'      Module name to link to
+         BAL   R14,LINK                And link to RPFOUT
+         B     *+4(15)                 Execute branchlist
+         B     PUT1                    Re-disp menu depend. of $COMRTRN
+         B     FUNC6E                  Not APF authorized
+FUNC6E   MVC   MSG1,ERR2TXT            Msg: not APF authorized
+         NI    COMMFLG2,255-$COMRTRN   Reset return indicator - RPFCOMM
+         B     PUT1
+FUNC7    CLI   BUFFER,C'7'             Reserved?
+         BNE   FUNC8                   No: test next function
+         MVC   BLDLPROG,=CL8'IM'       Program name
+         BLDL  0,BLDLPR                Try to find IMON
+         LTR   R15,R15                 Found?
+         BZ    FUNC7A                  Yes: branch
+         MVC   MSG1,ERR4TXT            Msg: Module IMON not found
+         NI    COMMFLG2,255-$COMRTRN   Reset return indicator - RPFCOMM
+         B     PUT1
+FUNC7A   DS    0H
+         L     R1,COMMCPPL             Command parse parameter list
+         USING CPPL,R1                 Address it
+         L     R2,CPPLECT              Get ECT address
+         USING ECT,R2
+         MVC   IMCBUF,CPPLCBUF         Save old CPPLCBUF address
+         LA    R0,IMCMD                Command buffer
+         ST    R0,CPPLCBUF             Move command 'IM'
+         MVI   ECTSWS,X'00'            Clear flags in ECT
+         MVC   ECTPCMD,=CL8'IM'        Move command name
+         RPFSA24                       Switch to amode 24        @rpa01
+         LINK  EP=IM                   Greg Price' IMON          @rpa01
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R1,COMMCPPL             Load CPPL address of RPFCOMM
+         MVC   CPPLCBUF,IMCBUF         And restore CPPLBUF pointer
+         DROP  R1,R2
+         AIF   (&SVS).SVS1
+         STFSMODE ON,INITIAL=NO,NOEDIT=YES
+.SVS1    ANOP
+         B     PUT1                    Re-disp menu depend. of $COMRTRN
+FUNC8    CLI   BUFFER,C'8'             Reserved?
+         BNE   FUNC9                   No: test next function
+         OI    COMMFLG3,$COMSRCH       Mark Search string in RPFDATAL
+         L     R15,EPDATAL             Load Entry point RPFDATAL
+         LA    R1,PARMLST              RPFCOMM
+         BALR  R14,R15                 Invoke RPFDATAL
+         NI    COMMFLG3,255-$COMSRCH   Reset flag
+         B     *+4(15)                 Branchlist
+         B     FUNC8U                  Rc=0; invoke RPFSRCH
+         B     FUNC8U                  Rc=4; also good, invoke RPFSRCH
+         B     FUNC1V                  Rc=8; PF03/15 pressed
+FUNC8U   DS    0H
+         MVC   EPLOC,=CL8'RPFSRCH'     Module name to link to
+         BAL   R14,LINK                And link to RPFSRCH to scan
+         B     *+4(15)                 Branchlist
+         B     FUNC81                  Rc = 0, OK
+         B     FUNC82                  Rc = 4, error in RPFSRCH
+FUNC81   DS    0H
+         TM    COMMFLG2,$COMRTRN       Return indicator in RPFCOMM set?
+         BO    PUT1                    Return (via PUT1)
+         B     FUNC8                   Re-display SEARCH menu
+FUNC82   DS    0H
+         MVC   MSG1,COMMPRM            Move message from RPFSRCH
+         B     ERR2                    Process error
+FUNC9    DS    0H
+         CLI   BUFFER,C'9'             Process Archiver (file 147)
+         BNE   FUNCX                   No: test next function
+         MVC   BLDLPROG,=CL8'ARCHIVER' Move Archiver program name
+         BLDL  0,BLDLPR                Try to find Archiver program
+         LTR   R15,R15                 Found?
+         BZ    FUNC9A                  Yes: branch
+         MVC   MSG1,ERR5TXT            Msg: Archiver not installed
+         NI    COMMFLG2,255-$COMRTRN   Stay in Utility menu
+         B     PUT1
+FUNC9A   DS    0H
+         MVC   EPLOC,=CL8'RPFARCH'     Module name to link to
+         BAL   R14,LINK                And link to RPFARCH to archive
+         B     PUT1
+FUNCX    CLI   BUFFER,C'X'             End selected?
+         BNE   FUNC#                   No: test on =n or =n.n      @rp1
+         B     END                     Yes: exit and return        @rp1
+FUNC#    CLI   BUFFER,C'='             '=' selected ?              @rp1
+         BNE   FUNCQ                   No: test on question mark   @rp1
+         MVC   CMAINOPT,BUFFER+1       Move option after '='       @rp1
+         OI    COMMFLG2,$COMRTRN       Set return indicator        @rp1
+         B     END                     Exit                        @rp1
+FUNCQ    DS    0H                                                  @rp1
+         CLI   BUFFER,C'?'             Reset screen command?
+         BE    PUT1                    Yes: redisplay menu
+         B     ERR1                    Else: Invalid option
+END      LR    R3,R13                  Load our work area
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release work area
+         RETURN (14,12),RC=0           Return to RPFMAIN
+*
+         TITLE 'Link to modules'
+LINK     DS    0H
+         ST    R14,LINKR14             Save register 14
+         RPFSA24                       Switch to amode 24        @rpa01
+         LA    R1,PARMLST              A(RPFCOMM)
+         XC    LNKLST,LNKLST           Clear EP and DCB address
+         LINK  EPLOC=EPLOC,SF=(E,LNKLST)
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R14,LINKR14             Restore register 14
+         BR    R14                     Return
+*
+ERR1TXT  DC    CL25'---------- Invalid option'
+ERR2TXT  DC    CL25'------ Not APF authorized'
+ERR4TXT  DC    CL25'--- Module IMON not found'
+ERR5TXT  DC    CL25'-- ARCHIVER not installed'
+ERR6TXT  DC    CL25'--------------- I/O error'
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         LTORG ,
+         DROP  ,
+         TITLE 'Utility menu'
+SCR1TXTF CSECT
+         DC    X'27'                   Escape character TPUT FULLSCR
+SCR1TXT  DC    X'00C21100001DF8'       EW or EWA, r1, c1
+SCR1LNE  DC    CL79'------------------------------ RPF Utility menu ---C
+               ----------------------------'
+         ORG   SCR1LNE+54
+MSG1     DS    CL25
+         ORG   ,
+SC1R2C1  DC    X'110000',X'1DF8',C'Option  ===>',X'1DC113'         @rp1
+         DC    C'     ',X'1DF0'                                    @rp1
+SC1R3C62 DC    X'110000',AL3(GREEN),C'User ID - ',AL3(TURQ) r03,c62+
+SCR1UID  DS    CL7
+R4C4     DC    X'110000',AL3(WHITE),C'0  '          r04,c04+
+         DC    AL3(TURQ)
+         DC    CL13'RESET'
+         DC    AL3(GREEN)
+         DC    CL40'Reset/Delete ISPF/RPF statistics'
+R4C4L    EQU   *-R4C4
+         DC    X'110000',AL3(WHITE),C'1  '          r05,c04+
+         DC    AL3(TURQ)
+         DC    CL13'LIBRARY'
+         DC    AL3(GREEN)
+         DC    CL40'Library (PDS) Functions'
+         DC    X'110000',AL3(WHITE),C'2  '   r06,c4+
+         DC    AL3(TURQ)
+         DC    CL13'DATA SET'
+         DC    AL3(GREEN)
+         DC    CL40'Create or Delete data sets'
+         DC    X'110000',AL3(WHITE),C'3  '   r07,c4+
+         DC    AL3(TURQ)
+         DC    CL13'MOVE/COPY'                                     @rp2
+         DC    AL3(GREEN)
+         DC    CL40'Move or copy data sets or members'
+         DC    X'110000',AL3(WHITE),C'4  '   r08,c4+
+         DC    AL3(TURQ)
+         DC    CL13'DS LIST'
+         DC    AL3(GREEN)
+         DC    CL40'Perform VTOC and catalog functions'
+         DC    X'110000',AL3(WHITE),C'5  '   r09,c4+
+         DC    AL3(TURQ)
+         DC    CL13'LIBRARIAN'
+         DC    AL3(GREEN)
+         DC    CL40'Perform LIBRARIAN maintenance'
+         DC    X'110000',AL3(WHITE),C'6  '   r10,c4+
+         DC    AL3(TURQ)
+         DC    CL13'OUTPUT'
+         DC    AL3(GREEN)
+         DC    CL40'Invoke the output processor'
+         DC    X'110000',AL3(WHITE),C'7  '   r11,c4+
+         DC    AL3(TURQ)
+         DC    CL13'IMON'
+         DC    AL3(GREEN)
+         DC    CL40'Interactive monitor of Greg Price'
+         DC    X'110000',AL3(WHITE),C'8  '   r12,c4+
+         DC    AL3(TURQ)
+         DC    CL13'SEARCH'
+         DC    AL3(GREEN)
+         DC    CL40'Search data sets for strings of data'
+         DC    X'110000',AL3(WHITE),C'9  '   r13,c4+
+         DC    AL3(TURQ)
+         DC    CL13'ARCHIVER'
+         DC    AL3(GREEN)
+         DC    CL40'Process archived members'
+         DC    X'110000',AL3(WHITE),C'X  '   r14,c4+
+         DC    AL3(TURQ)
+         DC    CL13'EXIT'
+         DC    AL3(GREEN)
+         DC    CL34'Return to MAIN menu'
+RLASTC2  DC    X'110000',AL3(TURQ)           Row last c2+
+         DC    C'Hit ',AL3(WHITE),C'PF03/15 ',AL3(TURQ)
+         DC    C'to return to the RPF main menu'
+SCR1LEN  EQU   *-SCR1TXT
+SCR1LENF EQU   *-SCR1TXTF              Length of TPUT FULLSCR
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+         TITLE 'Dynamic workarea of RPFUTIL'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area RPFUTIL
+DBW      DS    D                       For CVB/CVD instructions
+SBAR0R1  DS    D                       Workfield RCTOSBA
+IMCBUF   DS    F                       Save command buffer for IM
+PARMLST  DS    F                       To contain address RPFCOMM
+LNKLST   DS    XL8                     LINK SF=L
+EPLOC    DS    CL8                     Module to link to
+LINKR14  DS    F
+SCREEN   DS    CL(SCR1LENF)
+BLDLPR   DS    0F                      Align on fullword
+         DC    AL2(1)                  One entry
+         DC    AL2(14)                 Length of directory entry
+BLDLPROG DC    CL8'IM'                 Name of Greg Price's IMON
+         DC    XL6'00'                 TTRKZC
+*
+IMCMD    DS    0CL12
+CMDL     DC    H'12'                   Length of command buffer
+CMDOFFS  DC    H'0'                    Offset to first operand     @rp1
+IMPROG   DC    CL08'IM'                Command name                @rp1
+*
+BUFFER   DS    CL5                     \___ Buffer + overflow area ___/
+         DS    CL5                     /                              \
+WORKL    EQU   *-WORKAREA              Length of work area
+         TITLE 'RPFCOMM area'
+COMMAREA RPFCOMM
+         IKJCPPL
+         IKJECT
+         END

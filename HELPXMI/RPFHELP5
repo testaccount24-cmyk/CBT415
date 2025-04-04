@@ -1,0 +1,1292 @@
+Date:      Module:  Description:
+---------- -------- ------------------------------------------------------
+2025-02-17 Release  Version 2, release 0.0 available. Changelog:
+2025-02-17 RPFVTOC1 Fix wrong last record pointer in DS-LIST after
+                    browse of a data set.
+2024-02-14 RPFARCH  Fix wrong data in ITEM on entry screen, if ITEM
+                    is deleted with Erase EOF.
+Important! RPF      RPF version 2 is converted to use TSO data set
+                    naming conventions.
+                    If a data set name is entered without quotes,the
+                    data set name will be prefixed with the TSO prefix,
+                    set by the TSO command PROFILE PREFIX(prefix) or
+                    with the TSO UserID (default).
+                    If the data set name is entered between quotes,
+                    the data name is treated as fully qualified.
+                    The end quote is optional.
+2024-12-27 RPFMAIN  TSO prefix in main menu.
+2024-12-24 RPFEDIT  Primary command 'COPY' with line commands 'A'
+                    (After), 'TT' (before first line) or 'BB' (after
+                    last line) supported to copy a data set or member.
+2024-12-22 RPF      The profile VSAM cluster is obsolete and replaced
+                    by the partitioned data set allocated with DD-name
+                    ISPPROF. This data set is also used by ISPF.
+                    RPF uses 3 members: @RPFPROF, @RPFRTRV and @RPFTSO.
+2024-12-20 RPFMVCPY Move/Copy: SORT SIZE added and sort fields fixed.
+2024-12-19 RPFPDS   Member list: primary command "S member" also
+                    possible if the list is not sorted on member name.
+2024-12-14 RPFEDIT  If the message 'Bottom of data reached' is met
+                    after a F(IND) primary command and a subsequent
+                    F(IND) is given immediately after the previous
+                    F(IND), search will start from the beginning.
+2024-12-04 RPFOUT   Display status after a job has been deleted.
+2024-12-01 RPFEDITL This is now the module that loads all data for
+                    RPFEDIT. Including empty data.
+           RPFEDIT  Creating input screen moved to RPFEDITL
+---------- -------- ------------------------------------------------------
+2024-11-21 Release  Version 1, release 9.9 available. Changelog:
+2024-11-14 RPFEDIT  Allow primary command CUT with MM-MM line commands
+                    and give options SAVE, CANCEL or END if data
+                    changed and AUTOSAVE=N.
+2024-11-13 RPFBRO   Browse: ISPF vv.mm in header if present.
+2024-10-16 RPFARCH  Abend0C4 fixed in line command 'N' if the EDIT
+                    workspace is located above the 16MB line.
+2024-09-28 RPFEDIT  If only a blank is added in an inserted line, keep
+                    that line.
+2024-09-27 RPF      The prefix '&' of the primary commands is deleted.
+2024-09-24 RPFARCH  Fix selection of always the latest version of an
+                    ITEM, if more than 1 version is in the ARCHIVE.
+                    With line-command E,B or V.
+2024-09-18 RPFARCH  Display the true name, GROUP, SUBGROUP, TYPE and
+                    VERSION of the aliases and aliases are made
+                    non selectable for line commands.
+2024-09-17 RPF      Increase message length from 22 to 25 bytes.
+2024-09-16 RPFBRO   All NON-VSAM data sets supported but truncated to
+                    record length=255.
+           RPFARCH  Display aliases and delete alias too with 'D'
+                    line command before true name.
+           RPFOUT   Display all jobs if a duplicate is detected
+---------- -------- ------------------------------------------------------
+2024-09-15 Release  Version 1, release 9.8 available. Changelog:
+           RPF      Minor errors fixed and minor improvements made.
+2024-09-05 RPFV     Stand alone DS-LIST: ex. PREFIX(SYS1.L) possible
+                    to display all data sets starting with SYS1.L.
+2024-09-02 RPFDATAL Entry screen: =n or =n.n (fast jump) supported
+                    in Member name or Data set name field.
+2024-08-26 RPFSRCH  Fix ABEND0C4 in SEARCH of RECFM=V(B) sequential
+                    data set.
+2024-08-24 RPFBRO   Browse: scroll from/to cursor if the cursor is in
+                    the data.
+2024-08-21 RPFDATAL Entry screen: Option menu deleted.
+2024-08-14 RPFARCH  Archiver: Line command 'N' added to browse the
+                    notes of an item if present and add an '*' after
+                    VERSION in ITEM list if Notes are present.
+2024-08-13 RPF      Panvalet interface (modules RPFPAN00 and RPFPAN01)
+                    deleted.
+                    OS VS/2 Release 1 (SVS) supported in most modules.
+2024-08-10 RPFEDIT  After a succesful 'F' primary command, place cursor
+                    on the line where the string is found, if on the
+                    same screen.
+2024-08-05 RPFEDIT  Multiple line commands 'D' supported in 1 screen.
+2024-08-04 RPFPFK   Accept Erase EOF and DEL key.
+2024-08-01 RPFBRO   Browse: Fix omission of error messages if an
+                    error occurs.
+2024-07-31 RPFMVCPY MOVE/COPY: set cursor on field in error if a
+                    problem is detected.
+2024-07-25 RPFPDS   Fix IO-error after selecting a member, which
+                    is created by EDIT CREATE primary command.
+2024-07-24 RPFLISTC DS-LIST: module rewritten. Use Super Locate instead
+                    of link to IDCAMS.
+2024-06-28 RPFBRO   Fix browse error and ABEND0C4 in HEX mode if a record
+                    with variable length contains no data.
+2024-06-02 RPFINIT  Option 'CAPS AUT/ON/OFF' read from profile.
+           RPFDEF   Option 'CAPS AUT/ON/OFF' in session defaults
+                    screen and written on the RPF profile cluster.
+2024-06-01 RPFDATAL Fix test of first character of member name
+           RPFPDS   Fix test of first character of member name in
+                    primary command 'S member' in EDIT mode.
+2024-05-23 RPFARCH  LEFT and RIGHT commands added and ITEM time
+                    on screen if RIGHT aligned or on wide screen.
+2024-05-22 RPFSTAT  Weird number of in-use lines fixed if the EDIT
+                    workspace is empty and PREFIX added.
+2024-05-17 RPFVTOC1 DS-LIST: primary command TSO added.
+2024-05-02 RPFEDIT  Place cursor immediately in inserted or repeated
+                    line without changing the address of the first
+                    line on screen.
+           RPFPDS   Fix **END** line issues if members inserted.
+           RPFMVCPY Fix abusive 'Conflicting DCB parameters' if BLKSIZE
+                    From > BLKSIZE To on Fixed or variable PDS's.
+                    Allocate SYSUT3 and SYSUT4 in IEBCOPY.
+           RPFVTOC1 Allocate SYSUT3 and SYSUT4 in IEBCOPY (compress).
+---------- -------- ------------------------------------------------------
+2024-05-01 Release  Version 1, release 9.7 available. Changelog:
+2024-04-03 RPFPDS   Reset ISPF stats: Line command 'B' (Browse) added.
+2024-04-02 RPFMVCPY Remove limitation of LRECL up to 4096 for sequential
+                    datasets and allow copy RECFM=U sequential datasets.
+2024-04-01 RPFALLOC Field 'Other dataset' added in option 3.2.
+2024-03-30 RPFBRO   Browse: *** Bottom of data *** line added.
+2024-03-28 RPFMVCPY **END** and number of members added in last line
+                    of member selection list and message 'Scroll had
+                    no effect' deleted.
+           RPFLIB   Librarian: **END** + number of modules added in last
+                    line of module list and message 'Scroll had no
+                    effect' deleted.
+2024-03-27 RPFPDS   **END** and number of members (and number of records)
+                    added in last line of selection list, and
+                    message 'Scroll had no effect' deleted.
+2024-03-22 RPFARCH  Archiver: **END** + number of items added in last
+                    line of item-list and message 'Scroll had no effect'
+                    deleted.
+2024-03-21 RPFVTOC1 **END** + number of datasets and number of tracks
+                    added in last line of DS-List. Message
+                    'Scroll had no effect' deleted.
+2024-03-18 RPFFIND  EDIT: F X'hh..' nnn checks the wrong column.
+                    This is fixed.
+2024-03-14 RPFSAVE  Remove trailing blanks in short V(B) records.
+2024-03-08 RPFEDIT  *** Top of data *** line added and message
+                    'Scroll had no effect' deleted.
+2024-03-07 RPFPDS   Member selection list: primary commands LEFT
+                    and RIGHT added to show all the information of
+                    the member selection list on narrow screens.
+2024-03-05 RPFVTOC1 DS-list: primary commands LEFT and RIGHT added
+                    to show all information of the DS-list on
+                    narrow screens.
+2024-03-03 RPFMAIN  Do not display 'Invalid option' if no data
+           RPFUTIL  entered.
+2024-02-23 RPFPDS   ABEND0C4 fixed in primary command L if the
+                    member selection list is sorted on SIZE.
+           RPFBRO   Fix possible ABEND0C4 during initial repeat FIND.
+2024-02-22 RPFMAIN  Fix excessive 'Dataset/member saved' messages.
+2024-02-20 RPFVTOC1 Primary command HELP added in DS-LIST and HELP
+                    info screen added.
+2024-01-20 RPFTSO   ABEND30A fixed if underlying TSO command fails.
+2024-01-14 RPFPDS   Invoke TSOEXEC XMIT or XMIT depending if TSOEXEC
+                    is installed or not.
+2024-01-01 RPFINIT  Option 'Confirm member delete' read from profile.
+           RPFDEF   Option 'Confirm member delete' in session defaults
+                    screen and written on the RPF profile cluster.
+                    ABEND0C4 fixed if wrong NULLS or wrong REPLACE
+                    entered in option 0.1.
+           RPFDATAL Option 'Confirm member delete' in screen in
+                    option 3.1 (Library management).
+           RPFPDS   Members deleted without confirmation if option
+                    'Confirm member delete' = <blank>
+           RPFARCH  Items deleted without confirmation if option
+                    'Confirm item delete' = <blank> and this option set
+                    in entry screen.
+2023-12-12 RPFBRO   Primary command ASCII added in HELP screen.
+---------- -------- ------------------------------------------------------
+2023-11-18 Release  Version 1, release 9.6 available. Changelog:
+2023-11-17 RPFEDIT  ABEND0C4 fixed with L +/- very large number.
+2023-11-14 RPFEDIT  EDIT: Primary commands LEFT and RIGHT can be
+                    used to scroll from the cursor position if the
+                    scroll amount is set to CSR.
+                    The default BNDS values covers only the visible
+                    part of the screen.
+2023-11-03 RPFBRO   No DOWN command needed anymore before a repeat
+                    FIND, this known issue is fixed.
+2023-11-01 RPFBRO   Add primary command ASCII to toggle translate
+                    from ASCII to EBCDIC or not in BROWSE.
+2023-10-31 RPFVTOC1 Support UNZIP of .ZIP datasets before browsing.
+2023-09-28 RPFARCH  RENAME of ITEM/GROUP/SUBGROUP/TYPE supported
+                    with line command R.
+2023-09-27 RPFARCH  VERSION not substituted if a DELETE was issued
+                    for ITEMs without GROUP,SUBGROUP and TYPE. Fixed.
+2023-09-21 RPFBRO   Fix wrong message after trying to submit a non
+                    card image dataset.
+2023-09-08 RPFMAIN  Dataset to be edited/browsed/PDS unallocated if
+                    main menu displayed to prevent wait conditions.
+2023-08-09 RPFVTOC1 Fix 'invalid command' during UP and DOWN primary
+                    commands and fix '=n' primary command in DSLIST.
+---------- -------- ------------------------------------------------------
+2023-08-01 Release  Version 1, release 9.5 available. Changelog:
+2023-07-22 RPFJCL   Skip scan of empty inserted lines.
+2023-07-10 RPFVTOCx Primary command REFRESH added to refresh the
+                    dataset- or VTOC list.
+2023-07-02 RPFASM   Add BLKSIZE=6050 instead of 121 to SYSPRINT of
+                    XF, or H-assembler.
+2023-07-01 RPF      Operand FAST deleted.
+2023-06-30 RPFBRO   In storage BROWSE changed in direct BROWSE to
+                    save storage requirements. No storage limitation
+                    if browsing large files. Primary commands LABEL
+                    and L are deleted.
+2023-06-23 RPFMVCPY Support COPY of sequential datasets and check
+                    authorization for UPDATE access.
+                    Retry from I/O error input.
+           RPFPDS   Member list: Primary command RESET renamed into
+                    REFRESH.
+2023-06-05 RPFMVCPY Avoid msg IEB105I if membername contains invalid
+                    characters, if all members are copied.
+2023-06-01 RPFEDIT  Fix CUT/REPLACE/CREATE/A error if data contains
+                    invalid characters.
+2023-05-11 RPFVTOC1 Do not place volume serial into data enty screen.
+           RPFCHNG  Fix errornous translate X'00' to blank.
+           RPFDATAL Do not skip to dataset list if entering a volume
+                    below the datasetname to avoid wrong selection.
+2023-05-06 RPFEND   Module made re-entrant and reusable.
+2023-05-05 RPFINIT  Splash screen deleted and RPFINIT made re-entrant
+                    and reusable.
+2023-05-03 RPFOUT   Option 'P' prints the output into a VB
+                    dataset with record length 255.
+2023-05-01 RPFMVCPY Command 'SORT CHA' did not properly sort the
+                    date changed. Fixed.
+           RPFPDS   Commands 'SORT CHA' and 'SORT SIZE' did not
+                    properly sort the date changed and SIZE. Fixed.
+2023-04-21 RPFARCH  Selection of ITEMS, GROUPS, SUBGROUPS and
+                    TYPES supported.
+2023-04-08 RPFALLOC RECFM=FA/VA/FM/VM not recognized. Fixed.
+           RPFARCH  RECFM=FA/VA/FM/VM not recognized. Fixed.
+---------- -------- ------------------------------------------------------
+2023-03-15 Release  Version 1, release 9.4 available. Changelog:
+2023-03-13 RPFARSVE Add extra comma's in Archiver UNLOAD statements
+                    if GROUP, SUBGROUP and/or TYPE are omitted.
+           RPFARCH  EDIT/BROWSE/DELETE error fixed if GROUP,
+                    SUBGROUP and/or TYPE are omitted.
+2023-03-07 RPFED    Maximum LINES fixed from 5,000 to 50,000
+           RPFV     Maximum LINES fixed from 5,000 to 50,000
+2023-02-22 RPFTEST  Module made re-entrant and reusable.
+2023-02-19 RPFSAVE  Fix crash after ABENDx37 during CLOSE.
+2023-02-17 RPFVTOC1 Use full length dataset names in the DSLIST
+                    screen, if the screen width is 98 or more.
+2023-02-16 RPFVTOC  Fixed issue if entering '3.4' and an error
+                    occurs, the message was not displayed.
+2023-02-15 RPFARCH  Increase space ARCHDSN to avoid x37 abend.
+2023-02-02 RPFTSO   Do not reset APF authorization if running
+                    authorized and TSO command has been link edited
+                    with AC=1.
+2023-01-01 RPFBRO   Process standard and extended ISPF stats and
+                    increase length counters in print headers.
+2022-12-17 RPFPDS   Primary- and line command 'S' added in PDS
+                    maintenance to browse member (option 3.1).
+2022-12-14 RPFSAVE  Process ISPF stats extended section if number
+           RPFPDS   of lines, number of initial lines and/or
+           RPFMVCPY number of modified lines exceeds 64k lines.
+2022-12-03 RPFVTOC1 Line command 'S' (Info-S) added in DSLIST.
+2022-12-02 RPFVTOC1 ABEND001 fixed with 'A' or 'I' line command in
+                    DSLIST if an I/O error was detected.
+2022-11-30 RPFHCPY  Some issues fixed, allow non card image data and
+                    module made re-entrant and re-usable
+2022-11-27 RPFOUT   Try to run output processor in MVS38J if not
+                    APF authorized.
+2022-11-15 RPFMAIN  Terminal name in main menu.
+2022-10-26 RPFVTOC  Indexed VTOC's are now supported in MVS/XA and
+                    MVS/ESA with DF/DS or DFP installed.
+2022-10-24 RPFOPER  Supports now MVS38J, MVS/XA and MVS/ESA and up.
+---------- -------- ------------------------------------------------------
+2022-10-01 Release  Version 1, release 9.3 available. Changelog:
+2022-09-21 RPFEDIT  Fix incidentally 0C4 abend if editing empty data.
+2022-09-20 RPFDATAL Datasets in selection list can be selected by
+                    pressing ENTER in the line of the selected dataset.
+           HELP     HELP option 1 (Intro) rewritten.
+2022-09-18 RPFPDS   Allow line commands 'E' and 'P' in option 1 (Browse)
+                    Allow line commands 'B', 'V' and 'P' in option 2
+                    (EDIT)
+2022-09-17 RPFDEF   Option 'Assembler program' moved from option 0.1
+                    (OPTIONS) to option 0.4 (ASMDEF)
+2022-09-15 RPFPAN00 DYNALLOC's replaced by IKJDAIR calls.
+           RPFPAN01 DYNALLOC's replaced by IKJDAIR calls.
+2022-09-12 RPFVTOC1 Line command 'A' added to allocate a new dataset,
+           RPFALLOC with inherited DSN, SPACE- and DCB parameters.
+2022-08-11 RPFDATAL 'Ignore case' added in menu in option 3.8,
+                    Search strings of data.
+           RPFSRCH  Match string no matter if upper-, lower- or mixed
+                    case if 'Ignore case' = Y and match string exactly
+                    if 'Ignore case' = N.
+2022-08-09 RPFEDIT  Fix persistency of msg 'Invalid boundaries' in screen.
+2022-08-06 RPFLIB01 DYNALLOC's replaced by IKJDAIR calls and RPFLIB01
+                    made re-entrant and re-usable.
+2022-07-30 RPFARCH  Line command 'V' invokes the editor in VIEW mode.
+2022-07-27 RPFDEF   Test validity AUTOSAVE value in opt. 0.1.
+2022-07-22 RPFEDIT  REPLACE command added along with CC,CB,CT line
+                    commands to replace data sets or members.
+2022-07-19 RPFASM00 Add default source library and default 1st
+                    MACLIB if not present in ISPF profile
+2022-07-18 RPFLIB   Line command 'C' (copy) deleted.
+2022-07-17 RPFEDIT  SAVE command saves in same dataset/member.
+                    CREATE command added along with CC,CB,CT line
+                    commands to create data sets or members.
+2022-06-07 RPFCHNG  Loop fixed if 'C /<blanks>//' given.
+2022-06-05 RPFMVCPY Primary command SORT added (sort on membername).
+2022-06-04 RPFOPER  3 and 4 digit UCB's supported in D UCB command and
+                    type of DASD displayed (e.g. DASD 3350).
+---------- -------- ------------------------------------------------------
+2022-03-31 Release  Version 1, release 9.2 available. Changelog:
+2022-03-23 RPFOUT   Module made re-entrant and re-usable.
+           RPFTSO   Module made re-entrant and re-usable.
+2022-03-18 RPFMVCPY Message 'From/To dataset not in catalg' added.
+2022-03-17 RPFPDS   Add option 'OV' and option 'NX' in the load module
+           RPFMVCPY member selection list if in effect.
+2022-03-11 RPFDATAL 'Skip numbers' added in menu in option 3.8,
+                    Search strings of data.
+           RPFSRCH  Skip search of last 8 bytes of fixed data or first
+                    8 bytes of variable data if 'Skip numbers' = Y or
+                    skip first 6 bytes and last 8 bytes if value = C.
+2022-03-07 RPFVTOC1 VIEW mode supported with line command 'V'.
+           RPFMAIN  PF01 and PF13 key supported in MAIN menu to
+                    invoke HELP function.
+2022-03-06 RPFEDIT  VIEW mode supported.
+           RPFPDS   Line command 'V' invokes the editor in VIEW mode.
+2022-02-08 RPFPDS   Fix wrong SORT CHA and SORT SIZE result.
+2022-02-03 RPFTSO   Reset APF authorization temporary if invoking
+                    a non-APF command processor in MVS38J
+           RPFVTOC1 Compress with IEBCOPY runs now in a non-APF
+                    environment in MVS38J like MVS/ESA and above.
+           RPFMVCPY COPY/MOVE with IEBCOPY runs now in a non-APF
+                    environment in MVS38J like MVS/ESA and above.
+2022-01-28 RPFEDIT  Number of changes counted for RPFSAVE
+           RPFSAVE  ISPF stats modified lines updated from RPFEDIT
+           RPFPDS   ISPF initial size + modified lines placed in
+                    screen if screen width >= 92 + order of stats
+                    entries changed on screen.
+           RPFMVCPY Order of ISPF stats entries changed on screen.
+2022-01-27 RPFSAVE|
+           RPFCHNG| Fix misplacement line number in V(B) data sets.
+           RPFFILL|
+2022-01-26 RPFEDIT  Do not renumber numbered data initially, with
+                    the exception of new datasets/members.
+                    Primary command NONUM changed into NUMBER OFF.
+                    Primary command NUM changed into NUMBER ON.
+2022-01-18 RPFALLOC Module made re-entrant and re-usable.
+2022-01-16 RPFEDIT  Increment line number on screen set to 1.
+           RPFFIND  Operands 'line-1' and 'line-2' deleted in F(IND)
+                    primary command and replaced by 'start column'.
+2022-01-11 RPFVTOC  Module made re-entrant and re-usable and large
+                    volumes supported in OS/390 and z/OS.
+2022-01-03 RPFASM   Fix allocation error include library (INC-Lib).
+---------- -------- ------------------------------------------------------
+2021-12-31 Release  Version 1, release 9.1 available. Changelog:
+2021-12-20 RPFASM00 Module made re-entrant and re-usable.
+2021-12-15 RPFEDIT  Fix update on last line on screen, that was
+                    not marked as changed.
+2021-12-11 RPFASM   DYNALLOC's replaced by IKJDAIR calls and RPFASM
+                    made re-entrant and re-usable.
+2021-12-06 RPFDEF   Module (option 0) made re-entrant and re-usable.
+2021-11-26 RPFEDIT  Redefine the default boundaries (BNDS) as follows:
+                    COBOL data: columns 7-72
+                    Not numbered fixed data: columns 1 - LRECL
+                    Not numbered variable data: columns 1 - LRECL-4 (RDW)
+                    Numbered fixed data: columns 1 - LRECL-8
+                    Numbered variable data: columns 9 - LRECL-4 (RDW)
+2021-11-25 RPFOUT   Increase LRECL from 133 to 255 to prevent ABEND001.
+2021-11-21 RPFARCH  Fix error during SAVE in ARCHIVE after EDIT.
+2021-11-18 RPFMVCPY Module made re-entrant and re-usable.
+2021-11-16 RPFLIB   Module made re-entrant and re-usable.
+2021-11-13 RPFV     New module RPFV, the DSLIST TSO command processor.
+           RPFVTOC  Menu not displayed if called by the RPFV command
+                    processor.
+2021-11-11 RPFTSO   Reset and set APF authorization only in MVS/ESA and
+                    above to prevent 047 abends in MVS38J
+2021-11-10 RPFBRO   Sometimes the separator record missing if browsing
+                    RECFM=U data. This is fixed.
+2021-11-09 RPFSAVE  Fix msg 'Dataset/member saved' missing if EDIT
+                    workspace is saved into a sequential data set.
+2021-11-08 RPFEDIT  Numbered variable data supported with line
+                    numbers in columns 1-8.
+                    Primary command SCOPE renamed into BNDS.
+2021-11-04 RPFED    Fix interception of an I/O error.
+2021-10-01 RPFOPER  Module made re-entrant and re-usable.
+2021-09-30 RPFLIB   Dynamic allocations replaced by IKJDAIR calls.
+2021-09-23 RPFBRO   Module made re-entrant and re-usable.
+2021-09-06 RPFEDIT  Primary commands I 0,n and CO/MO n,m,0 fixed.
+---------- -------- ------------------------------------------------------
+2021-09-01 Release  Version 1, release 9.0 available. Changelog:
+2021-08-19 RPFSRCH  Module made re-entrant and re-usable.
+2021-08-18 RPFMAIN  Substitute BROWSE if trying to EDIT a dataset
+           RPFVTOC1 with RECFM=U.
+2021-08-17 RPFOUT   Module optimized, SSOB dynamically allocated.
+           RPFDEF   Fix display return code of option 0 (defaults).
+2021-08-13 RPFDOC   Module made re-entrant and re-usable and internal
+                    DATE routine replaced by call to RPFCNVDT.
+           RPFSTAT  Module made re-entrant and re-usable and internal
+                    DATE routine replaced by call to RPFCNVDT.
+           RPFHCPY  Internal DATE routine replaced by call to RPFCNVDT.
+           RPFBRO   Internal DATE routine replaced by call to RPFCNVDT.
+2021-08-12 RPFHELP  Module made re-entrant and re-usable.
+                    made dependent of screen size.
+2021-08-09 RPFARCH  Dynamic allocations replaced by IKJDAIR calls and
+                    module made re-entrant and re-usable.
+           RPFARSVE Dynamic allocations replaced by IKJDAIR calls and
+                    module made re-entrant and re-usable.
+2021-07-29 RPFDATAL Search string not blanked after SEARCH in opt. 3.8
+2021-07-27 RPFSAVE  Abend 0C4 fixed if entering option 5 (Archiver).
+2021-07-15 RPFBRO   Screen area moved to a GETMAIN'ed area and
+2021-07-14 RPFPDS   Module made re-entrant and re-usable.
+2021-07-10 RPFALLOC Dynamic allocations replaced by IKJDAIR calls.
+                    DSNTYPE removed and RACHECK/RACROUTE REQUEST=AUTH
+                    added to check authorization before create.
+2021-07-07 RPFFIND  Module made re-entrant and re-usable.
+2021-07-05 RPFVTOC1 Module made re-entrant and re-usable
+2021-07-03 RPFSAVE  Fix wrong entry in PDS (3.1) after (AUTO)SAVE
+                    after 'E' line command.
+---------- -------- ------------------------------------------------------
+2021-07-01 Release  Version 1, release 8.9 available. Changelog:
+2021-06-27 RPF      RPFMAIN, RPFC3270, RPFCHNG, RPFCNVDT, RPFDAIR,
+                    RPFDATAL, RPFED, RPFEDIT, RPFEDITL, RPFFILL,
+                    RPFLISTC, RPFPFK, RPFSAVE, RPFSUB
+                    and RPFUTIL made re-entrant and re-usable.
+                    2 storage contraints fixed by adding FREEPOOL's.
+2021-06-22 RPFSAVE  Fix abend B14-10 after error in EDIT APPEND
+                    primary command, like an I/O error.
+2021-06-21 RPFDAIR  Give RC=40 if BLDL fails with RC=8 (I/O error)
+2021-06-11 RPFEDIT  ABEND0C4 fixed if first the CUT command given and
+                    afterwards the CC line commands.
+2021-06-10 RPFOUT   Test if output processor is APF authorized.
+2021-06-03 RPF      Use ISO date and time in the RPF build and use
+                    ISO dates in the HELP release notes.
+                    Use ISO dates in PDS, MOVE/COPY and Archiver.
+                    All recovery routines examined and updated.
+2021-06-02 RPFASM00 Fix ABEND0C1 if entering a TSO command in browse.
+                    Clear the TSO buffers upon exit.
+2021-05-30 RPFMAIN  Options possible during startup (e.g. RPF 3.4)
+2021-05-29 RPFDEF   SUBMIT=TSO/RPF default removed. SUBMIT is allways
+                    TSO (TSO command processor SUBMIT is invoked).
+2021-05-28 RPFED    Minimum LINES = 200, Maximum = 50,000 lines.
+                    If running AMODE 31, min = 2,000 max = 500,000
+2021-05-26 RPFMVCPY All dynamic allocations replaced by IKJDAIR calls.
+           RPFVTOC  After change dataset prefix, do not reset to default
+                    if calling afterwards during the RPF session.
+2021-05-25 RPFSRCH  Dynamic allocation of PRINT output replaced by
+                    IKJDAIR call.
+2021-05-24 RPFLISTC Dynamic allocation of utility datasets replaced by
+                    IKJDAIR calls.
+2021-05-23 RPFINIT  Use of SYS1.PARMLIB(RPFKEY00) deleted.
+                    Dynamic allocation of profile cluster deleted.
+                    Default EDIT workspace size increased to 7,000 lines.
+           RPFDEF   Dynamic allocation of profile cluster deleted.
+           RPFEND   Dynamic allocation of profile cluster deleted.
+                    The profile cluster is now in //RPFPROF DD statement.
+2021-05-22 RPFASM00 Treat this ISPF foreground assembler monitor as
+                    a 'real' TSO command processor.
+           RPFHELP  The HELP function read the members RPFHELP1-5
+                    from the //SYSHELP concatenation.
+2021-05-21 RPFBRO   SUBMIT function moved to RPFSUB
+           RPF      Dynamic allocation of files for the RPF basic
+                    functions replaced by IKJDAIR calls.
+2021-05-16 RPFDAIR  Do not fill in the volume in the panel in EDIT,
+                    BROWSE, Library (PDS), RESET, SEARCH and MOVE/COPY
+                    if a cataloged dataset is used.
+           RPFVTOC1 If only LEVEL is specified do not fill in volume
+                    in EDIT, BROWSE and member list function (opt 3.4)
+2021-05-14 RPFBRO   F x'hhhh...' or FIND x'hhhh..' supported.
+                    Fix not found matches of 'string' in HEX mode
+                    with 'F' primary command.
+2021-05-13 RPFEDIT  Prohibit 'COBOL ON' primary command if RECFM=V(B).
+                    AUTOSAVE ON/OFF primary command added and
+                    add AUTOSAVE in the PROFILE line.
+                    FORCE operand of SAVE deleted.
+2021-05-06 RPFOUT   Option 0,1,2,3,4 changed into options L,D,P,R,'blank'
+                    to equalize with ISPF.
+2021-05-05 RPFED    ISPF panel library added to invoke RPF functions
+                    in ISPF.
+2021-05-03 RPFEDIT  Warning message issued if CANCEL primary command
+                    is given with outstanding changes.
+---------- -------- ----------------------------------------------------
+2021-05-01 Release  Version 1, release 8.8 available. Changelog:
+2021-04-23 RPFEDIT  Remove keywords 'T', 'Lo' and 'Nul' from header.
+                    Add primary command 'PROF' to display a profile
+                    line Yes or No.
+                    The profile line contains: Numbered: YES/NO
+                    Cobol: ON/OFF, Caps: ON/OFF and Nulls: ON/OFF.
+                    Primary command CAPS renamed into CAPS ON.
+                    Primary command ASIS renamed into CAPS OFF.
+                    Primary command COB renamed into COBOL ON.
+                    Primary command NOCOB renamd into COBOL OFF.
+                    Primary command NULLS renamed into NULLS ON.
+                    Primary command NONULLS renamed into NULLS OFF.
+2021-04-20 RPFEDITL Return code 08 deleted and the rest renumbered.
+                    Flooding I/O error messages fixed.
+2021-04-19 RPFEDIT  RC=24 (workspace empty) and RC=08 (workspace full)
+                    deleted. If workspace is empty, input mode will be
+                    selected. The rest of the returncodes are renumbered.
+                    See option 7.3.
+                    Give msg 'Data set empty' if appended data is empty.
+                    Set data set entry menu in EDIT mode after APPEND
+                    primary command.
+           RPFUTIL  Reset EDIT mode in data entry menu in opt 3.1.
+           RPFSAVE  Fix SAVE panel not populated after ABEND913 in
+                    combination with AUTOSAVE (END command in EDIT).
+2021-03-22 RPFLIB   Test return code after executing 'C' (Copy)
+                    line command.
+2021-03-19 RPFARCH  Change msg 'Invalid cmd' into 'Sel. B,D,E,P'.
+2021-03-17 RPFPDS   Primary command HELP added in memberlist EDIT,
+                    BROWSE, Library and RESET functions.
+2021-03-09 RPFLISTC Fix omission of 3340 dasd.
+2021-02-24 RPFED    Function RPFST added to RESET the ISPF statistics.
+2021-02-18 RPFEDIT  Fix persistency of msg 'Invalid scope' in screen.
+---------- -------- ------------------------------------------------------
+2021-02-05 Release  Version 1, release 8.7 available. Changelog:
+2021-02-01 RPFLIB   Primary command INDEX added to edit a LIBRARIAN
+                    index with the RPF editor (RPFEDIT).
+           RPFDATAL Option 2 (Edit a LIBRARIAN module or index) deleted.
+                    Option 3 (Edit a PANVALET ...) renamed into option P.
+           RPFLIB00 Module deleted. Functions are available in option 3.5.
+           RPF      Minor optimizations made.
+           HELP     Release notes displayed in reverse order.
+2020-12-31 RPFPDS   Fix screen error in RESET command, fix an error
+                    if placing with EDIT the first member into an
+                    empty PDS(E) and check existance of member before
+                    processing any line commands.
+2021-01-28 RPFEDIT  If called from Rick's archive set 'Archive' in
+                    header instead of the data set name.
+           RPFHELP  Allocation HELP and test presence moved to RPFINIT.
+           RPFINIT  Test if HELP data set is present and allocate.
+2021-01-24 RPFARCH  ISPF version/mod should not be inherited anymore.
+2021-01-18 RPFASM   protected against abends in the assember and linkage
+                    editor.
+2021-01-11 RPFEDIT  Easier recovery of x37 abends.
+2021-01-10 RPFED    Keyword LINES with alias SIZE added
+                    and fix I/O error if member is not present.
+2021-01-06 RPFBRO   Subcommand 'TSO' added.
+           RPFPDS   Subcommand 'TSO' added in member selection list
+2020-12-23 RPFOUT   Fix translation to caps of Output class in option 3.6
+2020-12-20 RPFEDIT  Subcommand APPEND rejected if called from the
+                    RPFED or RPFPD command processor.
+2020-12-08 RPFED    ABEND0C4 fixed, because @@SETUP was not called.
+---------- -------- ------------------------------------------------------
+2020-12-03 Release  Version 1, release 8.6 available. Changelog:
+2020-12-02 RPFDATAL Option Line Numbers removed from data entry screen.
+           RPFDEF   Option Line Numbers removed from allocations
+                    and a better allocation screen (opt. 0.2)
+           RPFEDIT  Numbered or not-numbered data will be automatically
+                    detected.
+2020-11-29 RPFED    New module for EDIT, Browse or PDS maintenance
+                    in TSO READY mode or in Wally's ISPF.
+                    Syntax: RPFED 'data set name' VOL(vvvvvv) for EDIT
+                            RPFBR 'data set name' VOL(vvvvvv) for Browse
+                            RPFPD 'data set name' VOL(vvvvvv) for PDS
+2020-11-11 RPFVTOC1 Return code 24 in Uncatalog fixed in subsequent
+                    DELETE's in z/OS in DSLIST.
+2020-11-10 RPFSRCH  Handle I/O error in PDS(E) directory.
+           RPFMVCPY Handle I/O error of input PDS(E) directory.
+2020-11-08 RPFPDS   Test if dataset is partitioned removed and set
+                    return code on open error or IO error.
+           RPFDATAL Test if dataset is partitioned for Reset ISPF
+                    and PDS maintenance.
+           RPFMAIN  Test return code of RPFPDS (open- and IO-error).
+           RPFUTIL  Test return code of RPFPDS (open- and IO-error)
+                    and test return code RPFSRCH
+           RPFVTOC1 Test return code of RPFPDS (open- and IO-error).
+2020-11-03 RPFPDS   Message 'Only S (D) is a valid line cmd' changed
+                    into 'Invalid selection code'.
+---------- -------- ------------------------------------------------------
+2020-10-26 Release  Version 1, release 8.5 available. Changelog:
+2020-10-26 RPF      Option menus deleted in Archiver maintenance,
+                    Archiver save, LIBRARIAN read, LIBRARIAN
+                    maintenance en PANVALET read.
+                    Option X removed from Save, LIBRARIAN update,
+                    PANVALET update, Dataset functions, Data set
+                    selection list and Output.
+2020-10-26 RPFMVCPY Subcommand 'SORT TTR' added in Move/Copy.
+                    Load module attribute RF (Refreshable) added.
+           RPFPDS   Load module attribute RF (Refreshable) added.
+2020-10-20 RPFASM   Change message: Alloc err 1708 into
+                    Dataset not in catalog (the real reason).
+2020-10-18 RPFBRO   Fix blank last screen if # records of dataset is
+                    a multiple of (screensize-3).
+2020-10-16 RPFEDIT  ASIS and CAPS were swapped. Issue is fixed.
+2020-10-12 RPFALLOC DSNTYPE = PDSE added (OS/390 and z/OS only).
+2020-09-29 RPFTSO   Screen pollution fixed if the screen width > 162.
+2020-09-28 RPFARCH  Version included in Archiver DELETE statement.
+           RPFFIND  Repeat find fixed if string is in the last
+                    position in the EDIT boundary (SCOPE).
+           RPF      Option Upper Case removed, automatically detected.
+2020-09-27 RPFDATAL and RPFSAVE: avoid member names with inside
+                    blanks in entry and save screen.
+           RPFALLOC Fix test on PREFIX, LIBRARY and TYPE.
+2020-09-21 RPFOUT   =n or =n.n command (fast jump) supported.
+2020-09-18 RPFBRO   Fix ABEND0C4 in HEX command.
+---------- -------- ------------------------------------------------------
+2020-09-06 Release  Version 1, release 8.4 available. Changelog:
+2020-09-06 RPFPDS   Allow 'P' line command for RECFM=U datasets.
+2020-09-05 RPFARCH  Garbage removed if editing RECFM=V(B) items.
+           RPFBRO   Fix storage constraint if invoked for PRINT.
+2020-09-03 RPFLISTC Include VSAM data sets in DSLIST (opt. 3.4).
+2020-08-26 RPFARCH  Combined date or message in screen.
+2020-08-25 RPFUTIL  Handle return code SEARCH correctly.
+2020-08-23 RPFEDIT  Change flag set after subcommand R (repeat).
+2020-08-14 RPF      Subcommands SCB, SCF, SCL and SCR renamed into
+                    UP, DOWN, LEFT and RIGHT.
+2020-08-13 RPFPDS   Line command 'F', Archiver to VSAM Archive
+                    cluster added.
+           RPFARSVE Archive from from 'F' line command supported
+2020-08-09 RPFVTOC1 Msg: 'Workspace too small' not set, fixed.
+           ALL      RPF heavily optimized, 1,300 lines code saved.
+2020-08-02 RPFDEF   Upper Case and Line Numbers checked for validity
+           ALL      Module RCTOSBA moved to a COPY member
+2020-08-01 RPFARCH  Aliasses Archive skipped in display
+---------- -------- ------------------------------------------------------
+2020-07-02 Release  Version 1, release 8.3 available. Changelog:
+2020-07-22 RPFMCPY  Error first SBA in selection screen fixed.
+2020-07-07 RPFEDIT  Subcommand OSSAVE deleted.
+2020-07-05 RPFARSVE New module to save data in the VSAM Archive
+           RPFSAVE  Option 5, save in Archive cluster added
+2020-07-02 RPFARCH  New module to process Rick Fochtman's ARCHIVER
+                    ARCHIVER is a free component, which can be
+                    downloaded from cbttape.org (file 147).
+           RPFUTIL  Option (3).9 added, process Archive
+           RPFINIT  ARCHIVER VSAM cluster DSN read from RPF profile.
+           RPFDEF   ARCHIVER VSAM cluster DSN can be specified in
+                    option 0.2 and will be saved in the RPF profile.
+2020-06-17 RPFSAVE  Message Alloc failed rc=0004 changed into
+                    Dataset not in catalog (the real reason)
+                    Message Alloc failed rc=0008 changed into
+                    Dataset not on volume (the real reason)
+2020-06-15 RPFDAIR  Return code 24 (seq. dataset with member) deleted
+           RPFEDIT  ABEND0C7 in subsequent EDIT after APPEND fixed.
+2020-06-11 RPFPAN00 Call Panvalet Access Method (PAM) dynamically
+                    and modernize screen.
+           RPFPAN01 Check presence of Panvalet and modernize
+                    screen.
+2020-06-08 RPFDATAL Message Alloc failed rc=0004 changed into
+                    Dataset not in catalog (the real reason)
+                    Message Alloc failed rc=0008 changed into
+                    Dataset not on volume (the real reason)
+           RPFLIB   Message Alloc error 1708 on DS changed into
+                    Dataset not in catalog (the real reason)
+           RPFLIB00 Message Alloc error 1708 on DS changed into
+                    Dataset not in catalog (the real reason)
+---------- -------- ------------------------------------------------------
+2020-06-01 Release  Version 1, release 8.2 available. Changelog:
+2020-05-31 RPF      Dependency of MVS38J usermod ZP60009 removed,
+                    and the fullscreen writes on the screen will
+                    only be executed with a TPUT NOEDIT. If 14 bits
+                    SBA's are used for screens with a size more than
+                    4096. If the screen is 4096 bytes or less, the
+                    TPUT FULLSCR will be executed (the normal TPUT).
+                    This change also makes execution of RPF
+                    possible on TCAM 3270 terminals.
+                    Modules affected:
+                     1. RPFALLOC
+                     2. RPFASM
+                     3. RPFBRO
+                     4. RPFDATAL
+                     5. RPFDEF
+                     6. RPFEND
+                     7. RPFEDIT
+                     8. RPFHELP
+                     9. RPFINIT
+                    10. RPFJCL
+                    11. RPFLIB
+                    12. RPFLIB00
+                    13. RPFLIB01
+                    14. RPFMAIN
+                    15. RPFMVCPY
+                    16. RPFOUT
+                    17. RPFPDS
+                    18. RPFPFK
+                    19. RPFSAVE
+                    20. RPFSTAT
+                    21. RPFTEST
+                    22. RPFTSO
+                    23. RPFUTIL
+                    24. RPFVTOC
+                    25. RPFVTOC1
+2020-05-25 RPFTSO   Fix S306 abend if RPF runs APF-authorized and
+                    delete RPFTSOEX exit.
+---------- -------- ------------------------------------------------------
+2020-05-05 Release  Version 1, release 8.1 available. Changelog:
+2020-05-01 RPFEDIT  Detect COBOL line numbers in col 1-6 and set data
+                    in COBOL mode if these numbers are present.
+2020-04-28 RPFVTOC1 Add Allocation type in Data set information screen
+                    in opt. 3.4 (ABSTR, BLOCK, TRACK or CYLINDER)
+2020-04-21 RPFDATAL Removed test on '.TEXT' data sets for setting EDIT
+                    in Asis mode, because 'Asis' will be detected.
+           RPFEDIT  Allow COB command on a wide screen.
+2020-04-20 RPFEDIT  Mark workspace not changed if only lines are inserted
+                    and mark workspace changed after successful APPEND
+                    subcommand.
+2020-04-12 RPFEDIT  Increase ISPF vv.mm only if data is changed and
+                    set vv to 01 instead of 50 if not present.
+           RPFSAVE  Set ISPF vv to 01 instead of 50 if not present.
+2020-04-06 RPFDATAL Some textual changes in Data entry screen.
+2020-04-04 RPFMAIN  Main menu redesigned.
+2020-04-03 RPFHELP  Unnecessary options in menu deleted
+           RPFDEF                   ,,
+           RPFTEST                  ,,
+           RPFUTIL                  ,,
+           RPFMAIN  7 extra characters added in translate tables
+           RPFMVCPY Better header in Move/Copy screen
+           RPFEDIT  Screen data compressed before display on screen
+           RPFBRO   Screen data compressed before display on screen
+           RPFC3270 3270 data stream compression routine added
+           RPFOPER  Fix 'invalid command' loop if RPFOPER runs stand alone
+           RPFTSO   Set STLINENO to line 1 if RPF runs on a 24x80 screen.
+           RPF      Support screens up to 16384 bytes with a
+                    maximum linecount of 99 and a maximum width
+                    of 200 bytes.
+---------- -------- ------------------------------------------------------
+2020-04-01 Release  Version 1, release 8.0 available. Changelog:
+2020-03-21 All      A lot of minor changes made and code optimized.
+                    86 characters added to the translate tables
+2020-03-19 RPFOUT   Fix the use of the DEL key in the screen
+2020-03-10 RPFDATAL Give msg 'Data set name missing' if data set is not
+                    specified in opt 1, 3.0, 3.1 and 3.8
+           RPFSAVE  Give msg 'Data set name missing' if data set is not
+                    specified.
+2020-03-02 RPFEDIT  Subcommand OVLY ln1,ln2,ln3 added (overlay) and
+                    line commands C -> OO -- OO and C -> O added.
+2020-02-28 RPFEDIT  Parse error &'subcommand' fixed.
+2020-02-27 RPFEDIT  Fix screen convert error if SCOPE and/or Scroll
+                    field is completely erased.
+2020-02-23 RPFDATAL Change Allocation RC=32 to Member not found
+           RPFASM   Change Allocation RC=32 to Member not found
+2020-02-21 RPFEDIT  Support scroll HALF in RIGHT and LEFT subcommands
+                    leave cursor on same line after successful LEFT or
+                    RIGHT subcommand.
+2020-02-20 RPFSAVE  Screen a little redesigned and only A-Z in the
+                    member name are translated to CAPS.
+2020-02-19 RPFBRO   Translate only a-z in command field to upper case
+           RPFPDS   Translate only a-z in command field to upper case
+2020-02-17 RPFBRO   HELP screen improved, has now the same size as
+                    the other screens.
+2020-02-16 RPFEDIT  In CAPS mode translate only the letters a-z to CAPS
+2020-02-15 RPFEDIT  DSNAME(member) in header and 'Xlate' and 'Nonum'
+                    in header deleted. 'Top' changed into 'T' and
+                    'Asis' changed into 'Lo'.
+2020-02-09 RPF      Unnecessary option APPEND deleted, because this
+                    option is covered by the APPEND subcommand of RPFEDIT
+2020-02-08 RPFSAVE  Fix error if invoked after 'END' in RPFEDIT
+                    with the APPEND flag ($EDTCOPY) on.
+---------- -------- ------------------------------------------------------
+2020-02-06 Release  Version 1, release 7.9 available. Changelog:
+2020-02-03 RPFBRO   Browse data sets with undefined records
+                    (RECFM=U), like load libraries, implemented
+                    The data is formatted and is in EBCDIC and HEX.
+2020-01-29 RPFDAIR  Replace 'TEMPNAME' by <blank> if a member
+                    selection list requested in EDIT and BROWSE.
+           RPFLIB   Remove unnecessary MODULE field in selection list.
+           RPFLIB00 Specify <blank> instead of '*' to request
+                    LIBRARIAN index
+                    Minor enhancements implemented.
+2020-01-27 RPF      Allow terminals with buffer up to 9920 bytes
+                    (like 62x160 or 99x100)
+2020-01-23 RPFEDIT  Handle I/O error after APPEND correctly.
+2020-01-20 RPFJCL   Accept REGION=nM in JOB card and EXEC card.
+                    Give warning message with NOTIFY=&SYSUID
+                    Large screen supported.
+2020-01-16 RPFFIND  F x'hhhhhh....' (HEX Find) subcommand supported.
+                    'O' subcommand deleted.
+2020-01-14 RPFEDITL Add SYNAD routine to prevent ABEND001 in
+                    RPFEDIT and give a suitable message.
+           RPFBRO   Add SYNAD routine and handle the I/O error
+                    correctly.
+2020-01-13 RPFSRCH  Allow quoted search strings in option 3.8
+2020-01-09 RPFCHNG  Flag the workspace lines if data is changed.
+           RPFEDIT  Reverse the line numbers if the line is changed
+                    with the 'C' subcommand.
+2020-01-08 RPFEDIT  Allow numerics in command along with line
+                    commands (implicit L+ or L- command)
+                    Fix a convert error if the DEL or EOF key
+                    was used in the Line-number field.
+2020-01-05 RPFCHNG  Loop fixed if 'C //string/' is given.
+                    C /P'.'/string2/ change invalid strings supported.
+2020-01-03 RPFBRO   Alias FIND of 'F' command added.
+2019-12-28 RPFPDS   Set workspace record length to 80 on exit
+                    to make edit current workspace possible.
+           RPFVTOC1 Set workspace record length to 80 on exit
+                    to make edit current workspace possible.
+2019-12-24 RPFDATAL Check record length of V(B) data sets in
+                    the correct way.
+           RPFSAVE  Check record length of V(B) data sets in
+                    the correct way.
+           RPFUTIL  Treat IMON (opt 3.7) as a 'real' TSO command
+                    processor.
+---------- -------- ------------------------------------------------------
+2019-12-09 Release  Version 1, release 7.8 available. Changelog:
+2019-12-09 RPFALLOC Add BLOCK allocation in option 3.2.
+           RPF      Minor bugs fixed.
+2019-12-05 RPFPDS   Reject 'S' command in option 3.1.
+2019-11-30 RPFVTOC1 Handle up the Erase EOF and DEL key and parse
+                    the primary commands in DSLIST.
+           RPFBRO   Fix SCR (RIGHT) command. The data was positioned
+                    1 byte too far.
+           RPFUTIL  Fix blank screen after invoking IMON.
+           RPFLIB00 Reject EDIT if the workspace is too small.
+           RPFLIB   Reject EDIT if the workspace is too small.
+           RPFMAIN  Prevent changing size of screen if entering
+                    option 9 (Operator)
+           RPFTEST  Large screen support added and RELOAD command
+                    added in option 2 (Alter/Display).
+           RPFPDS   EDIT loop fixed if all members in a 62 lines
+                    screen are selected for EDIT.
+---------- -------- ------------------------------------------------------
+2019-11-15 Release  Version 1, release 7.7 available. Changelog:
+2019-11-10 RPFOUT   Change RECFM of output from FBA into FB.
+2019-11-04 RPFBRO   Fix loop in FIND if storage is exhausted and
+                    text was not found.
+2019-11-03 RPFUTIL  Add Option 8, SEARCH to search a string in a
+                    sequential dataset or an entire PDS(E).
+           RPFDATAL Entry screen modified to allow the SEARCH function.
+           RPFSRCH  New module to search through a sequential or
+                    partitioned data set and write the lines with
+                    the hits in a data set, which will be browsed.
+2019-10-29 RPFPDS   Add PRINT command to browse the directory listing.
+2019-10-28 RPFLIB00 Support large screen up to 62x160.
+           RPFBRO   Remove invalid characters in PRINT output
+2019-10-23 RPFMVCPY Allow DEL and/or EOF key in the entire screen.
+           RPFLIB   Parse all subcommands correctly before execute.
+                    Allow DEL and/or EOF key in the entire screen.
+2019-10-20 RPFDATAL Screen a little redesigned and member name
+                    hidden if used for PDS (opt 3.1) and RESET stats
+                    (opt. 3.0).
+2019-10-19 RPF      Stay in EDIT after ABENDx37 in RPFSAVE.
+2019-10-17 RPFEDIT  Support PRINT subcommand.
+           RPFHCPY  Add PRINT function and module redesigned.
+           RPFBRO   Incidentally blank screen fixed.
+           RPFTSO   Fix '=x' (lowercase).
+---------- -------- ------------------------------------------------------
+2019-10-15 Release  Version 1, release 7.6 available. Changelog:
+2019-10-13 RPFBRO   Do a little parsing of the primary commands
+                    and remove ON/OFF in the HEX command.
+2019-10-06 RPFMVCPY Allow DEL and/of EOF key in command field
+                    and parse the primary commands.
+2019-10-04 RPFPDS   Parse all subcommands correctly before execute.
+                    Allow DEL and/or EOF key in the entire screen
+2019-10-02 RPFEDIT  Commands 'C /X'hh..'/<chars>', 'C /<chars>/X'hh..''
+                    and 'C /X'hh..'/X'hh..'' (hh = 0-9, A-F) supported.
+2019-10-01 RPFEDIT  Parse all subcommands correctly before execute.
+           RPFINIT  Default workspace size increased to 6,000 lines.
+2019-09-30 RPFEDIT  Terminate EDIT if workspace is too small
+           RPFINIT  Append userid in key RPF profile cluster always
+                    to 7 bytes. If userid < 7 bytes replace ' ' by '-'
+                    to get always a unique key.
+2019-09-27 RPFTSO   Test on lowercase 'end' and protect CALLTSSR
+                    with GAMOS/GAMAPP
+           RPFEDIT  The command can be set in any place in the command
+                    area.
+           RPFBRO   Browse larger datasets possible if addressing mode
+                    is NOT 24.
+2019-09-25 RPFFIND  Support F P'.' to search invalid characters.
+2019-09-23 RPFEDIT  If a string is more than 1 times on the same line,
+           RPFFIND  give subsequent matches in the same line if only
+                    an 'F' is entered (repeat find) and place the
+                    cursor on the found string.
+2019-09-19 RPFOUT   Message 'Unexpected return code' changed into
+                    'Invalid CANCEL request' (the real reason).
+2019-09-18 RPFEDIT  ABEND0C7 fixed if I *,0 or DEL *,0 given
+2019-09-09 RPFSAVE  If numbered data saved into a new member, reset
+                    last 2 columns instead of columns 79-80.
+---------- -------- ------------------------------------------------------
+2019-08-31 Release  Version 1, release 7.5 available. Changelog:
+2019-08-26 RPFUTIL  Return corrected if 3.0 or 3.1 selected.
+           RPFPDS   Set Append off if EDIT is invoked in option 3.1
+2019-08-25 RPFINIT  ABEND0C1 resolved if RPF FAST is entered.
+2019-08-21 RPFBRO   ABEND001/ABEND378 sometimes occurs after TSO SUBMIT.
+                    This is resolved now.
+           RPFEDIT  Primary command COPY renamed into APPEND
+2019-08-20 RPFPDS   The Delete ISPF/RPF statistics function added.
+2019-08-19 RPFEDIT  Do not leave EDIT is only an '=' command is
+                    entered and change text 'Update' into 'EDIT'
+                    ABEND0C4 resolved in DEL and CO primary commands
+                    if line-2 < line-1
+2019-08-18 RPFOUT   Avoid msg Dupl.Jobname in CANCEL if jobname
+                    is unique.
+2019-08-16 RPFDATAL Add options New Userid, New Version and New
+                    modification level to reset ISPF/RPF statistics
+                    Hide these options if not invoked for RESET.
+           RPFUTIL  Option 0, RESET statistics added.
+           RPFPDS   The RESET ISPF/RPF statistics function added.
+2019-08-13 RPFDATAL Hide options Upper case, Append and Line numbers if
+                    invoked for PDS maintenance or Browse
+                    Options Upper case, Append and Line numbers are
+                    now in 1 line
+---------- -------- ------------------------------------------------------
+2019-08-01 Release  Version 1, release 7.4 available. Changelog:
+2019-07-30 RPFBRO   Garbage removed in 80 column terminal
+           RPFPDS   Line command X (queue for transmission) and
+                    primary command XMIT enabled (does not work
+                    in MVS38J)
+2019-07-29 RPFEDIT  Set Changed flag after successful $DOC command
+2019-07-28 RPFEDIT  If no subcommand is entered, place the cursor on
+                    the next data line if the cursor was in the data
+2019-07-25 RPFOUT   Subsystem datasets kept after option 4, so next
+                    invoke of output same job is possible
+                    Correct status display if Jobname = Userid, so
+                    all jobs with userid + 1, 2 or 3 jobname characters
+                    are displayed
+2019-07-24 RPFEDIT  Pending line commands were not highlighted for
+                    many years. This failure is now corrected
+2019-07-22 RPFTSO   Skip translate to capitals of the TSO commands
+2019-07-21 RPFSAVE  Retry screen displayed if LIBRARIAN save is in error
+---------- -------- ------------------------------------------------------
+2019-07-08 Release  Version 1, release 7.3 available. Changelog:
+2019-07-06 RPFTSO   Last 10 TSO commands saved in screen
+           RPFINIT  The last 10 TSO commands retrieved from Profile cluster
+           RPFEND   The last 10 TSO commands written on Profile cluster
+2019-07-03 RPFBRO   Make SUBMIT dependent of the SUBMIT parameter in the
+                    RPF defaults (Submit with TSO SUBMIT command or
+                    submit directly to JES2 internal reader).
+2019-07-01 RPFEDIT  ISPF modification propagated in NUMBERED data line
+                    numbers if the lines inserted by the PASTE subcommand
+                    Linenumbers (not COBOL) are now always in the last 8
+                    positions, no matter what the LRECL is.
+                    Modules affected:
+                    1. RPFCHNG
+                    2. RPFDATAL
+                    3. RPFEDIT
+                    4. RPFFILL
+           RPFEDIT  Warning data loss if NONUM data will be renumbered
+                    with the RENUM subcommand
+                    Prevent RENUMBER of data with variable records.
+---------- -------- ------------------------------------------------------
+2019-06-14 Release  Version 1, release 7.2 available. Changelog:
+2019-06-14 RPF      SMS managed data sets, indexed VTOC's and UCBSCAN
+                    supported if RPFDAIR, RPFLISTC, RPFOPER and RPFVTOC
+                    are assembled with SYSPARM(RPFE) in an OS/390 or
+                    z/OS system.
+2019-05-27 RPFEDIT  ISPF/RPF vv:mm in header and set
+                    the ISPF/RPF stats in col 79-80 in changed
+                    lines if workspace is numbered
+           RPFDEF   Decrease max workspace lines to 1 million
+           RPFSAVE  Reset column 79-80 of numbered data if saved in
+                    another data set or member
+2019-05-20 RPFEDIT  Scale line can be hidden or shown with the COLS
+                    subcommand.
+           RPFINIT  COLS attribute read from RPF profile cluster
+           RPFDEF   COLS attribute can be set in option 1
+2019-05-17 RPFLIB   Screen sizes up to 62 lines x 160 columns supported
+                    Alias DOWN of SCF and alias UP of SCB added
+                    And invoke RPFSAVE after E line command
+                    if LIBRARIAN is not installed
+           RPFLIB01 Test if LIBRARIAN is installed
+2019-05-14 RPFEDIT  Alias DOWN of SCF and alias UP of SCB added
+           RPFBRO   Alias DOWN of SCF and alias UP of SCB added
+           RPFMVCPY Alias DOWN of SCF and alias UP of SCB added
+           RPFPDS   Alias DOWN of SCF and alias UP of SCB added
+           RPFVTOC1 Alias DOWN of SCF and alias UP of SCB added
+2019-05-12 RPFFILL  FILL string can contain lower case characters now
+2019-05-10 RPFVTOC  LRECL set to 80 if invoking RPFEDIT
+2019-05-09 RPFTSO   Display of some messages resolved
+2019-05-05 RPFCHNG  Support change HEX strings with
+                    C /X'aa'/X'bb'/A (or nnn-mmm) to replace 1 HEX byte
+           RPFEDIT  Detect unprintables during build of screen instead
+                    during READ of input.
+2019-05-03 RPFASM   Link the assembler with VL=1 to prevent
+                    msg IEC908I 112-03 if executing assembler H (IEV90)
+---------- -------- ------------------------------------------------------
+2019-04-30 Release  Version 1, release 7.1 available. Changelog:
+2019-04-30 RPFDEF   All panels supports screen sizes up to
+                    62 lines x 160 columns.
+           RPFEDIT  Supports now records lengths from 40 to 255
+                    and RECFM = F(B) and RECFM = V(B) are supported
+                    The Scope command in EDIT covers now the data
+                    visible on the screen or the complete record if
+                    the second operand = LRECL size or 999.
+                    Numbered data and COBOL data are restricted to
+                    a record length of 80.
+                    Modules affected:
+                     1. RPFMAIN
+                     2. RPFCHNG
+                     3. RPFDAIR
+                     4. RPFDATAL
+                     5. RPFDOC
+                     6. RPFEDIT
+                     7. RPFEDITL
+                     8. RPFFILL
+                     9. RPFFIND
+                    10. RPFHCPY
+                    11. RPFJCL1
+                    12. RPFLIB
+                    13. RPFLIB00
+                    14. RPFPDS
+                    15. RPFSAVE
+                    16. RPFSUB
+                    17. RPFVTOC1
+                    Abend0C4 resolved in Rxx Line command
+                    Line command I did not work correct, resolved.
+           RPFASM   Source library checked on LRECL=80
+---------- -------- ------------------------------------------------------
+2019-04-03 Release  Version 1, release 7.0 available. Changelog:
+2019-04-03 RPFMAIN  Screen sizes up to 62 lines x 160 columns supported
+           RPFUTIL  Screen sizes up to 62 lines x 160 columns supported
+           RPFHELP  Screen sizes up to 62 lines x 160 columns supported
+           RPFDATAL EDIT, Browse and PDS selection list supports
+                    Screen sizes up to 62 lines x 160 columns
+           RPFEDIT  Screen sizes up to 62 lines x 160 columns supported
+                    Delete range of lines > 16MB corrected
+                    Input Convert error resolved if SBA after AID
+                    byte contains X'11'
+           RPFPDS   Screen sizes up to 62 lines x 160 columns supported
+                    Scroll MAX fixed ('m' + PFK7/PFK8)
+           RPFMVCPY Screen sizes up to 62 lines x 160 columns supported
+                    Scroll MAX corrected ('m' + PFK7/PFK8)
+           RPFVTOC1 Screen sizes up to 62 lines x 160 columns supported
+           RPFTSO   Screen sizes up to 62 lines x 160 columns supported
+           RPFVTOC  VTOC selection list supports up to screens
+                    with a dimension of 62 lines x 160 columns
+           RPFALLOC Data set selection list supports up to screens
+                    with a dimension of 62 lines x 160 columns
+           RPFSAVE  Data set selection list supports up to screens
+                    with a dimension of 62 lines x 160 columns
+           RPFASM   Assembler and Linkage editor screen supports up to
+                    screens with a dimension of 62 lines x 160 columns
+           RPFPFK   PFK screen supports screen sizes up to 62 x 160
+           RPFSTAT  PFK screen supports screen sizes up to 62 x 160
+           RPFDEF   Menu supports screen sizes up to 62 x 160, option 1,2,
+                    supports 3270 model 2, 3 or 4 only.
+           RPFOUT   Output screen supports screen sizes up to 62 x 160
+---------- -------- ------------------------------------------------------
+2019-03-01 release  Version 1, release 6.2 available. Changelog:
+2019-03-11 RPFBRO   Prevent scattered screen if non standard screen
+                    sizes are used and support large screens up to
+                    62x160, with special thanks to Greg Price
+2019-03-10 RPFMAIN  Prevent scattered screens if non standard screen
+                    sizes are used
+2019-03-06 RPFDATAL Very incidental screen error resolved
+2019-03-03 RPFEDIT  ABEND0C4 resolved during SUB command in EDIT
+2019-03-02 RPFEDIT  Block lines with unprintables for editing
+           RPFINIT  Change default workspace from 4000 to 5000 lines
+2019-02-25 RPFALLOC Option 1 is now option A, option 2 is now option D
+                    and option A is now default upon entry.
+2019-02-22 RPFMAIN  Screen error resolved if "=5" or "=7" selected
+                    from the EDIT, Browse, Data set list or Member list
+           RPFASM   The Binder is recalled Linkage Editor and code
+                    optimized.
+2019-02-14 RPFMVCPY Load module attributes displayed if library is a
+                    LOADLIB
+2019-02-13 RPFPDS   Load module attributes displayed if library is a
+                    LOADLIB
+---------- -------- ------------------------------------------------------
+2019-02-05 release  Version 1, release 6.1 available. Changelog:
+2019-02-03 RPFOPER  Error in multiline display corrected and 4 bytes
+                    Device adresses used to be compatible with
+                    MVS/ESA version 4 and up.
+2019-02-02 RPFMVCPY Date Created added in member list
+2019-02-01 RPFPFK   Screen optimized and 7 color support added.
+2019-01-31 RPFVTOC1 Code optimized
+           RPFBRO   FIND command will only find strings in Non HEX lines
+           RPFDEF   Screens optimized for 3270 model 3 and 4.
+           RPFMAIN  Allow option 0,9 and X after ABENDx78 in RPFDEF
+           RPFPDS   Date Created added in member list
+                    Fix P linecmd wrong return code.
+           RPFSTAT  Screens optimized for 3270 model 3 and 4.
+2019-01-28 RPFBRO   HEX ON and HEX OFF commands added
+                    In Hex mode 4 lines will be displayed:
+                    1) The original line, 2) A hex line containing
+                    the high order nibbles. 3) A hex line containing the
+                    lo order nibbles. 4) A separator line.
+2019-01-26 RPFEDIT  R and I linecmds not in column 1 entered gives
+                    unpredictable results. This is fixed.
+           RPFBRO   Code optimized
+2019-01-21 RPFFILL  FILL, UC and LC command counter fixed
+2019-01-19 RPFPDS   Code optimized
+           RPFMAIN  Product code of OS in mainmenu if CVTPRODN <> x'00'
+                    Otherwise CVTRELNO in main menu
+---------- -------- ------------------------------------------------------
+2019-01-11 release  Version 1, release 6.0 available. Changelog:
+2019-01-11 RPFVTOC  abend0C4 solved in loading DEB addresses
+           RPFOUT   abend0C4 solved during FREEPOOL
+           RPFSUB   Bug solved if workspace is above 16MB
+           RPFLISTC abend0C4 solved in IDCAMS by LINK VL=1 in z/OS
+           RPFVTOC1 abend0C4 solved in IEBCOPY by LINK VL=1 in z/OS
+           RPFMVCPY abend0C4 solved in IEBCOPY by LINK VL=1 in z/OS
+2019-01-03 RPF      RPF made suitable for MVS/380, MVS/XA, MVS/ESA,
+                    OS/390 and z/OS with special thanks to Paul Edwards.
+                    RPF will be shipped in 31 bit mode, but 64 bit mode
+                    will be supported.
+                    The minimum Edit workspace = 500 lines.
+                    Maximum Edit workspace = 2.000.000 lines.
+                    RPFFILL, RPFSUB and RPFPFK are preloaded
+           RPFEDIT  CUT/PASTE pending msg now correct displayed
+           RPFDEF   Bug fixed in workspace allocation
+           RPFMAIN  OS release in main menu screen
+           RPFSTAT  7 color support in screen
+---------- -------- ------------------------------------------------------
+2008-09-01 release  Version 1, release 5.3 available. Changelog:
+2008-09-01 RPFEDIT  The line commands can be entered in any place of
+                    the line-number field
+2008-08-29 RPFEDIT  Loop solved with CUT command along with MM cmds
+2006-09-29 RPFEDIT  Loop solved if number entered with pfk other than 7/8
+2006-03-21 RPFINIT  Default Assembler program name read from database
+           RPFDEF   Default Assembler program added in option 1
+           RPFASM   Default Assembler program name used
+                    Assembler output from P/T/N changed into Y/N
+2006-03-19 RPFINIT  Default dataset prefix read from profile database
+           RPFDEF   Default prefix added in option 1
+           RPFVTOC  The default prefix from database will be used
+2006-03-16 RPFEDIT  Some 3270 emulators did not display end of the data
+                    correctly. This is fixed.
+2005-02-12 RPFEDIT  Allow TOP and BOTTOM commands along with line commands
+2005-02-08 RPFEDIT  Allow command "FIND" along with "F"
+                    Do not set change flag if "C" command ends errornous
+           RPFOUT   Limit number of lines output to prevent x37 abends
+           RPFCHNG  line-1/2 error solved if cmd fills up complete buffer
+2004-12-21 RPFASM   Increase space workds to prevent x37 abends
+2004-06-23 RPFPDS   Allow Erase EOF and DEL key in command field
+2004-05-24 RPFFIND  Format of the F and O command changed in the ISPF way
+2004-05-04 RPFMVCPY Give msg 'Replaced' if member in TO dataset exists
+                    Invalid BLKSIZE problem solved at second MOVE
+2004-04-04 RPFSUB   Clear screen before TSO SUBMIT with model 5 screen
+           RPFTSO   Clear screen before TSO command with model 5 screen
+---------- -------- ------------------------------------------------------
+2004-01-30 release  Version 1, release 5.2 available. Changelog:
+2004-01-30 RPFMAIN  Calendar refreshed before new display of MAIN menu
+           RPFMVCPY Command 'SORT CHA' added
+2004-01-28 RPFMVCPY DSN(*) Copies/moves all members
+2004-01-24 RPFINIT  Option REPLACE read from profile database
+           RPFDEF   Option REPLACE added in option 1
+           RPFMVCPY Replace Like members YES/NO in screen
+                    Reject Move/Copy if From an To are the same
+2004-01-10 RPFUTIL  Option 3 (Move/Copy members) added
+           RPFMVCPY New module to process Copy en Move members
+2004-01-04 RPFEDIT  Abend 0C4 solved if workspace is truncated
+2003-12-16 RPFINIT  SUBMIT parameter read from profile database
+           RPFDEF   SUBMIT parm added in option 1
+                    7 color support in some screens
+           RPFSUB   Job submitted with TSO Submit cmd if SUBMIT=TSO
+2003-12-07 RPFEDIT  CUT and PASTE subcommands added
+2003-07-29 RPFEDIT  End of data line added in the screen
+                    Fields after last record protected (thepaw2003)
+           RPFVTOC1 Fields after last entry protected (thepaw2003)
+           RPFPDS   Fields after last entry protected (thepaw2003)
+2003-03-09 RPFLIB   7 color support in screen, date/time added or
+                    updated of LIBRARIAN modules added and =n/=n.n
+                    command added
+---------- -------- ------------------------------------------------------
+2003-02-15 release  Version 1, release 5.1 available. Changelog:
+2003-02-15 RPFUTIL  =n or =n.n command (fast jump) supported
+           RPFHELP  =n or =n.n command (fast jump) supported
+2003-02-14 RPFTSO   =n or =n.n command (fast jump) supported
+                    7 color support in screen
+2003-02-07 RPFEDIT  Only the changed lines will be processed to reduce
+                    the input buffer length
+2003-02-06 RPFBRO   Error resolved if FBA or FBM dataset has a
+                    LRECL < scrsize
+2003-02-01 RPFMAIN  Error in calendar of february resolved
+2002-12-14 RPFOUT   Status area problems solved and test return indicator
+                    after browse/view output
+2002-12-08 RPFHELP  7 color support in screen
+2002-12-07 RPFOUT   Status area increased to 22 jobs and 7 color support
+2002-12-03 RPFALLOC 7 color support in screen
+2002-11-27 RPFSAVE  7 color support in screen
+2002-11-17 RPFDATAL First dataset in list could not be selected, corrected
+           RPFBRO   Less storage needed if LRECL < 255 and maximum
+                    number of screen pages increased to 2048
+---------- -------- ------------------------------------------------------
+2002-11-13 release  Version 1, release 5.0 available. Changelog:
+2002-11-13 RPFVTOC  Level dataset list increased from 8 to 17 bytes
+                    Masking dataset levels supported from catalog
+           RPFASM   7 color support in screen
+           RPFUTIL  7 color support in screen
+2002-11-10 RPFDATAL 7 color support in screen
+           RPFVTOC  7 color support in screen
+           RPFBRO   7 color support in screen
+2002-11-07 RPFMAIN  7 color support in screen
+           RPFPDS   7 color support in screen
+           RPFVTOC1 7 color support in screen
+2002-11-01 RPFVTOC  Dataset name level added, so it is possible to
+                    make a dataset list from the catalog or VTOC
+           RPFLISTC New module to obtain datasets from the catalog
+           RPFMAIN  Display the splash logo only initially
+           RPFALLOC Check of alias deleted
+           RPFUTIL  Option 7, call Greg Price's IMON if present
+2002-10-27 RPFEDIT  Subcommand 'n' added along with SCF or SCB PFkey
+                    (The ISPF way to scroll)
+2002-10-25 RPFVTOC1 Line command 'R' (Rename) added
+2002-10-20 RPFOUT   Status area increased from 8 to 16 jobs
+           RPFINIT  AUTOSAVE read from profile database
+           RPFDEF   AUTOSAVE parm added in option 1
+           RPFEDIT  AUTOSAVE parm checked if END command given
+2002-10-16 RPFMAIN  Logo in MAIN menu
+           RPFBRO   Prevent browsing datasets with LRECL > 255
+                    SCL and SCR commands added
+2002-10-14 RPFPDS   Update date of member converted to gregorian
+2002-10-12 RPFVTOC1 Dates in Info screen converted to gregorian
+2002-10-11 RPFCNVDT New module to convert Julian date to Gregorian
+           RPFMAIN  Calendar added in MAIN menu
+2002-10-09 RPFVTOC1 Line command 'I' (Dataset Information) added
+2002-10-04 RPFINIT  RETRIEVE buffer read from database
+           RPFEND   RETRIEVE buffer written to database
+2002-10-01 RPFEDIT  Command RETRIEVE added to get previous commands
+                    The last 100 commands are saved for RETRIEVE.
+           RPFINIT  RETRIEVE command set in default PFK12/PFK24
+2002-09-29 RPFMAIN  Version and release in line-1
+2002-09-23 RPFVTOC1 Line command "Z" (Compress) added
+2002-09-21 RPFVTOC1 Line commands "C" (Catalog) and "U" (Uncatalog) added
+2002-09-20 RPFALLOC Option 2 added to delete a dataset
+           RPFDEL   Module deleted, functions moved to RPFALLOC
+           RPFUTIL  Create/Delete datasets moved to option 2
+                    PDS maintenance moved to option 1
+                    VTOC functions moved to option 4
+2002-09-15 RPFVTOC  Option V (VTOC summary) added
+                    After completion the VTOC menu will re-displayed
+2002-09-06 RPFEDIT  Positioning problems in DEL subcommand resolved
+           RPFBRO   Browse Variable records possible
+           RPFVTOC  Option -1- Dataset selection list added
+                    This is the default option
+                    VTOC listing in EDIT moved to option 2
+           RPFVTOC1 New module to process selection list
+                    In the dataset selection list, the datasets
+                    can be viewed, edited, a member selection list
+                    can be made and can be deleted
+---------- -------- ------------------------------------------------------
+2002-08-06 release  V1R4M3 available. Changelog:
+2002-08-06 RPFEDIT  Allow editing empty datasets
+           RPFALLOC RECFM, LRECL and BLKSIZE in screen
+           RPFTSO   Command check routine bypassed, all cmds are allowed
+2002-08-01 RPFEDIT  Preserve empty workspace if all lines are deleted
+2002-07-31 RPFMAIN  TSO logon proc in screen
+2002-07-17 RPF      '=' subcommand added in PDS, EDIT and Browse
+2002-07-11 RPFPDS   Leading zeroes removed from number of lines
+2002-07-10 RPFOUT   PF3/PF15 supported
+2002-07-07 RPFVTOC  Trks/Cyl, Track length and Cyls/volume displayed.
+2002-07-03 RPFDEF   Increase maximum # lines from 29,999 to 59,999.
+2002-06-28 RPFCHNG  Correct 'C' command if new string is longer.
+2002-06-28 RPFINIT  Initialize Assembler maclibs and control statements
+                    correctly
+2002-04-02 RPFSAVE  Preserve saved userdata from other programs
+---------- -------- ------------------------------------------------------
+2001-07-01 release  V1R4M2 available. Changelog:
+2001-07-01 RPFPDS   The 'M' supported in the cmd field to scroll max.
+2001-06-30 RPFSTAT  New screen
+2001-06-27 RPFEDIT  Inserted lines will be highlighted on screen
+                    If data is entered in an inserted line, the
+                    highlighting will be removed from that line
+                    Highlighted lines will not be saved or submitted
+                    Further improvements in the COPY subcommand
+2001-06-13 RPFALLOC Unit type in screen
+2001-06-11 RPFEDIT  Editing non-printables will not destroy the workspace
+                    anymore. Only changed characters will be replaced
+---------- -------- ------------------------------------------------------
+2001-06-07 release  V1R4M1 available. Changelog:
+2001-06-07 RPFPDS   SORT (without operand) command added
+                    'S member' command added to edit/browse a member
+                    Return to allocation menu after END command
+           RPFBRO   Return to allocation menu after END command
+           RPFEDIT  Return to EDIT entry menu after END command
+---------- -------- ------------------------------------------------------
+2001-05-17 release  V1R4M0 available. Changelog:
+2001-05-17 RPFBRO   SUB(MIT) command added in Browse
+2001-04-28 RPFLIB   LIBRARIAN tape master files supported
+2001-04-23 RPFEDIT  Save the data in the same dataset/member if the END
+                    subcommand has been given. Save only if the data
+                    has been changed (the ISPF way)
+                    CANCEL command added, with alias CAN to exit EDIT
+                    without saving the data.
+2001-04-16 RPFFIND  Find string matches if string is the same and can be
+                    entered in mixed case
+           RPFPDS   Bug fixed if EDIT invoked and COPY command given
+           RPFMAIN  SMF system id in main menu
+2001-04-11 RPFDATAU Module deleted. Functions moved to RPFDATAL
+           RPFDATAL Dataset selection list implemented.
+                    Module will also be used for utility functions
+                    This list is a history of the last edited datasets
+                    and will be written in the RPF database if RPF exits.
+---------- -------- ------------------------------------------------------
+2001-03-23 release  Release 1.3 available. Changelog:
+2001-03-23 RPFASM   New screen, 6 maclibs, 1 incl. lib + 6 control
+                    statements
+           RPFDEF   Maclibs, assember + lked parms and control
+                    statements save upon RPF profile cluster
+           RPFINIT  Recordsize of RPF profile ds increased from 1000
+                    to 1750
+2001-05-15 RPFOUT   RPFBRO invoked in the output processor
+2001-03-12 RPFBRO   New browse module, replaces RPFASM2
+                    Press PFK1 for HELP concerning browse
+2001-03-08 RPFDATAL Option 2 (EDIT), member selection list displayed
+                    if no member selected in allocation menu.
+           RPFDATAU Option 1 (BROWSE), member selection list displayed
+                    if no member selected in allocation menu.
+2001-03-06 RPFFIND  End delimiter in F and O can be omitted
+           RPFEDIT  COPY command added
+           RPFPDS   'S' (show) before the member-name replaced by 'B'
+                    (BROWSE)
+                    Primary commands SORT TTR, SORT CHA and SORT SIZE added
+2001-03-01 RPFEDIT  LC and UC primary commands added
+                    UC, UCB, UCT, LC, LCB, LCT line commands added
+                    1 more line on screen
+           RPFPDS   1 more line on screen
+           RPFDEF   Option NULLS added
+1985-01-01 RPF      No latest improvements since MVS/XA
+                    RPF/XA is available with more improvements if
+                    MVS/XA (rel. 2.1.7 or 2.2.0) is available

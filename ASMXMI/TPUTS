@@ -1,0 +1,36 @@
+         TITLE 'Write screen'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        TPUTS - Write the screen. Use NOEDIT if 14 bits SBA's are    *
+*                used (screensize > 4096) or FULLSCR for 12 bit SBA's *
+*                (screensize = 4096 or less).                         *
+*                                                                     *
+*        Input: R1: screen address (R1-1 is Escape character)         *
+*               R0: length of screen (+1 for TPUT FULLSCR)            *
+*               R11: address of RPFCOMM.                              *
+*               R13: address WORKAREA of calling program.             *
+*                                                                     *
+*---------------------------------------------------------------------*
+TPUTS    CSECT
+         USING COMMAREA,R11            Make RPFCOMM addressable
+         ST    R14,CTPUTS14            Save register 14 in RPFCOMM
+         ST    R12,CTPUTS12            Save register 12 in RPFCOMM
+         LR    R12,R15                 Setup base register
+         USING TPUTS,R12               Provide addressability
+         TM    3(R1),X'40'             Do we have a 14 bit address?
+         BO    PUTFS                   No: TPUT FULLSCR
+         XC    TPUTNOED(TPUTNOEL),TPUTNOED
+         LR    R14,R1                  Area address
+         TPUT  (14),(0),NOEDIT,MF=(E,TPUTNOED) Write big screen
+         B     PUTND                   Exit
+PUTFS    DS    0H
+         BCTR  R1,0                    Point to escape char (X'27')
+         AH    R0,=H'1'                Count escape char to length
+         ICM   R1,8,=B'00000011'       Indicate TPUT FULLDCR
+         TPUT  (1),(0),R               Write small screen
+PUTND    DS    0H
+         L     R12,CTPUTS12            Restore register 12
+         L     R14,CTPUTS14            Restore register 14
+         BR    R14                     Return
+         LTORG ,
+         DROP

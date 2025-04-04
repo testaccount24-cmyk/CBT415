@@ -1,0 +1,57 @@
+)ATTR
+/* Panel: RPFV. Panel for MVS38J systems                */
+ + TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(GREEN)
+ % TYPE(TEXT)   INTENS(HIGH) SKIP(ON)    COLOR(WHITE)
+ ¬ TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(YELLOW)
+ _ TYPE(INPUT)  INTENS(LOW)  JUST(LEFT)  COLOR(TURQ)
+ # TYPE(INPUT)  INTENS(LOW)  JUST(ASIS)
+ ~ TYPE(INPUT)  INTENS(HIGH) JUST(LEFT)
+ ! TYPE(INPUT)  INTENS(HIGH) JUST(RIGHT)
+ { TYPE(OUTPUT) INTENS(LOW)  JUST(LEFT)
+ } TYPE(OUTPUT) INTENS(LOW)  JUST(RIGHT)
+ Ý TYPE(OUTPUT) INTENS(HIGH) JUST(LEFT)
+ ¨ TYPE(OUTPUT) INTENS(HIGH) JUST(RIGHT)
+ ¢ TYPE(TEXT)  INTENS(HIGH) COLOR(YELLOW)
+)BODY WIDTH(&ZSCREENW) EXPAND(//)
+%------------------------  RPFV DSLIST - ENTRY PANEL  ---------/-/--------------
+%Command ===>_ZCMD                                                             +
++
+%Data set prefix (max 17 positions):
++   PREFIX         %===>_Z                +
++
+%Volume serial (required if PREFIX not specified):
++   VOLUME         %===>_Z     +
+%
+%
+%
+%
+%
+%
++Enter%END+command to return.
+%
+)INIT
+ .ZVARS  = (PFXR,VOLR)
+ .CURSOR = PFXR
+ .HELP   = RPFVH00
+ &ROPT   = ''
+ &ZPRIM = NO
+ &ZHTOP  = RPFVH00
+ IF (&PFXR = '')
+    &PFXR = &ZUSER
+)PROC
+ &OPTS = 'LINES(28000)'
+ &ROPT = 1
+ IF (&PFXR = '')
+    VER (&VOLR,NB)
+ &PFXR2 = &PFXR
+ IF (&PFXR = '')
+    &PFXR2 = 'NONE'
+ IF (&VOLR = '')
+    &ROPT = 2
+ VPUT (PFXR VOLR) PROFILE
+ &ZSEL = TRANS(&ROPT,
+               1,'CMD(RPFV PREFIX(&PFXR2) VOL(&VOLR) &OPTS)'
+               2,'CMD(RPFV PREFIX(&PFXR2) &OPTS)'
+              ' ',' '
+               *,'?' )
+)END

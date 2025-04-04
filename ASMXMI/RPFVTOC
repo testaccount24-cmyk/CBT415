@@ -1,0 +1,1965 @@
+RPFVTOC  TITLE 'Read a VTOC and place the results in the workspace'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFVTOC.                                      *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFUTIL (option 3.4) and RPFV command proc.   *
+*                                                                     *
+*        Subroutines:   RPFLISTC, RPFEDIT, RPFVTOC1                   *
+*                                                                     *
+*        Function:      Present a menu with 4 options (1, 2, V and X),*
+*                       a data set level, a volume and a PARM.        *
+*                                                                     *
+*                       In option 1, you should specify at least the  *
+*                       data set level. If only the data set level    *
+*                       has been specified, module RPFLISTC will be   *
+*                       invoked to search the catalog with the        *
+*                       specified data set level and the EDIT         *
+*                       workspace will be populated.                  *
+*                       If only a volume is specified, this module    *
+*                       will populate the EDIT workspace with the     *
+*                       data sets located on this volume. If both     *
+*                       data set level and volume are specified, the  *
+*                       data sets with level 'data set level' on the  *
+*                       specified volume will be in the EDIT          *
+*                       workspace.                                    *
+*                       The PARM will be ignored in option 1.         *
+*                       After population of the workspace, RPFVTOC1   *
+*                       will be invoked to present the data set list. *
+*                                                                     *
+*                       In option 2, the volume is required and the   *
+*                       data set level is optional.                   *
+*                       The PARM will be used, with PARM=SHORT, the   *
+*                       EDIT workspace will be populated with a data  *
+*                       set list. Each data set is presented in 1     *
+*                       line of 80 bytes (+8 bytes prefix).           *
+*                       PARM=VOL is nearly identical with PARM=SHORT, *
+*                       but without headers and footer.               *
+*                       With PARM=LONG, each data set uses 2 lines    *
+*                       in the EDIT workspace.                        *
+*                       After population of the EDIT workspace,       *
+*                       RPFEDIT will be invoked.                      *
+*                                                                     *
+*                       In option V, the volume is required and the   *
+*                       data set level and the PARM are ignored.      *
+*                       Option V displays 5 lines with a summary      *
+*                       on the screen and the EDIT workspace is       *
+*                       not used.                                     *
+*                                                                     *
+*                       With keys PF03 or PF15, RPFVTOC will be       *
+*                       terminated.                             .     *
+*                                                                     *
+*                       After processing RPFVTOC1 or RPFEDIT or       *
+*                       display the summary lines, the menu will      *
+*                       re-appear.                                    *
+*                                                                     *
+*        Notes:         Support is available for indexed VTOC's,      *
+*                       which is announced as 'Data Facilities/Device *
+*                       Support' (DF/DS JDM1134) or SMS managed.      *
+*                       This loadmodule will run in a non SMS         *
+*                       system too, but set variables &OS390 and      *
+*                       &SMS in member SYSVARS to 1 in a              *
+*                       non SMS system like MVS 3.8                   *
+*                                                                     *
+*                       Include SYS1.(A)MODGEN in the SYSLIB          *
+*                       In the assembly of RPFVTOC.                   *
+*                                                                     *
+*                       If RPFVTOC is invoked by TSO command RPFV     *
+*                       no menu will be displayed and option 1 is     *
+*                       selected.                                     *
+*                                                                     *
+* --------------------- IMPORTANT ----------------------------------- *
+*        If RPFVTOC is used in a MVS 3.8 system (like MVS38J),        *
+*        set variables &SMS and &0S390 in member SYSVARS to 0         *
+*                                                                     *
+*        If RPFVTOC is used in an MVS/XA or MVS/ESA system with       *
+*        Data facilities/Device Support (JDM1134) or DFP (Data        *
+*        Facilities Product), set &MVSXA to 1 and set the             *
+*        variables &SMS and &LARGE in member SYSVARS to 0.            *
+*                                                                     *
+*        If RPFVTOC is used in an z/OS (with large volume support),   *
+*        set &OS390 to 1 in the assembly job and set the              *
+*        variables &SMS and &LARGE in member SYSVARS to 1.            *
+*                                                                     *
+*        If &OS390 and &MVSXA are 0, the variables &SMS and &LARGE    *
+*        can be ignored.                                              *
+* --------------------- IMPORTANT ----------------------------------- *
+*                                                                     *
+*        Registers:     Registers 12 and 10 are the base registers.   *
+*                       Register 13 points to the working storage.    *
+*                       Register 11 points to RPFCOMM.                *
+*                       Register 8 points to the screen area + header *
+*                       lines + (un)allocation control blocks.        *
+*                                                                     *
+*        Return codes set in register 15:                             *
+*                       00   Successful.                              *
+*                       04   EDIT workspace is too small.             *
+*                       08   Exit entered by user.                    *
+*                                                                     *
+*        Change log:                                                  *
+*        Jul 07,2002 RPr: add third header with device constants      *
+*        Aug 28,2002 RPr: Move EDIT VTOC to option 2. Add option      *
+*                         1 for a data set selection list and option  *
+*                         V for a VTOC Summary in the menu.           *
+*        Sep 21,2002 RPr: Move UCBTYP to COMMPRM for RPFVTOC1      @rp2
+*        Oct 31,2002 RPr: Add HLQ in screen and call RPFLISTC      @rp3
+*        Nov 09,2002 RPr: 7 color support added                    @rp4
+*        Nov 13,2002 RPr: Increase length of data set level to 17 pos.*
+*        Mar 19,2006 RPr: Obtain data set prefix from RPFCOMM.     @rp6
+*        Jan 01,2019 RPr: make RPF suitable for MVS/380 and up   @rpa01
+*        Jan 10,2019 RPr: abend0C4 solved in z/OS address. DEB     @rp7
+*        Mar 26,2019 Rpr: Support added for all kinds of 3270 screens *
+*                         up to 62 lines x 160 columns (3290)         *
+*        May 10,2019 Rpr: LRECL set to 80, before invoking RPFEDIT    *
+*        Jun 14,2019 Rpr: support SMS managed data sets and indexed   *
+*                         VTOC's if RPFVTOC is assembled with         *
+*                         &OS390 or &MVSXA in member SYSVARS to 1     *
+*        Apr 28,2020 RPr: Copy DS1SCALO (allocation type) to          *
+*                         workspace to process in RPFVTOC1.           *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Oct 24,2020 RPr: Remove option X, use PF03/PF15 instead      *
+*        May 26,2021 RPr: Do not refresh Prefix to default.           *
+*        Nov 13,2021 RPr: Do not display RPFVTOC menu if RPFVTOC      *
+*                         is invoked by TSO command RPFV.             *
+*        Jan 11,2022 RPr: RPFVTOC made re-entrant and re-usable       *
+*                         and large volumes support in OS/390 and     *
+*                         z/OS.                                       *
+*        Oct 26,2022 RPr: Support indexed VTOC's in MVS/XA and        *
+*                         MVS/ESA with DF/DS or DFP installed.        *
+*        Jul 10,2023 RPr: Process REFRESH command of RPFVTOC1.        *
+*        Jul 24,2024 RPr: Msg 'Severe error RPFLISTC' deleted.        *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFVTOC  CSECT
+RPFVTOC  AMODE 31                                                @rpa01
+RPFVTOC  RMODE 24                                                @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFVTOC,R12,R10         Make RPFVTOC addressable
+         L     R11,0(,R1)              Pickup address RPFCOMM
+         USING COMMAREA,R11            Make RPFCOMM addressable
+         GETMAIN R,LV=WORKL            Obtain working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(0,R13)             Forward pointer
+         LR    R13,R1
+         USING WORKAREA,R13            Make working storage addressable
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         LA    R10,2048(,R12)          Second base ...
+         LA    R10,2048(,R10)                      register
+         GETMAIN R,LV=SCREENSL         Acquire storage for the screen
+         LR    R8,R1                   Save in reg. 8 (base for screen)
+         USING SCREENS,R8
+         LR    R0,R1                   Prepare for MVCL
+         LA    R1,SCREENSL             Length input and ...
+         LR    R3,R1                                    output
+         L     R2,=V(SCREENS)          Input
+         MVCL  R0,R2                   Move to dynamic area
+         AIF   (NOT &OS390 AND NOT &MVSXA).NOGETM
+         GETMAIN R,LV=1024             Allocate DFSMS Extent table
+         ST    R1,ADDREXT              Save its address for later use
+.NOGETM  ANOP
+         MVC   TRKCYL,=F'20'           Default 20 tracks/cylinder
+         MVC   DCBIN(DCBLEN),MDLDCB    Move model DCB
+         LA    R0,JFCB                 JFCB exit
+         ST    R0,EXLST                Save in exit list
+         MVI   EXLST,X'87'             JFCB exit is last entry
+         LA    R0,EXLST                Exit list (DCB abend exit)
+         STCM  R0,B'0111',DCBIN+DCBEXLSA-IHADCB
+         LA    R1,IECSDSL1             Move DSCB's
+         STCM  R1,15,FORMAT1                      in
+         LA    R1,AREA2                             Area's
+         STCM  R1,15,FORMAT2                               ,,,
+         LA    R1,AREA3                                    ,,,
+         STCM  R1,15,FORMAT3                               ,,,
+         MVI   #EXTS,39                X'27' in EXTABL
+         XC    CAMLST(16),CAMLST       Clear SEEK parameter list
+         MVC   CAMLST(2),=X'C080'      CAMLST SEEK
+         LA    R0,CCHHR
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,VOL
+         ST    R0,CAMLST+8             Option 3
+         L     R0,FORMAT1              Format 1 DSCB
+         ST    R0,CAMLST+12            Option 4
+         MVC   SCR3TXT(1),COMMCMD      Move EW or EWA
+         LM    R0,R1,COMMSIZE          Pickup screen dimension
+         LR    R5,R1                   # columns on screen
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR3LAST+1         Store R-last, C1
+*
+         LA    R0,1                    Row 1
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR3TXT+3          Store in SCR3TXT
+*
+         LA    R0,1                    Row 1
+         LA    R1,56                   Column 56+ message area
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R1C56+1         Store in SCR3TXT
+*
+         LA    R0,2                    Row 2
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R2C2+1          Store in SCR3TXT
+*
+         LA    R0,3                    Row 3
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R3C2+1          Store in SCR3TXT
+*
+         LA    R0,4                    Row 4
+         LA    R1,4                    Column 4+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R4C4+1          Store in SCR3TXT
+*
+         LA    R0,5                    Row 5
+         LA    R1,4                    Column 4+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R5C4+1          Store in SCR3TXT
+*
+         LA    R0,6                    Row 6
+         LA    R1,4                    Column 4+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R6C4+1          Store in SCR3TXT
+*
+         LA    R0,9                    Row 9
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R9C2+1          Store in SCR3TXT
+*
+         LA    R0,11                   Row 11
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R11C1+1         Store in SCR3TXT
+*
+         LA    R0,12                   Row 12
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R12C1+1         Store in SCR3TXT
+*
+         LA    R0,14                   Row 14
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R14C2+1         Store in SCR3TXT
+*
+         LA    R0,15                   Row 15
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R15C2+1         Store in SCR3TXT
+*
+         LA    R0,16                   Row 16
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R16C2+1         Store in SCR3TXT
+*
+         LA    R0,17                   Row 17
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R17C2+1         Store in SCR3TXT
+*
+         LA    R0,19                   Row 19
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R19C2+1         Store in SCR3TXT
+*
+         LA    R0,20                   Row 20
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R20C2+1         Store in SCR3TXT
+*
+         LA    R0,21                   Row 21
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R21C2+1         Store in SCR3TXT
+*
+         LA    R0,22                   Row 22
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R22C2+1         Store in SCR3TXT
+*
+         LA    R0,23                   Row 23
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R23C2+1         Store in SCR3TXT
+*
+         MVC   DPARM,=C'SHORT'         Move default PARM
+         MVI   VOL,C' '                Clear volume ...
+         MVC   VOL+1(5),VOL                         in screen
+*                                                                  @rp6
+         MVC   SCR3UID(8),COMMUSER     TSO userid into screen
+         MVI   BUFCMD,C'1'             Default option 1
+         MVI   SW,0                    Clear switch
+         TM    COMMFLG3,$COMRPFV       Invoked by RPFV TSO command?
+         BNO   RESTART                 No: normal processing
+         MVC   VOL,COMMVOL             Move volume from RPFV
+         MVI   BUFCMD,C'1'             Only option 1
+         B     RPF011                  Process...
+RESTART  DS    0H
+         TM    COMMFLG3,$COMRPFV       Invoked by RPFV command proc.
+         BO    RETURN                  Yes: return to RPFV
+         XC    EDVTC1,EDVTC1           Init ep of RPFVTOC1/RPFEDIT
+         MVI   SW,0                    Clear switch
+         MVC   SCR3VOL,VOL             Move volume name
+         MVC   SCR3HLQ,COMMPFX         Move data set level from RPFCOMM
+         MVC   SCR3PARM,DPARM          Move PARM
+         MVC   SCR3CMD,BUFCMD          Move previous option
+         LA    R1,SCR3TXT              Screen address
+         LA    R0,SCR3LEN              Length
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write DSLIST menu entry
+         MVI   MSG3,C'-'               Clear                       @rp3
+         MVC   MSG3+1(L'MSG3-1),MSG3        message                @rp3
+         MVI   SCR3LNE1,C' '           Blank
+         MVC   SCR3LNE1+1(L'SCR3LNE1-1),SCR3LNE1 the
+         MVC   SCR3LNE2,SCR3LNE1                   in-
+         MVC   SCR3LNE3,SCR3LNE1                     fo
+         MVC   SCR3LNE4,SCR3LNE1                       li-
+         MVC   SCR3LNE5,SCR3LNE1                         nes
+         MVC   SCR3ERR,SCR3LNE1        Blank error line
+         LA    R5,BUFFER               Output formatted buffer
+         L     R3,COMMSCR              Load screen address
+         LR    R1,R3                   Buffer address
+         LA    R0,270                  Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LR    R4,R1                   Save length
+*
+*        Do a TGET ASIS to obtain the AID byte
+*        After the TGET ASIS remove the SBA's from the output.
+*        Process the options and the data on the screen.
+*
+         CLI   0(R3),X'F3'             PFK3 (End) pressed?
+         BE    END                     Yes: return to caller
+         CLI   0(R3),X'C3'             PFK15 (End) pressed?
+         BE    END                     Yes: return to caller
+         XR    R2,R2                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   CONV099                 Conversion finished if <=0
+         LA    R3,3(,R3)
+         LA    R5,BUFFER               Output address
+*
+*        Input screen is pointed to by register 3
+*        Output screen is pointed to by register 5
+*        The next section will remove all the SBA's
+*
+CONV001  DS    0H
+         CLI   0(R3),COMMSBA           Set buffer address (SBA)?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV099                 End of routine
+CONV003  LA    R3,3(,R3)               Skip 3 bytes input
+         SH    R4,=H'2'                Minus 2 BCT
+         BNP   CONV099                 <=0: Conversion finished
+         BCT   R4,CONV001              Test next byte
+CONV099  DS    0H
+         LR    R1,R2                   Output length in register 1
+RPF004   LA    R2,BUFFER               Startaddress buffer
+         LTR   R1,R1                   Nothing received?
+         BZ    RESTART                 Yes: re-display
+         LR    R3,R1                   Length of buffer
+         LA    R4,BUFCMD               Command
+         MVI   OUTPBUF,C' '            Blank
+         MVC   OUTPBUF+1(L'OUTPBUF-1),OUTPBUF the fields
+RPF004A  DS    0H
+         CLC   LVLTXT,0(R2)            'Data set level =' found?
+         BE    RPF004B                 Yes: branch                 @rp3
+         MVC   0(1,R4),0(R2)           move 1 byte command         @rp3
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R4,1(,R4)               Next byte in command        @rp3
+         LA    R2,1(,R2)               Examine next byte           @rp3
+         BCT   R3,RPF004A              Branch                      @rp3
+         B     RESTART                 CLEAR key pressed           @rp3
+RPF004B  DS    0H                                                  @rp3
+         LA    R2,L'LVLTXT(,R2)        Point after 'Data set level ='
+         SH    R3,=AL2(L'LVLTXT)       Decrease BCT register
+         LA    R4,COMMPFX              High level qualifier        @rp3
+         MVI   COMMPFX,C' '            Blank PFX ....
+         MVC   COMMPFX+1(L'COMMPFX-1),COMMPFX    first
+RPF005   DS    0H
+         CLC   VOLTXT,0(R2)            'Volume         =' found?
+         BE    RPF007                  Yes: good, branch
+         MVC   0(1,R4),0(R2)           Move 1 byte HLQ             @rp3
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R4,1(,R4)               Next byte in HLQ            @rp3
+         LA    R2,1(,R2)               Examine next byte
+         BCT   R3,RPF005               Branch
+         B     RESTART                 CLEAR key pressed
+RPF007   DS    0H
+         LA    R2,L'VOLTXT(,R2)        Point after 'Volume         ='
+         SH    R3,=AL2(L'VOLTXT)       Decrease BCT register
+         LA    R4,VOL                  Volume address
+RPF008   DS    0H
+         CLC   PRMTXT,0(R2)            ',Parm =' keyword found?
+         BE    RPF009                  Yes: end of scan
+         MVC   0(1,R4),0(R2)           Move byte Volume
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R2,1(,R2)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R3,RPF008               Branch
+         B     RESTART                 CLEAR key pressed
+RPF009   DS    0H
+         LA    R2,L'PRMTXT(,R2)        Point after ',Parm ='
+         SH    R3,=AL2(L'PRMTXT)       Decrease BCT register
+         BNP   RPF011                  No data anymore in screen
+         LA    R4,DPARM                PARM
+RPF010   DS    0H
+         MVC   0(1,R4),0(R2)           Move byte PARM
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R2,1(,R2)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R3,RPF010               Branch
+RPF011   DS    0H
+*---------------------------------------------------------------------*
+*
+*        RPF011 is the landing point of 2 instances:
+*
+*        Instance 1 is the REFRESH primary command of RPFVTOC1. So,
+*        a new list in the EDIT workspace is created.
+*
+*        Instance 2 is the TSO command processor RPFV. In this case
+*        BUFCMD is set to 1 and COMMPFX (the prefix) is set by RPFV
+*        and VOL is a copy of COMMVOL and COMMVOL is set by RPFV too.
+*
+*------------------------------------------ (C)-2025 Skybird systems -*
+         SPACE
+         CLI   BUFCMD,C'1'             Option 1 entered?
+         BE    RPF015                  Yes: good
+         CLI   BUFCMD,C'2'             Option 2 entered?
+         BE    RPF015                  Yes: good
+         CLI   BUFCMD,C'V'             Option V entered?
+         BE    RPF015                  Yes: good
+         MVC   MSG3,ERR2TXT            Msg: Invalid option
+         B     ERROR                   Review screen
+RPF015   DS    0H
+         CLI   VOL,C' '                VOLUME specified?
+         BNE   RPF027                  Yes: carry on
+         CLI   BUFCMD,C'1'             Option 1 ?                  @rp3
+         BNE   RPF019                  No: branch                  @rp3
+         CLI   COMMPFX,C' '            Data set level specified?
+         BE    RPF019                  No: error, branch           @rp3
+*
+*        Invoke the module RPFLISTC to populate the EDIT workspace
+*        with the data sets starting with 'Data set level'.
+*
+         LA    R1,COMMPFX              Prefix to search
+         ST    R11,CALLST              Save parm
+         LA    R1,CALLST
+         LINK  EP=RPFLISTC             Locate the data sets
+         B     RPF017(R15)             Run thru branchlist         @rp3
+RPF017   DS    0H                                                  @rp3
+         B     RPF025                  RC=0000                     @rp3
+         B     RPF025                  RC=0004 (truncated)         @rp3
+         B     RPF021                  RC=0008 (no data sets found)
+RPF019   DS    0H                                                  @rp3
+         MVC   MSG3,ERR3TXT            Volume/level not specified  @rp3
+         B     ERROR
+RPF021   DS    0H                                                  @rp3
+         MVC   MSG3,ERR5TXT            No data sets found          @rp3
+         B     ERROR                                               @rp3
+RPF025   DS    0H                                                  @rp3
+         MVC   COMMPRM(4),=C'LVL='     Tell RPFVTOC1 that a        @rp5
+         MVC   COMMPRM+4(17),COMMPFX   Catalog has been searched   @rp5
+         L     R15,EPVTOC1             Point to RPFVTOC1 module    @rp3
+         CALL  (15),((11)),MF=(E,CALLST) Branch to module
+         B     *+4(15)                 Branchlist
+         B     RPF026                  Rc=0, Continue with return
+         B     RPF011                  Rc=4, go to landing point
+RPF026   DS    0H
+         TM    COMMFLG2,$COMRTRN       Return indicator set?       @rp3
+         BNO   RESTART                 Present menu if not         @rp3
+         B     RETURN                  Else return                 @rp3
+*
+RPF027   DS    0H
+         CLI   BUFCMD,C'1'             -1- selected? (sel.list)
+         BE    RPF031                  Continue
+         CLI   BUFCMD,C'2'             -2- selected?
+         BE    RPF029                  Continue
+         CLI   BUFCMD,C'V'             -V- selected? (Summary)
+         BE    RPF033                  Continue
+RPF029   DS    0H
+         MVC   HEAD0PRM,=C'SHORT'      Move default PARM in HEAD0
+         CLC   DPARM(4),=C'LONG'       Is PARM=LONG used? (extra DSN)
+         BNE   RPF035                  No: also good
+RPF031   DS    0H
+         OI    SW,$LONG                Indicate PARM=LONG in flag
+         MVC   HEAD0PRM,=C'LONG '      and move in header
+         B     RPF039
+RPF033   DS    0H                      Display summary in menu
+         MVI   HEAD0PRM,C' '           Do not set PARM in opt V
+         MVC   HEAD0PRM+1(L'HEAD0PRM-1),HEAD0PRM
+         B     RPF039                  Branch
+RPF035   DS    0H
+         CLC   DPARM(3),=C'VOL'        Is PARM=VOL used?
+*
+*        With PARM=VOL in each VTOC line, the volume will be set and
+*        no Headers and Trailors will be produced.
+*        The volume is placed instead of the creation date
+*
+         BNE   RPF037                  No: good, branch
+         OI    SW,$VOL                 Also good, set flag
+         B     RPF039
+RPF037   CLC   DPARM(5),=C'SHORT'      Is PARM=SHORT used?
+         BE    RPF039                  Yes: good
+         MVC   MSG3,ERR4TXT            Error msg (Invalid parm)
+         B     ERROR                   Error routine
+RPF039   DS    0H
+*
+*        Populate the EDIT workspace with the data set information
+*        on the specified volume. Use the data set level if presents
+*        as a filter.
+*
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R3,RPFD08               Point to allocation parm block
+         USING DAPB08,R3               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'VTOC'      DDNAME to allocate
+         MVI   DA08DSP1,DA08NEW        DISP=NEW
+         MVI   DA08CTL,DA08TRKS        Space in tracks
+         MVI   DA08PQTY+3,1            1 track
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT(8),COMMUNIT
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVC   DA08SER(6),VOL
+         MVI   VTOCDSN,X'40'           Blank
+         MVC   VTOCDSN+1(43),VTOCDSN         VTOCDSN
+         MVC   VTOCDSN(8),COMMUSER     First qualifier is userid
+         LA    R1,VTOCDSN+44           Point to position 9
+         TRT   VTOCDSN,COMSKPNS        Stop at first blank
+         MVC   0(2,R1),=C'.D'          Set time a send qual.
+         LA    R4,2(,R1)
+         TIME  DEC                     Get current time
+         SRL   R0,4                    Shift out fractions
+         ST    R0,TIMEWORK             Store time
+         ST    R1,DATEWORK               and date
+         UNPK  0(5,R4),DATEWORK        Set date (YYDDD) in DSNAME
+         OI    4(R4),X'F0'             Remove sign
+         MVC   5(2,R4),=C'.T'          Next qualifier with time
+         OI    TIMEWORK+3,X'0F'        Insert sign in time
+         UNPK  TIMEDISP(7),TIMEWORK    Unpack the time
+         MVC   7(6,R4),TIMEDISP+1      Time in data set name
+         LA    R1,VTOCDSN+44           Point to position 9
+         TRT   VTOCDSN,COMSKPNS        Stop at first blank
+         LA    R0,VTOCDSN              Point to beginning of dsn
+         SLR   R1,R0                   ... length
+         STCM  R1,3,VTOCDSNL           And save real length
+         LA    R1,VTOCDSNL             Data set name + length
+         ST    R1,DA08PDSN             Save in parameter block
+         LR    R1,R3                   DAPB08
+         L     R15,=V(CALLTS)
+         BALR  R14,R15                 Invoke IKJDAIR
+         LTR   R15,R15                 Allocation ok?
+         BZ    RPF041                  Yes: good
+         MVC   MSG3,ERR1TXT            Volume not available
+         B     ERROR
+RPF041   DS    0H
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         RDJFCB DCBIN,MF=(E,COMOPN)    Read JFCB of DCBIN
+         MVC   HEAD0VOL,VOL            Move volume name into header
+         TIME  DEC                     Get time of day
+         SRL   R0,4                    Shift out hundreds of seconds
+         ST    R0,TIMEWORK             Store time
+         ST    R1,DATEWORK               and date
+         OI    TIMEWORK+3,X'0F'        Insert sign in time
+         MVC   TIMEDISP,TIMEPATT       Move pattern for edit
+         MVC   DATEDISP,DATEPATT       Move pattern for edit
+         ED    TIMEDISP,TIMEWORK       Edit the time
+         ED    DATEDISP,DATEWORK+1     Edit the date
+         MVC   HEAD0DTE,DATEDISP+1     Move date in header line
+         MVC   HEAD0TME,TIMEDISP+2     Move time in header line
+         MVC   JFCB(44),F4404          DSN=x'04040404' (F4 DSCB)
+         LA    R2,DCBIN
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  ((2)),TYPE=J,MF=(E,COMOPN) Open F4 DSCB
+         RPFSA24                       Goto addressing mode 24
+         READ  DECB1,SF,(2),AREA1,140,MF=E Read a DSCB
+         CHECK DECB1
+         RPFSA31                       Restore addressing mode
+         LA    R2,AREA1+44             Point to data portion F4DSCB
+         USING IECSDSL4,R2             Get addressability
+         MVC   HEAD0SMS(3),=C'No '     Default not an SMS volume   @sms
+         AIF   (NOT &OS390).NOSMS1
+         AIF   (NOT &SMS).NOSMS1
+**** Start inclusion SMS managed systems statements
+*
+         TM    DS4SMSFG,DS4SMS         Is the volume SMS managed?  @sms
+         BNO   *+10                    No: branch                  @sms
+         MVC   HEAD0SMS,=C'Yes'        Move 'YES' in header        @sms
+*
+**** End inclusion SMS managed systems statements
+.NOSMS1  ANOP
+         MVC   TRKCYL+2,DS4DEVSZ+2     # tracks per cylinder
+         XC    #FREDSCB,#FREDSCB       Init # of blank DSCB's
+         MVC   #FREDSCB+2(2),DS4DSREC  # of emtpy DSCB's
+         MVC   CURCCHHR(4),DS4VTOCE+2  Move start address of VTOC
+         MVI   CURR,X'01'              Start with first record
+         MVC   HICCHHR(5),DS4HPCHR     Move High-Water mark
+         MVC   DSCBTRK(1),DS4DEVDT     # DSCB's on a track
+         XR    R3,R3                   Clear register
+         IC    R3,DS4DEVDT             # DSCB's on a track
+         CVD   R3,DBW                  Convert to decimal
+         UNPK  HEAD1DS,DBW             Put in EBCDIC in header
+         OI    HEAD1DS+1,X'F0'         Clear sign
+         IC    R3,DS4DEVDB             # Directory blks on a track
+         CVD   R3,DBW                  Convert to decimal
+         UNPK  HEAD1DIR,DBW            Put in EBCDIC in header
+         OI    HEAD1DIR+1,X'F0'        Clear sign
+         SYCONVHX IN=DS4VTOCE+2,OUT=HEAD1EX1,L=4,RENT=YES strt VTOC
+         SYCONVHX IN=DS4VTOCE+6,OUT=HEAD1EX2,L=4,RENT=YES end  VTOC
+         SYCONVHX IN=DS4VTOCI,OUT=HEAD1VTI,L=1,RENT=YES VTOC indicators
+         XR    R3,R3                   Clear register 3       @20020707
+         ICM   R3,3,DS4DEVSZ+2         Tracks/cyl             @20020707
+         CVD   R3,DBW                  Convert to decimal     @20020707
+         UNPK  HEAD2TCY,DBW            Put in EBCDIC in headr @20020707
+         OI    HEAD2TCY+1,X'F0'        CLEAR SIGN             @20020707
+         ICM   R3,3,DS4DEVTK           Bytes on a track       @20020707
+         CVD   R3,DBW                  convert to decimal     @20020707
+         UNPK  HEAD2TRK,DBW            Put in EBCDIC in headr @20020707
+         OI    HEAD2TRK+4,X'F0'        CLEAR SIGN             @20020707
+         ICM   R3,3,DS4DEVSZ           Cyls on a volume       @20020707
+         CVD   R3,DBW                  convert to decimal     @20020707
+         UNPK  HEAD2#CY,DBW            Put in EBCDIC in headr @20020707
+         OI    HEAD2#CY+4,X'F0'        Clear sign             @20020707
+         DROP  R2                      Kill addressability
+         XC    #FREECYL,#FREECYL       Init #FREECYL
+         XC    #FREETRK,#FREETRK       Init #FREETRK
+         XC    #FREEVIR,#FREEVIR       Init #FREEVIR
+         XC    #FREEEXT,#FREEEXT       Init Free extents
+         XC    LARGTRK,LARGTRK         Init LARGTRK
+         XC    LARGCYL,LARGCYL         Init LARGCYL
+         MVC   VIRS(6),=CL6' N/A '
+         MVC   DSCBS(6),=CL6' N/A '
+         ZAP   CRDCNT,=P'0'            Init Record counter
+         ZAP   DSNCNT,=P'0'            Init Data sets counter
+         L     R9,COMWSTRT             Startaddress EDIT workspace
+         SL    R9,=A(NEXTENT)          Minus NEXTENT
+         ST    R9,COMMLAST             Init COMMLAST
+         MVI   COMMBR+6,C' '           Clear last 2 ...
+         MVI   COMMBR+7,C' '           positions member name
+         MVC   COMMBR(6),VOL           Volume serial
+         MVC   HEAD0VTC,=C'OS'         Default OS-VTOC in head0
+         LA    R5,DCBIN                Load DCB address
+         USING IHADCB,R5               Get temp addr (DCBD)
+         XR    R1,R1                   Clear register 1
+         ICM   R1,B'0111',DCBDEBA      Get 24 bit DEB address
+         ST    R1,DEBADDR              Save address
+         DROP  R5                      DCBD
+         USING DEBBASIC,R1             Get addressability of DEB
+         LA    R1,DEBISAM              Point after Basic section
+         DROP  R1                      Kill addr of Basic section
+         USING DEBDASD,R1              Get addressability of DASD sec.
+         XR    R6,R6                   Clear register 6
+         ICM   R6,B'0111',DEBUCBA      Load 24 bit UCB address
+         DROP  R1                      DEBDASD
+         USING VTOCUCB,R6              Get local addressability
+         MVI   HEAD0UCB,C'0'           Leading '0'
+         MVC   HEAD0UCB+1(3),UCBNAME   Unit address
+         MVC   VOLTYP,UCBTYP           Move UCB-type               @rp2
+         DROP  R6                      VTOCUCB
+         AIF   (NOT &OS390 AND NOT &MVSXA).NOCVTST
+**** Start inclusion DF/DS (JDM1134) or DFP statements
+*
+         CVAFTST UCB=(6)               Test if indexed VTOC's are there
+         C     R15,F0008               Does volume contain an VTOCIX?
+         BNE   RPF045                  No: treat volume as UNindexed
+         OI    SW,$IDX                 Mark Indexed VTOC
+         MVC   HEAD0VTC,=C'IX'         Mark Indexed VTOC type in HEAD0
+         XC    AREA1,AREA1             Initial zero
+         MVC   CVPL(CVPLNGTH),CVPL5    Move CVAFDSM CVPL           @rp1
+*
+**** End inclusion DF/DS (JDM1134) or DFP statements
+.NOCVTST ANOP
+*
+RPF045   DS    0H
+         CLI   BUFCMD,C'1'             Option '1' selected
+         BE    RPF046                  Yes: Skip headers
+         CLI   BUFCMD,C'V'             Option 'V' selected
+         BE    RPF046                  Yes: Skip headers
+         TM    SW,$VOL                 PARM=VOL used?
+         BNZ   RPF046                  Yes: skip headers
+         LA    R1,HEAD0                Area address
+         BAL   R14,WORKSPC             Write into workspace
+         LA    R1,HEAD1                Area address
+         BAL   R14,WORKSPC             Write into workspace
+         LA    R1,HEAD2                Area address
+         BAL   R14,WORKSPC             Write into workspace
+         LA    R1,HEAD3                Area address           @20020707
+         BAL   R14,WORKSPC             Write into workspace   @20020707
+RPF046   DS    0H
+*
+         AIF   (NOT &OS390 AND NOT &MVSXA).NOIDX1
+**** Start inclusion DF/DS (JDM1134) or DFP statements
+*
+         TM    SW,$IDX                 Indexed VTOC?
+         BNO   NOCVAFRD                No: read DSCB's sequentially
+         XC    BUFLIST(BFLHLN+BFLELN),BUFLIST Clear buffer list
+         MVC   DS1DSNAM,F4404          Starting with VTOC DSName
+         OI    BFLHFL,BFLHDSCB         BUFLIST describes DSCB's
+         LA    R1,DS1FMTID             Load receiving area address
+         ST    R1,BFLEBUF              Set in BUFLIST
+         MVI   BFLELTH,DSCBLTH         Mark data portion of DSCB read
+         MVI   BFLHNOE,1               One buffer list entry
+         XC    AREA1,AREA1             Initial zero
+         MVC   CVPL(CVPLNGTH),CVPL5    Move CVAFDSM CVPL
+         AIF   (NOT &LARGE).NOLRG1
+**** Start z/OS large volume support statements
+*
+         L     R2,ADDREXT              To contain extended extents
+         USING DT2EDT02,R2             Make extended extents addr.
+         LR    R0,R2                   Clear ...
+         LA    R1,1024                       1024 byte table
+         XR    R3,R3                   Fill = X'00' + length zero
+         MVCL  R0,R2                   Clear extents table
+         L     R2,ADDREXT              To contain extended extents
+         MVC   DT2X7EYE,=CL8'ICVEDT02' Eyecatcher
+         L     R0,=A(36+(8*123))       Length of ICVEDT02
+         ST    R0,DT2X7LEN             and save
+         LA    R0,123                  123 extents in one CVAFDSM
+         ST    R0,DT2X7ENT             Number of entries
+         MVI   DT2X7LEV,1              Level = 1
+*
+**** End z/OS large volume support statements
+.NOLRG1  ANOP
+VTOCIDX  TM    SW,$EOD                 All extents done ?
+         BO    RPF047                  Yes: go on:
+         LA    R2,AREA1                Load area address
+         XC    EXTS,EXTS               Clear area
+         AIF   (NOT &LARGE).NOLRG2
+**** Start z/OS large volume support statements
+*
+         L     R2,ADDREXT              Load 1024 byte area address
+*
+*        Obtain the free extents in the extended extent table
+*        mapped with ICVEDT02. The address is in ADDREXT
+*        This method is needed, because RTA4BYTE=NO (the default)
+*        results in a STAT075 error, when a large volume is selected.
+*
+         L     R5,DEBADDR              Reload deb addres
+         CVAFDSM MF=(E,CVPL),DEB=(5),RTA4BYTE=YES,EXTENTS=(2),         X
+               ACCESS=MAPDATA,MAP=VOLUME
+*
+**** End z/OS large volume support statements
+.NOLRG2  ANOP
+         AIF   (&LARGE).SKP1
+**** Start Indexed VTOCS without large volume support
+*
+         USING IECSDSL5,R2             F5 DSCB in AREA1
+         MVC   EXTS(L'DS5AVEXT),DS5MAVET+L'DS5MAVET-L'DS5AVEXT
+         L     R5,DEBADDR              Reload deb addres
+         CVAFDSM MF=(E,CVPL),DEB=(5),EXTENTS=EXTABL
+*
+**** End Indexed VTOCS without large volume support
+.SKP1    ANOP
+         LTR   R15,R15                 Cvafdsm alright ?
+         BZ    IDXCONT                 No: do not read extents
+         C     R15,F0004               End of data CVAFDSM?
+         BNE   INDEXER                 No: other error
+         CLI   CVSTAT,STAT032          End of data ?
+         BNE   INDEXER                 Yes: proceed
+         OI    SW,$EOD                 Mark last created F5 DSCB
+         B     IDXCONT                 Process format 5 DSCB
+INDEXER  CVD   R15,DBW                 Convert return code
+         UNPK  IDXERC(4),DBW           Convert to EBCDIC
+         OI    IDXERC+3,X'F0'          Clear sign
+         SYCONVHX IN=CVSTAT,OUT=IDXSTAT,L=1,RENT=YES Error status
+         MVC   IDXTXT(10),=CL10'MAP=VOLUME' Move type of error
+         MVC   SCR3ERR,IDXERR          Move error msg in screen
+         NI    SW,X'FF'-$IDX           Continue NON-indexed
+         MVC   HEAD0VTC,=C'OS'         Set type back to OS
+         B     RPF047                  Continue
+         AIF   (&LARGE).LARGE3
+**** Start Indexed VTOCS without large volume support
+*
+IDXCONT  MVC   DS5AVEXT(L'DS5AVEXT+L'DS5EXTAV),EXTS Move in extents
+         MVC   DS5MAVET,EXTS+L'DS5AVEXT+L'DS5EXTAV Move remaining
+         OI    SW,$IDX                 Mark Indexed VTOC
+         BAL   R14,FORM501             Process built F5 DSCB
+*
+**** End Indexed VTOCS without large volume support
+.LARGE3  ANOP
+         AIF   (NOT &LARGE).NOLRG3
+**** Start z/OS large volume support statements
+*
+IDXCONT  DS    0H
+*
+*        Accumulate the free extents in the DT2EDT02 area. The
+*        free extents are from offset 36 and are in pairs of start
+*        extent (rel. track number) and end extend +1
+*
+         L     R3,DT2X7ENT             Number of extents
+         LA    R14,DT2ENTRY            Point to first entry
+         USING DT2ARENT,R14            Make entry addressable
+IDXCONT3 DS    0H
+         ICM   R1,15,DT2RTAED          End of extent
+         BZ    IDXCONT9                Do not accumulate if zero
+         SL    R1,DT2RTAST             -/- start of extent
+         LH    R4,#FREEEXT
+         LA    R4,1(,R4)               Cumulate # extents
+         STH   R4,#FREEEXT
+         XR    R0,R0                   Clear even reg
+         D     R0,TRKCYL               Cyls in register 1, trks in 0
+         L     R15,#FREECYL            Accumulate cylinders
+         AR    R15,R1                  + this extent
+         ST    R15,#FREECYL            And save
+         L     R15,#FREETRK            Accumulate free tracks
+         AR    R15,R0                  + this extent
+         ST    R15,#FREETRK            And save
+         CH    R1,LARGCYL              Biggest extent?
+         BL    IDXCONT9                No: do not replace
+         BH    IDXCONT5                High: replace LARGCYL / LARGTRK
+         CH    R0,LARGTRK              Test # trks if cyls are equal
+         BNH   IDXCONT9                Not high: do not replace
+IDXCONT5 DS    0H
+         STH   R1,LARGCYL              New largest ...
+         STH   R0,LARGTRK                          extent
+IDXCONT9 DS    0H
+         LA    R14,8(,R14)             Next entry in table
+         BCT   R3,IDXCONT3             Loop thru the extents
+         B     VTOCIDX                 Process next free entry if there
+         DROP  R2,R14                  DT2EDT02 and DT2ENTRY
+*
+**** End z/OS large volume support statements
+.NOLRG3  ANOP
+*
+**** End inclusion DF/DS (JDM1134) or DFP statements
+.NOIDX1  ANOP
+*
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Read the DSCB's with CVAFSEQ if an indexed VTOC exists       *
+*        or with a BSAM READ if the VTOC is in OS-format              *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPF047   DS    0H
+         AIF   (NOT &OS390 AND NOT &MVSXA).NOIDX2
+**** Start inclusion of DF/DS (JDM1134) or DFP statements
+*
+         TM    SW,$IDX                 Indexed VTOC?
+         BNO   NOCVAFRD                No: process OS VTOC
+RPF048   DS    0H
+         L     R5,DEBADDR              DEB address
+         MVC   CVPL(CVPLNGTH),CVPL3    Move CVAFSEQ CVPL
+         LA    R0,DS1DSNAM             DSN in
+         ST    R0,CVDSN                      CVPL
+         LA    R0,BUFLIST              BUFLIST in
+         ST    R0,CVBUFL                     CVPL
+         CVAFSEQ MF=(E,CVPL),DEB=(5)   Obtain next DSCB
+         LTR   R15,R15                 CVAFSEQ ok?
+         BZ    RPF049                  Yes: good
+         C     R15,F0004               Is it four?
+         BNE   SEQERR                  Yes: error
+         CLI   CVSTAT,STAT032          End of data ?
+         BE    RPFEOD                  Yes: branch               @rpa01
+SEQERR   DS    0H                      Error in READ
+         CVD   R15,DBW                 Convert return code
+         UNPK  IDXSEQC(4),DBW          Convert to EBCDIC
+         OI    IDXSEQC+3,X'F0'         Clear sign
+         SYCONVHX IN=CVSTAT,OUT=IDXSEQE,L=1,RENT=YES
+         LA    R1,SEQMSG               Give message
+         BAL   R14,WORKSPC             Set this msg in workspace
+         B     RPFEOD                  And terminate             @rpa01
+*
+**** End inclusion of DF/DS (JDM1134) or DFP statements
+.NOIDX2  ANOP
+*
+NOCVAFRD DS    0H                                                @rpa01
+         LA    R2,DCBIN                DCB address
+         RPFSA24                       Goto addressing mode 24
+         READ  DECB1,SF,(2),IECSDSL1,140,MF=E
+         CHECK DECB1
+         RPFSA31                       Restore addressing mode
+*
+* After here I test for the high-water mark. This is the last format-1
+* DSCB in the VTOC. This test will only be done if the VTOC is in 'OS'
+* format. This high-water mark test will increase the performance of
+* Reading OS-VTOCS
+*
+         XR    R9,R9                   Clear register
+         IC    R9,CURR                 Record number
+         LA    R9,1(,R9)               Increase it
+         STC   R9,CURR                 And save
+         CLM   R9,1,DSCBTRK            > # DSCB's on track?
+         BNH   TESTHI                  No: test with Hi-Water
+         MVI   CURR,X'01'              Set record to 1
+         ICM   R9,3,CURHH              Pickup track number
+         LA    R9,1(,R9)               Increase it
+         STCM  R9,3,CURHH              And save
+         CLM   R9,3,TRKCYL+2           Over cylinder boundary?
+         BNH   TESTHI                  No: test with Hi-Water mark
+         LA    R9,1                    Track number
+         STCM  R9,3,CURHH                          to one
+         ICM   R9,3,CURCC              And increase
+         LA    R9,1(,R9)                           cylinder counter
+         STCM  R9,3,CURCC              And save
+TESTHI   EQU   *                       Test with last F1 on VTOC (HI)
+         CLC   CURCCHHR,HICCHHR        High-Water mark reached?
+         BH    RPFEOD2                 Y: no sense to continue   @rpa01
+         B     RPF049                  *** END OF TEST
+RPFEOD   DS    0H                                                @rpa01
+         RPFSA31                       Restore addressing mode
+RPFEOD2  DS    0H                                                @rpa01
+         OI    SW,$EOF                 MARK END OF FILE
+         B     RPF999
+SYNAD    EQU   *                       SYNAD routine DCBIN
+         OI    SW,$IOE                 Mark I/O error
+         B     RPF999                  End of routine
+RPF049   EQU   *
+         LA    R2,AREA1                PICKUP ADDRESS
+         CLI   DS1FMTID,C'5'           FORMAT 5
+         BNE   RPF051
+         AIF   (NOT &OS390 AND NOT &MVSXA).FMT5
+         TM    SW,$IDX                 Allready processed?
+         BO    RPF047                  Yes: skip
+.FMT5    ANOP
+         MVC   AREA1(140),DS1DSNAM
+         BAL   R14,FORM501
+         B     RPF047
+         TITLE 'PROCESS FORMAT5 DSCBS'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        In this routine the free space of the volume will be         *
+*        accumulated.  (F5DSCB in area1 and pointed to by r2)         *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+FORM501  EQU   *                       Format 5 DSCB
+         MVC   AREA2,AREA1             Save area address
+         LA    R3,26                   26 Extents per DSCB 5
+         MVC   44(90,R2),45(R2)        Move over FORMAT id
+         LA    R2,4(,R2)
+FORM503  CLC   0(2,R2),=XL2'0'         No valid extent
+         BNE   FORM507
+FORM505  LA    R2,5(,R2)               Next extent
+         BCT   R3,FORM503
+         MVC   AREA1,AREA2             Restore format 5 DSCB
+*
+         BR    R14                     Next DSCB
+FORM507  SR    R4,R4
+         LH    R4,#FREEEXT
+         LA    R4,1(,R4)               Cumulate # extents
+         STH   R4,#FREEEXT
+         L     R4,#FREECYL
+         LH    R1,2(R2)                Cumulate # free cylinders
+         LA    R4,0(R1,R4)             Cumulate # free cylinders
+         ST    R4,#FREECYL
+         L     R4,#FREETRK             Cumulate # free tracks
+         SR    R5,R5                   Clear register
+         IC    R5,4(R2)                # tracks of extent
+         AR    R4,R5
+         ST    R4,#FREETRK
+         CLC   2(2,R2),LARGCYL         Biggest extent?
+         BL    FORM505                 No: loop until found
+         BE    FORM511
+FORM509  MVC   LARGCYL(3),2(R2)
+         B     FORM505
+FORM511  CLC   LARGTRK,4(R2)
+         BL    FORM509
+         B     FORM505                 Next extent
+RPF051   CLI   DS1FMTID,C'1'           A format 1 DSCB?
+         BNE   RPF047                  No: skip this DSCB
+         TITLE 'PROCESS THE FORMAT 1 DSCBS'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        In this routine records will be made of the read format 1    *
+*        DSCB's and the obtained format 3 DSCB's                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+FORM101  DS    0H
+         CLI   BUFCMD,C'V'             Display summary only?
+         BNE   FORM102                 No: process F1DSCB
+         AP    DSNCNT,=P'1'            In summary only count F1
+         B     RPF047                  Read next DSCB
+FORM102  DS    0H
+         XC    FORMAT2,FORMAT2         Clear next DSCB
+         CLC   DS1PTRDS,=XL5'0'        No DSCB 2 or 3
+         BE    FORM105                 Save adress
+*        MVC   VOL,DS1DSSN             Save volume
+         MVC   CCHHR,DS1PTRDS          Save CCHHR of DSCB 2 or 3
+         LA    R0,AREA2
+         STCM  R0,15,FORMAT2           Repair Format 2 DSCB
+         MVC   CAMLST+12(4),FORMAT2
+         OBTAIN CAMLST                 OBTAIN for 1st DSCB2 or 3
+         XC    FORMAT3,FORMAT3         Clear FORMAT3 indicator
+         CLC   AREA2+135(5),=XL5'0'    Another DSCB for data set
+         BNE   FORM103
+         B     FORM105
+FORM103  MVC   CCHHR,AREA2+135         Save CCHHR 2nd DSCB
+         LA    R0,AREA3
+         STCM  R0,15,FORMAT3           Repair Format 3 DSCB
+         MVC   CAMLST+12(4),FORMAT3
+         OBTAIN CAMLST                 OBTAIN for 2nd DSCB2
+FORM105  DS    0H
+         CLI   COMMPFX,C' '            No data set level specified?@rp3
+         BE    FORM105Z                Yes: do not filter          @rp3
+         LA    R1,COMMPFX              Address in reg.1            @rp5
+         LA    R14,17                  Test max 17 bytes           @rp5
+         XR    R15,R15                 Count tested bytes          @rp5
+FORM105A DS    0H                                                  @rp3
+         CLI   0(R1),C' '              Blank  found?               @rp5
+         BE    FORM105B                No: branch                  @rp3
+         LA    R1,1(,R1)               Next pos.                   @rp3
+         LA    R15,1(,R15)             Count byte                  @rp5
+         BCT   R14,FORM105A            Test next byte              @rp3
+FORM105B DS    0H                                                  @rp5
+         BCTR  R15,0                   Minus 1 for ex              @rp5
+         EX    R15,HLQTEST             Test if match with level    @rp5
+         BNE   RPF047                  No match: next vtoc record  @rp5
+FORM105Z DS    0H
+         CLC   DS1DSNAM,VTOCDSN        Do not display allocated
+*                                      data set to avoid x13 abends
+         BE    RPF047                  Yes: skip
+         MVI   DSN,X'40'
+         MVC   DSN+1(ENDREC-DSN-1),DSN Clear output record
+         MVC   DSN,DS1DSNAM            Move DSName
+         TM    SW,$LONG                Extra DSNline with truncation ?
+         BNO   NOLONG                  No: proceed
+         MVC   DSN(44),DS1DSNAM        Move full name
+         MVC   DSN+45(7),=C'CCHH=X'''  Move cchh text
+         SYCONVHX IN=DS1EXT1+2,OUT=DSN+52,L=2,RENT=YES convert 'CC'
+         SYCONVHX IN=DS1EXT1+4,OUT=DSN+56,L=2,RENT=YES convert 'HH'
+         MVI   DSN+60,X'7D'            Move ending quote
+         MVC   DSN+62(6),VOL           Move volume
+         CLI   BUFCMD,C'1'             Option 1 selected ?
+         BNE   *+10                    No: do not place UCBTYP in line
+         MVC   DSN+69(4),VOLTYP        Move UCBTYP
+         MVC   DSN+74(3),HEAD0SMS      Move SMS=YES or NO          @sms
+         LA    R1,DSN                  Address output record in R1
+         BAL   R14,WORKSPC             Write DSName only in workspace
+         LTR   R15,R15                 Ok?
+         BNZ   RPF999A                 No: EDIT workspace truncated
+         MVI   DSN,X'40'
+         MVC   DSN+1(ENDREC-DSN-1),DSN Clear output record
+NOLONG   DS    0H
+         XR    R15,R15                 Clear r15
+         IC    R15,DS1NOEPV            # extents on volume
+         CVD   R15,DBW                 To packed
+         MVC   DEXT,=X'40202120'       Move edit mask
+         ED    DEXT,DBW+6              Edit the result
+         TM    SW,$VOL                 Parm is VOL used?
+         BNO   CREDATE                 No: insert creation date
+         MVC   CREAT(6),VOL            Move vol. instead of CRE-date
+         B     REFDATE                 Continue
+CREDATE  DS    0H
+         XR    R9,R9                   Clear register
+         IC    R9,DS1CREDT             Year of creation date
+         CVD   R9,DBW                  Convert to packed
+         UNPK  CREAT(2),DBW            Unpack year
+         OI    CREAT+1,X'F0'           Clear sign
+         ICM   R9,3,DS1CREDT+1         Days of creation date
+         CVD   R9,DBW                  Convert to packed
+         UNPK  CREAT+3(3),DBW          Convert to zoned
+         OI    CREAT+5,X'F0'           Clear sign
+         MVI   CREAT+2,C'.'            Move point
+REFDATE  DS    0H
+         XR    R9,R9                   Clear register
+         AIF   (&SVS).SVS1
+         IC    R9,DS1REFD              Year of reference date
+         AGO   .NOSVS1
+.SVS1    ANOP
+         IC    R9,DS1CREDT             VS2 Rel 1 knows no REFDT
+.NOSVS1  ANOP
+         CVD   R9,DBW                  Convert to packed
+         UNPK  REFDT(2),DBW            Unpack year
+         OI    REFDT+1,X'F0'           Clear sign
+*
+         AIF   (&SVS).SVS2
+         ICM   R9,3,DS1REFD+1          Days of reference date
+         AGO   .NOSVS2
+.SVS2    ANOP
+         ICM   R9,3,DS1CREDT+1         VS2 Rel 1 knows no REFDT
+.NOSVS2  ANOP
+         CVD   R9,DBW                  Convert to packed
+         UNPK  REFDT+3(3),DBW          Convert to zoned
+         OI    REFDT+5,X'F0'           Clear sign
+         MVI   REFDT+2,C'.'            Move period
+         TM    DS1DSORG+1,X'08'        VSAM data set ?          @bandke
+         BNO   *+14                    If not
+         MVC   DSORG,=C'VSAM'          Mark VSAM data set
+         B     DSORGEND                Bypass test DSORG
+         TM    DS1DSORG,X'80'          DSORG=IS?
+         BNO   *+14                    Test next function
+         MVC   DSORG,=C'IS  '          DSORG=IS (Indexed sequential)
+         B     DSORGEND                End of test
+         TM    DS1DSORG,X'40'          DSORG=PS?
+         BNO   DSORGDA                 Next DSORG if not           @sms
+         MVC   DSORG,=C'PS  '          Physical sequential
+         AIF   (NOT &OS390).NOSMS2
+**** Start inclusion SMS managed systems statements
+*
+         AIF   (NOT &SMS).NOSMS2
+         TM    DS1SMSFG,DS1STRP        Is it s striped data set?   @sms
+         BNO   DSORGEND                No: branch                  @sms
+         MVC   DSORG,=C'E/SQ'          Mark 'Extended Sequential'  @sms
+*
+**** End inclusion SMS managed systems statements
+.NOSMS2  ANOP
+         B     DSORGEND                End of test
+DSORGDA  DS    0H
+         TM    DS1DSORG,X'20'          DSORG=DA?
+         BNO   *+14                    Next DSORG test
+         MVC   DSORG,=C'DA  '          Direct Access
+         B     DSORGEND                End of DSORG test
+         TM    DS1DSORG,X'02'          DSORG=PO?
+         BNO   DSORGUND                DSORG undefined
+         MVC   DSORG,=C'PO  '          Partitioned
+*
+         AIF   (NOT &OS390).NOSMS3
+**** Start inclusion SMS managed systems statements
+*
+         AIF   (NOT &SMS).NOSMS3
+         TM    DS1SMSFG,DS1PDSEX       HFS data set                @sms
+         BNO   *+14                    No: branch                  @sms
+         MVC   DSORG,=C'HFS '          OMVS Posix data set         @sms
+         B     DSORGEND                Branch                      @sms
+         TM    DS1SMSFG,DS1PDSE        Is it a PDS/E?              @sms
+         BNO   DSORGEND                NO: BRANCH                  @sms
+         MVC   DSORG,=C'POE '          Mark PDSE in listing        @sms
+*
+**** End inclusion SMS managed systems statements
+.NOSMS3  ANOP
+         B     DSORGEND                End of DSORG test
+DSORGUND DS    0H
+         MVC   DSORG,=C'UND '          No valid dsorg
+DSORGEND DS    0H
+         CLI   BUFCMD,C'1'             Option 1 selected (DSLIST)?
+         BNE   *+10                    No: do not copy DS1SCALO
+         MVC   SCALO,DS1SCALO          Copy DS1SCALO for RPFVTOC1
+         TM    DS1RECFM,X'C0'          RECFM = Undefined?
+         BNO   RECF                    No: test next RECFM
+         MVC   RECFM(4),=C'U   '       RECFM=U
+         B     RECEND
+RECF     TM    DS1RECFM,X'80'          Fixed ?
+         BNO   RECV                    Test next RECFM
+         MVI   RECFM,C'F'              Fixed
+         TM    DS1RECFM,X'10'          Blocked ?
+         BNO   RECFS                   No: proceed
+         MVI   RECFM+1,C'B'            Mark blocked
+RECFS    TM    DS1RECFM,X'08'          Standard blocks ?
+         BNO   RECFA                   No: proceed
+         MVI   RECFM+2,C'S'            RECFFM = xxS (standard)
+         B     RECEND
+RECFA    TM    DS1RECFM,X'04'          ASA Control characters?
+         BNO   RECFBM                  No: proceed
+         MVI   RECFM+2,C'A'            RECFM = xxA (ASA)
+         B     RECEND
+RECFBM   TM    DS1RECFM,X'02'          Machine control characters?
+         BNO   RECEND                  No: proceed
+         MVI   RECFM+2,C'M'            REFCM = xxM
+         B     RECEND
+RECV     TM    DS1RECFM,X'40'          Variable
+         BNO   RECUND                  No valid recfm
+         MVI   RECFM,C'V'              Fixed
+         TM    DS1RECFM,X'10'          Blocked?
+         BNO   RECVS                   No: proceed
+         MVI   RECFM+1,C'B'            Mark blocked
+RECVS    TM    DS1RECFM,X'08'          Spanned blocks?
+         BNO   RECVA                   No: proceed
+         MVI   RECFM+2,C'S'            Standard
+         B     RECEND
+RECVA    TM    DS1RECFM,X'04'          ASA control chars?
+         BNO   RECVBM                  No: proceed
+         MVI   RECFM+2,C'A'            ASA control characters
+         B     RECEND
+RECVBM   TM    DS1RECFM,X'02'          Mach control char?
+         BNO   RECEND                  No: proceed
+         MVI   RECFM+2,C'M'            Machine control characters
+         B     RECEND
+RECUND   MVC   RECFM(4),=C'UND '
+RECEND   EQU   *
+         XR    R9,R9                                            @BANDKE
+         ICM   R9,3,DS1LRECL           LRECL                    @BANDKE
+         MVC   LRECL,PATTRN            Move EDIT paatern
+         CVD   R9,DBW                  Convert to packed decimal
+         ED    LRECL(6),DBW+5          EDIT into LRECL
+         XR    R9,R9                   Clear register           @BANDKE
+         ICM   R9,3,DS1BLKL            BLKSIZE                  @BANDKE
+         MVC   BLKSIZE,PATTRN          Move edit patterm
+         CVD   R9,DBW                  Convert to packed decimal
+         ED    BLKSIZE(6),DBW+5        EDIT into record
+*
+*        Calculate space per extent
+*
+         LA    R2,DS1EXT1              Point to first extent
+         SR    R5,R5
+         LA    R9,3                    3 extents from FORMAT 1 DSCB
+         BAL   R14,EXTENT
+         BCT   R9,*-4                  Do them all
+         LA    R1,LIST                 List address
+         L     R3,4(,R1)               2nd entry in list
+         LTR   R3,R3                   Another DSCB?
+         BZ    FORM111                 No: no DSCB's anymore
+         CLI   44(R3),C'3'             Format 3
+         BNE   FORM107                 No: skip
+         LR    R2,R3                   Yes: Format3 to reg2
+         BAL   R14,FORM109             Compute extents
+FORM107  LA    R1,LIST                 List address
+         L     R4,8(,R1)               3rd entry in list
+         LTR   R4,R4                   Another DSCB?
+         BZ    FORM111                 No,total
+         CLI   44(R4),C'3'             Format 3
+         BNE   FORM111                 No,total
+         LR    R2,R4                   Yes: Format 3 to register 2
+         BAL   R14,FORM109             Calculate extents
+         CLC   DS3PTRDS-IECSDSL3(5,R4),=XL5'0' More F3DSCBS chained?
+         BE    FORM111                 No: branch
+*
+* Since DF/EF it is possible to have more than 1 F3 DSCB
+* It is possible to have 10 F3 DSCB chained (133 extents)
+*
+         MVC   CCHHR,DS3PTRDS-IECSDSL3(R4) Move CCHHR next DSCB
+         LA    R0,AREA3
+         STCM  R0,15,FORMAT3           Repair Format 3 DSCB
+         MVC   CAMLST+12(4),FORMAT3
+         OBTAIN CAMLST                 Obtain for next DSCB
+         B     FORM107                 Branch
+HLQTEST  CLC   DS1DSNAM(0),COMMPFX     << executed >>              @rp5
+         EJECT
+*
+*        Extents from format 3 DSCB  r2 ---> a(F3DSCB)
+*
+FORM109  DS    0H
+         ST    R14,F3R14               Save register
+         LA    R9,4
+         LA    R2,4(,R2)               Next entent
+         BAL   R14,EXTENT
+         BCT   R9,*-4                  First 4 extents
+         LA    R2,1(,R2)               Skip F3 FORMAT id
+         LA    R9,9                    Remaining 9 extents
+         BAL   R14,EXTENT
+         BCT   R9,*-4
+         L     R14,F3R14               Restore register
+         BR    R14                     Return
+         SPACE 5
+*
+*        Calculate unused space
+*
+FORM111  DS    0H
+         CVD   R5,DBW                  Cumulative tracks
+         MVC   TRK(6),PATTRN           Pattern over field
+         ED    TRK(6),DBW+5            EDIT the result
+         MVC   UNUSED+3(3),=C'N/A'
+         TM    DS1DSORG+1,X'08'        Skip VSAM                @BANDKE
+         BO    TWRITE                  Write the record
+         LH    R3,DS1LSTAR             Ralative address unused
+         BCTR  R5,0
+         SR    R5,R3
+         BL    TWRITE
+         CVD   R5,DBW                  Convert to packed decimal
+         MVC   UNUSED,PATTRN           Move EDIT pattrn
+         ED    UNUSED(6),DBW+5         Edit the result
+TWRITE   LA    R1,DSN                  Load record address
+         BAL   R14,WORKSPC             Write into workspace
+         LTR   R15,R15                 Ok?
+         BNZ   RPF999A                 No: EDIT workspace truncated
+         AP    CRDCNT,=P'1'            Incr # of VTOC records
+         AP    DSNCNT,=P'1'            Iincreae counter
+         B     RPF047                  Read next DSCB
+         TITLE 'PRODUCE TRAILOR LINES AND SORT WORKSPACE'
+RPF999   EQU   *                       Print free space line
+         CLI   BUFCMD,C'1'             Option 1 selected?
+         BE    RPF999A                 Yes: skip trailor line
+         TM    SW,$VOL                 Parm=VOL used ?
+         BNZ   RPF999A                 Yes: skip trailor line
+         MVC   HCYL,PATTRN             Move pattrn
+         L     R9,#FREECYL             Total empty cylinders
+         CVD   R9,DBW                  Convert to packed
+         ED    HCYL,DBW+5              Edit into line
+         MVC   HTRK,PATTRN             Move edit pattrn
+         L     R9,#FREETRK             Empty tracks
+         CVD   R9,DBW                  Convert to packed
+         ED    HTRK,DBW+5              Edit into line
+         MVC   HCYLEXT,PATTRN          Move edit pattrn
+         LH    R9,LARGCYL              Biggest extent cyls
+         CVD   R9,DBW                  Convert to packed
+         ED    HCYLEXT,DBW+5           Edit into line
+         MVC   HTRKEXT,PATTRN          Move edit pattrn
+         XR    R9,R9                   Clear register 9
+         IC    R9,LARGTRK              Biggest extent trks
+         CVD   R9,DBW                  Convert to packed
+         ED    HTRKEXT,DBW+5           Edit into line
+         MVC   HDSNCNT,PATTRN          Move edit pattrn
+         ED    HDSNCNT,DSNCNT          Edit into line
+         LA    R1,TRAIL1               Area address
+         BAL   R14,WORKSPC             Write into workspace
+RPF999A  DS    0H
+         CLI   BUFCMD,C'1'             Option 1 selected ?
+         BNE   RPF999B                 No branch
+         CP    CRDCNT,=P'0'            No data sets filtered       @rp3
+         BNE   RPF999AA                No: continue                @rp3
+         MVC   MSG3,ERR5TXT            No data sets found
+         BAL   R14,CLOSEVTC            Close and unallocate VTOC
+         B     ERROR                   Issue message in error routine
+RPF999AA DS    0H                                                  @rp3
+         MVC   EDVTC1,EPVTOC1          Move entry point RPFVTOC1
+         MVC   COMMPRM(6),VOL          Move volume into COMMPRM
+         B     CLOSE2                  And skip the trailors
+RPF999B  DS    0H
+         CLI   BUFCMD,C'V'             Option V selected?
+         BNE   RPF999C                 No: then it is option '2'
+         MVC   SCR3LNE1,HEAD0          First summary line
+         MVC   SCR3LNE2,HEAD1          Second summary line
+         MVC   SCR3LNE3,HEAD2          Third summary line
+         MVC   SCR3LNE4,TRAIL1         Fourth summary line
+         B     RPF999D                 Branch
+RPF999C  DS    0H
+         MVC   EDVTC1,EPEDIT           Move entry point RPFEDIT
+         MVC   COMMRECL,=F'80'         Set record length to card image
+         NI    COMMFLG4,255-$COMVB     Set record format
+         OI    COMMFLG4,$COMFB            to fixed in RPFCOMM
+         MVC   COMMVM,=X'0100'         Move default ISPF/RPF vv:mm
+         OI    COMMFLG1,$COMCURR       Bypass the loader RPFEDITL
+         MVC   COMMNUM,=CL3'OFF'       Move numbered= 'OFF' in RPFCOMM
+         TM    SW,$VOL                 PARM=VOL used ?
+         BNZ   CLOSE2                  Skip this trailor too
+RPF999D  DS    0H
+*
+         AIF   (NOT &OS390 AND NOT &MVSXA).NOIDX3
+**** Start inclusion DF/DS (JDM1134) or DFP statements
+*
+         TM    SW,$IDX                 Indexed VTOC support?
+         BNO   RPF999G                 No: fill in blank DSCBS in line
+         L     R5,DEBADDR              Load DEB address
+         MVC   CVPL(CVPLNGTH),CVPL2    Move index CVPL
+         LA    R0,#FREEVIR             Free VTOC index records in
+         ST    R0,CVCTAR                     CVPL
+         CVAFDSM MF=(E,CVPL),DEB=(5)   Obtain unallocated VIRS
+         LTR   R15,R15                 CVAFDSM alright?
+         BZ    RPF999E                 No: dont give unalloc. VIRS
+         CLI   CVSTAT,STAT032          End of data?
+         BE    RPF999E                 No: error
+         SYCONVHX IN=CVSTAT,OUT=IDXSTAT,L=1,RENT=YES
+         CVD   R15,DBW                 Convert return code
+         UNPK  IDXERC,DBW              Unpack return code
+         OI    IDXERC+3,X'F0'          Clear sign
+         MVC   IDXTXT(10),=CL10'MAP=INDEX' Move type of error
+         CLI   BUFCMD,C'V'             Summary only
+         BE    RPF999F                 Yes: Error not interesting
+         MVC   SCR3ERR,IDXERR          Move error msg in screen
+         B     RPF999F                 Obtain number of blank DSCB's
+RPF999E  L     R15,#FREEVIR            Load unallocated VIRS
+         CVD   R15,DBW                 Concert to packed decimal
+         MVC   VIRS,PATTRN             Move EDIT pattrm
+         ED    VIRS,DBW+5              EDIT result
+RPF999F  L     R5,DEBADDR              Load DEB address
+         MVC   CVPL(CVPLNGTH),CVPL4    Move VTOC CVPL
+         LA    R0,#FREDSCB             To contain free DSCB's
+         ST    R0,CVCTAR                     CVPL4
+         CVAFDSM MF=(E,CVPL),DEB=(5)   Obtain blank DSCB's
+         LTR   R15,R15                 CVAFDSM alright?
+         BZ    RPF999G                 Yes: good, give blank DSCB's
+         CLI   CVSTAT,STAT032          End of data?
+         BE    RPF999G                 No: error
+         SYCONVHX IN=CVSTAT,OUT=IDXSTAT,L=1,RENT=YES
+         CVD   R15,DBW                 Convert return code
+         UNPK  IDXERC,DBW              Unpack return code
+         OI    IDXERC+3,X'F0'          Clear sign
+         MVC   IDXTXT(10),=CL10'MAP=VTOC' Move type of error
+         CLI   BUFCMD,C'V'             Summary only
+         BE    CLOSE                   Yes: Error not interesting
+         MVC   SCR3ERR,IDXERR          Move error msg in screen
+         B     CLOSE                   Obtain # blank DSCB's
+*
+**** End inclusion DF/DS (JDM1134) or DFP statements
+.NOIDX3  ANOP
+*
+RPF999G  DS    0H
+         L     R15,#FREDSCB            Load blank DSCBS
+         CVD   R15,DBW                 Convert to packed decimal
+         MVC   DSCBS,PATTRN            Move EDIT pattern
+         ED    DSCBS,DBW+5             EDIT result
+         LH    R15,#FREEEXT            Load free extents
+         CVD   R15,DBW                 Convert to packed decimal
+         MVC   EXTS#,PATTRN            Move EDIT pattern
+         ED    EXTS#,DBW+5             EDIT result
+CLOSE    DS    0H
+         CLI   BUFCMD,C'V'             Summary only ?
+         BE    CLOSE2                  Trailor not in workspace
+         LA    R1,FREEMSG              Load address message
+         BAL   R14,WORKSPC             Set in workspace
+CLOSE2   DS    0H
+         BAL   R14,CLOSEVTC            Close and unallocate VTOC
+         CLI   BUFCMD,C'V'             Summary only ?
+         BNE   SORTWS                  No: sort workspace
+         MVC   SCR3LNE5,FREEMSG        Move last line
+         B     RESTART                 Re-display menu
+SORTWS   DS    0H
+         L     R6,COMWSTRT             1st record in workspace
+         CLI   BUFCMD,C'1'             Option 1 selected?
+         BE    SORTWS1                 Yes: skip adjust for headers
+         TM    SW,$VOL                 PARM=VOL used?
+         BNZ   SORTWS1                 Yes: skip adjust for headers
+         LA    R6,4*NEXTENT(R6)        Skip headers           @20020707
+SORTWS1  TM    SW,$IDX                 Indexed VTOC ?
+         BO    LINKNEXT                If Index, already sorted
+         ZAP   DBW,CRDCNT              Number of VTOC records
+         CVB   R7,DBW                  And convert to binary
+         C     R7,=F'2'                Less than 2 records
+         BL    LINKNEXT                Yes: no SORT needed
+         TM    SW,$LONG                PARM=LONG is used?
+         BNO   SORT2                   No: normal SORT
+         RPFSORT  (6),176,44,(7),8     SORT workspace (LONG)
+         B     LINKNEXT                End of SORT
+SORT2    DS    0H
+         RPFSORT  (6),88,44,(7),8      SORT workspace (SHORT)
+         B     LINKNEXT
+LINKNEXT DS    0H
+         ICM   R15,15,EDVTC1           Load EP of RPFVTOC1 or RPFEDIT
+         BZ    LINKEND                 Branch if not filled in
+         CALL  (15),((11)),MF=(E,CALLST) Call module
+         CLC   EDVTC1,EPEDIT           Called by RPFEDIT?
+         BE    LINKEND                 Yes: carry on
+         B     *+4(15)                 Execute branchlist of RPFVTOC1
+         B     LINKEND                 Rc = 0
+         B     RPF011                  Rc = 4, branch to landing point
+LINKEND  DS    0H
+         XR    R15,R15                 Rc = 0
+         TM    COMMFLG2,$COMRTRN       Return indicator in RPFCOMM set?
+         BNO   RESTART                 No: display menu again
+         B     RETURN                  Else return
+         TITLE 'Error routine'
+ERROR    DS    0H
+         MVC   SCR3VOL,VOL             Move volume
+         MVC   SCR3PARM,DPARM          Move parm (Short/Long/Vol)
+         TM    COMMFLG3,$COMRPFV       Invoked by TSO command RPFV?
+         BNO   RESTART                 No: review screen (normal RPF)
+         LA    R1,MSG3                 Buffer address = message
+         LA    R0,25                   Message length
+         TPUT  (1),(0),R               Write error message
+         STIMER WAIT,BINTVL=INT        Wait a while
+END      DS    0H
+         LA    R15,8                   Return code
+         TITLE 'RETURN TO CALLER'
+RETURN   DS    0H                      Pickup callers save area
+         LR    R5,R15                  Save return code
+         AIF   (NOT &OS390 AND NOT &MVSXA).NOFREE
+         L     R2,ADDREXT              Address of DFSMS extent table
+         FREEMAIN R,LV=1024,A=(2)      Release
+.NOFREE  ANOP
+         FREEMAIN R,A=(8),LV=SCREENSL  Get rid of the screen area
+         LR    R3,R13                  Our save area + working storage
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release working storage
+         LR    R15,R5                  Return code
+         RETURN (14,12),RC=(15)        Restore registers + return
+         TITLE 'Accumulate the extents of the data set'
+EXTENT   DS    0H
+*
+*        Register  2, Address of the extent description in the
+*                     format1 or format3 DSCB.
+*                     Layout:
+*                     byte 0 = extent identifier.
+*                     byte 1 = extent sequence number.
+*                     bytes 2 - 5  = lower limit CCHH.
+*                     bytes 6 - 9  = upper limit CCHH.
+*                  5, cumulative # tracks.
+*                 14, return address.
+*
+         CLI   0(R2),0                 No extent ident in the field?
+         BE    EXTEND                  Yes: EXIT
+         MVC   D(8),2(R2)              Move extent boundaries
+         LH    R1,D+4                  Upper CC in register 1
+         SH    R1,D                    Minus lower CC
+         MH    R1,TRKCYL+2             Make tracks from the cylinders
+         AH    R1,D+6                  Add upper HH
+         SH    R1,D+2                  Minus lower HH
+         LA    R1,1(,R1)               + 1
+         AR    R5,R1                   Add to total tracks
+         LA    R2,10(,R2)              Point to next extent
+EXTEND   BR    R14                     Return
+         TITLE 'Populate the EDIT workspace'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  WORKSPC                                            *
+*        Function: Place the data set records into the EDIT workspace *
+*        Input:    Register 1, contains the address of the record to  *
+*                  be placed in the EDIT workspace.                   *
+*                                                                     *
+*        Return codes:  00 - Record successfully placed in the        *
+*                            EDIT workspace                           *
+*                       04 - EDIT workspace is full                   *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+WORKSPC  DS    0H
+         ST    R14,R14WORK
+         USING WORKSPCE,R9             Address with DSECT in RPFCOMM
+         L     R9,COMMLAST             Pickup last record pointer
+         LA    R9,NEXTENT(,R9)         Next line in workspace
+         L     R14,COMWRKND            End of EDIT workspace
+         SL    R14,=A(2*NEXTENT)       Minus 2 entries
+         CR    R9,R14                  Compare with END - 2 entries
+         BH    WORKERR                 High: term at end of workspc
+         MVI   0(R9),C' '              Blank
+         MVC   1(NEXTENT-1,R9),0(R9)        workspace line
+         XC    WORKFLGS,WORKFLGS       Clear flags
+         MVC   WORKDATA(80),0(R1)      Move record into workspace
+         ST    R9,COMMLAST             New COMMLAST (Last record)
+         XR    R15,R15                 Rc = 0
+         B     WORKRTN                 Return to caller
+WORKERR  LA    R15,4                   Move return code
+WORKRTN  DS    0H
+         L     R14,R14WORK
+         BR    R14                     Return
+         TITLE 'Close and unallocate the VTOC'
+CLOSEVTC DS    0H
+         ST    R14,R14CLVTC            Save register 14
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE DCBIN,MF=(E,COMCLS)     Close VTOC DCB
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         RDJFCB DCBIN,MF=(E,COMOPN)
+         MVC   JFCB(44),VTOCDSN        Restore data set name to
+         LA    R2,DCBIN                original which allocated
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  ((2)),TYPE=J,MF=(E,COMOPN) Restore DSNAME
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE DCBIN,MF=(E,COMCLS)     Close VTOC DCB
+         XC    RPFD18,RPFD18           Clear unalloc parm block
+         LA    R3,RPFD18               Unalloc parm block
+         USING DAPB18,R3               Provide addressability
+         MVI   DA18CD+1,X'18'          Entry code 0018 (unallocate)
+         MVC   DA18DDN,=CL8'VTOC'      DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         LR    R1,R3                   Parameter for CALLTS
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         L     R14,R14CLVTC            Restore register 14
+         BR    R14                     Return
+         LTORG
+         DROP  R3                      DAPB18
+         TITLE 'Constants'
+INT      DC    F'200'
+ERR1TXT  DC    CL25'---- Volume not available'
+ERR2TXT  DC    CL25'---------- Invalid option'
+ERR3TXT  DC    CL25'---- Volume not specified'
+ERR4TXT  DC    CL25'------------ Invalid parm'
+ERR5TXT  DC    CL25'------ No data sets found'
+MSG1TXT  DC    CL25'--------- VTOC running...'
+F0004    DC    F'4'
+F0008    DC    F'8'
+TIMEPATT DC    X'402021207A20207A2020'
+DATEPATT DC    X'4021204B202020'
+PATTRN   DC    X'402020202120'
+F4404    DC    44XL1'04'               DSNAME of Format 4 DSCB (VTOC)
+MDLDCB   DCB   MACRF=R,DSORG=PS,KEYLEN=44,EODAD=RPFEOD,                X
+               SYNAD=SYNAD,DDNAME=VTOC
+DCBLEN   EQU   *-MDLDCB
+         AIF   (NOT &OS390 AND NOT &MVSXA).NOIDX4
+**** Start inclusion DF/DS (JDM1134) or DFP statements
+*
+CVPL2    CVAFDSM ACCESS=MAPDATA,COUNT=YES,MAP=INDEX,                   X
+               CTAREA=*,MF=L
+CVPL3    CVAFSEQ ACCESS=GT,BUFLIST=*,DSN=*,MF=L
+CVPL4    CVAFDSM ACCESS=MAPDATA,COUNT=YES,MAP=VTOC,                    X
+               CTAREA=*,MF=L
+CVPL5    CVAFDSM ACCESS=MAPDATA,COUNT=NO,MAP=VOLUME,                   X
+               EXTENTS=*,MF=L
+*
+**** End inclusion DF/DS (JDM1134) or DFP statements
+.NOIDX4  ANOP
+         DROP
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+         COPY  CALLTS
+         TITLE 'Screen, header and trailor lines, and allocation controX
+               l blocks'
+SCREENS  CSECT
+SCR3TXTF DC    X'27'                    Escape character TPUT FULLSCR
+SCR3TXT  DC    X'00C2110000',AL3(WHITE) EW or EWA  R1,C2+
+         DC    CL41'RPF VTOC and data set utility: User ID = '     @rp3
+SCR3UID  DC    CL8' '
+         DC    29C'-'                                              @rp3
+SC3R1C56 DC    X'110000'               r01,c56+
+MSG3     DC    CL25'-------------------------'
+*
+SC3R2C2  DC    X'110000',AL3(WHITE),C'Option ===>',X'1DC113'
+         DC    AL3(RED)
+SCR3CMD  DC    X'40'
+         DC    X'1DF0'
+         DC    AL3(WHITE)
+SC3R3C2  DC    X'110000'                        r03,c02+
+SCR3ERR  DC    CL79' '
+*
+SC3R4C4  DC    X'110000',AL3(WHITE),C'1  ',AL3(TURQ)  r04,c04+     @rp4
+         DC    CL13'SEL',AL3(GREEN)                                @rp4
+         DC    C'Display data set selection list (default)'        @rp4
+SC3R5C4  DC    X'110000',AL3(WHITE),C'2  ',AL3(TURQ)  r05,c04+     @rp4
+         DC    CL13'VTOC-LIST',AL3(GREEN)                          @rp4
+         DC    C'Display VTOC listing in EDIT'                     @rp4
+SC3R6C4  DC    X'110000',AL3(WHITE),C'V  ',AL3(TURQ)  r06,c04+     @rp4
+         DC    CL13'VTOC-INFO',AL3(GREEN)                          @rp4
+         DC    C'Display VTOC information'                         @rp4
+*
+SC3R9C2  DC    X'110000',AL3(YELLOW)                  r09,c04+     @rp4
+         DC    C'Data set and volume information'                  @rp3
+*
+SC3R11C1 DC    X'110000',X'1DF5',AL3(TURQ)
+LVLTXT   DC    C'Data set level ='
+         DC    X'1DC913'                                           @rp4
+         DC    AL3(RED),AL3(USCORE)                                @rp4
+SCR3HLQ  DC    CL17' ',X'1DF0'
+         DC    AL3(HDEFAULT),AL3(TURQ),C'     ,And / Or '
+*
+SC3R12C1 DC    X'110000',X'1DF5'       r12,c01
+VOLTXT   DC    C'Volume serial  =',X'1DC9'
+         DC    AL3(RED),AL3(USCORE)
+SCR3VOL  DC    CL6' ',X'1DF0'
+         DC    AL3(HDEFAULT),C' ',AL3(TURQ)
+         DC    X'1DF5'
+PRMTXT   DC    C',Parm =',X'1DC9'
+         DC    AL3(RED),AL3(USCORE)
+SCR3PARM DC    C'SHORT',X'1DF0'
+         DC    AL3(HDEFAULT),AL3(TURQ),C'(Option 2 only)'
+*
+SC3R14C2 DC    X'110000',AL3(YELLOW),CL5'Note: '         R14,C02+  @rp4
+*
+SC3R15C2 DC    X'110000',AL3(TURQ)     R15,C02+                    @rp4
+         DC    C'LONG : ',AL3(GREEN)                               @rp4
+         DC    C'each VTOC entry consist of 2 lines with extra info' p4
+SC3R16C2 DC    X'110000',AL3(TURQ)     R16,C02+                    @rp4
+         DC    C'SHORT: ',AL3(GREEN)                               @rp4
+         DC    C'the VTOC entry has 1 line and a truncated data set namX
+               e'                                                  @rp4
+SC3R17C2 DC    X'110000',AL3(TURQ)     R17,C02+                    @rp4
+         DC    C'VOL  : ',AL3(GREEN)                               @rp4
+         DC    C'same as SHORT, but no headers and trailors and cre.dt x
+               replaced by volume'                                 @rp4
+*
+SC3R19C2 DC    X'110000'               R19,C02+                    @rp3
+         DC    AL3(BLUE)                                           @rp4
+SCR3LNE1 DC    CL79' '                 Summary line -1-
+SC3R20C2 DC    X'110000'               R20,C02+                    @rp3
+SCR3LNE2 DC    CL79' '                 Summary line -2-
+SC3R21C2 DC    X'110000'               R21,C02+                    @rp3
+SCR3LNE3 DC    CL79' '                 Summary line -3-
+SC3R22C2 DC    X'110000'               R22,C02+                    @rp3
+SCR3LNE4 DC    CL79' '                 Summary line -4-
+SC3R23C2 DC    X'110000'               R23,C02+                    @rp3
+SCR3LNE5 DC    CL79' '                 Summary line -5-
+SCR3LAST DC    X'1100001DF0'           R24,C01+
+         DC    AL3(TURQ)                                           @rp4
+         DC    C'Hit ',AL3(WHITE),C'PF03/15 ',AL3(TURQ)            @rp4
+         DC    C'to return'
+SCR3LEN  EQU   *-SCR3TXT
+SCR3LENF EQU   *-SCR3TXTF
+*
+*        Output record of format 1 DSCB in EDIT workspace
+*
+         DS    0F
+DSN      DS    CL26                    Short DSN or blank if parm=LONG
+         DS    C
+CREAT    DS    CL6                     Creation date
+         DS    C
+REFDT    DS    CL6                     Last reference date
+         DS    C
+DSORG    DS    CL4                     Data set organization
+RECFM    DS    CL4
+LRECL    DS    CL6
+         DS    C
+BLKSIZE  DS    CL6
+DEXT     DS    CL4                     Number of extents
+TRK      DS    CL6
+UNUSED   DS    CL6
+         DS    CL1
+SCALO    DS    CL1                     Copy of first byte in DS1SCALO
+*                                      used in RPFVTOC1
+ENDREC   EQU   *
+TRAIL1   DS    0CL80
+         DC    CL5'Free:'
+HCYL     DS    CL6                     Free cylinders on volume
+         DC    CL5' cyls'
+HTRK     DS    CL6                     Free tracks
+         DC    CL22' trks, Largest extent='
+HCYLEXT  DS    CL6                     Largest extent cylinders
+         DC    CL5' cyls'
+HTRKEXT  DS    CL6                     Largest extent tracks
+         DC    CL5' trks'
+         DC    CL(TRAIL1+80-*)' '
+HEAD1    DS    0CL80                   F4 descriptor line
+         DC    CL06'VTOC: '
+         DC    CL07'CCHH=X'''
+HEAD1EX1 DS    CL8
+         DC    CL4'''-X'''
+HEAD1EX2 DS    CL8
+         DC    CL13''',DS4VTOCI=X'''
+HEAD1VTI DS    CL2
+         DC    CL11''',DSCB/TRK='
+HEAD1DS  DS    CL2
+         DC    CL09',DIR/TRK='
+HEAD1DIR DS    CL2
+         DC    CL(HEAD1+80-*)' '
+HEAD2    DS    0CL80                   2nd F4 descriptor line @20020707
+         DC    CL06'VTOC: '                                   @20020707
+         DC    CL09'Trks/cyl='                                @20020707
+HEAD2TCY DS    CL2                                            @20020707
+         DC    CL14',Track length='                           @20020707
+HEAD2TRK DS    CL5                                            @20020707
+         DC    CL16',Number of cyls='                         @20020707
+HEAD2#CY DS    CL5                                            @20020707
+         DC    CL(HEAD2+80-*)' '                              @20020707
+HEAD3    DC    CL27'Dsname'
+         DC    CL6'cr.dat'
+         DC    CL7' ref.dt'
+         DC    CL4' org'
+         DC    CL4' rec'
+         DC    CL7'  LRECL'
+         DC    CL8'  block'
+         DC    CL3'ext'
+         DC    CL6'  size'
+         DC    CL8'  free '
+HEAD0    DS    0CL80
+         DC    CL4'UCB='
+HEAD0UCB DS    CL3
+         DC    C' '
+         DC    CL8',Volume='
+HEAD0VOL DS    CL6
+         DC    CL5',SMS='                                          @sms
+HEAD0SMS DC    CL3'No '                                            @sms
+         DC    CL6',date='
+HEAD0DTE DS    CL6                     Julian date (yyddd)
+         DC    CL6',time='
+HEAD0TME DS    CL8                     Time (hh:mm:ss)
+         DC    CL6',VTOC='
+HEAD0VTC DS    CL2                     Will contain 'OS' or 'IX'
+         DC    CL6',parm='
+HEAD0PRM DS    CL5
+         DC    CL(HEAD0+80-*)' '
+SEQMSG   DS    0CL80
+         DC    CL33' Error in CVAFSEQ macro, CVSTAT= '
+IDXSEQE  DS    CL2
+         DC    CL10' , (R15)= '
+IDXSEQC  DS    CL4
+         DC    CL31' '
+IDXERR   DS    0CL80
+         DC    CL35' Errors in VTOC index, rc CVAFDSM= '
+IDXERC   DS    CL4
+         DC    CL14', errorcode = '
+IDXSTAT  DS    CL2
+         DC    C' '
+IDXTXT   DS    CL10
+         DC    CL(IDXERR+80-*)' '
+FREEMSG  DS    0CL80
+         DC    CL12'Free: VIRS='
+VIRS     DS    CL6
+         DC    CL11', DSCB''s='
+DSCBS    DS    CL6
+         DC    CL11', Extents='
+EXTS#    DS    CL6
+         DC    CL22' Number of data sets='
+HDSNCNT  DS    CL6                     Number of data sets on volume
+SCREENSL EQU   *-SCREENS
+*
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area
+DBW      DS    D                       Workfield RCTOSBA
+CNVHX01  DS    2D                      Work field SYCONVHX macro
+SBAR0R1  DS    D                       Workfield RCTOSBA
+R12TS    DS    F                       Save register 12 CALLTS
+R14TS    DS    F                       Save register 14 CALLTS
+CALLST   DS    F                       CALL MF=L
+ADDREXT  DS    F                       Address of ICVEDT02 extents
+ECB      DS    F                       An Event Control Block
+SORTLA   DS    2F                      Workfields
+SORTLB   DS    F                                 sort
+SORTLD   DS    F                                     macro
+SORTLF   DS    F                                          ..
+F3R14    DS    F                       Save register 14 Format 3 rout.
+R14CLVTC DS    F                       Save register 14 CLOSEVTC
+R14WORK  DS    F                       Save register 14 WORKSPC
+DCBIN    DS    CL(DCBLEN)              DCB of VTOC
+DECB1    READ  DECB2,SF,*,*,'S',MF=L
+DECBLEN  EQU   *-DECB1                 Length
+BUFFER   DS    CL100                                              @rp5
+EXLST    DS    F
+JFCB     DS    CL176
+CAMLST   CAMLST SEEK,CCHHR,VOL,FORMAT1
+VOLTYP   DS    F                       to contain UCBTYPE          @rp2
+TIMEWORK DS    F
+DATEWORK DS    F
+DEBADDR  DS    F
+EDVTC1   DS    F                       Contains entry point of
+*                                      RPFEDIT (option 2), or RPFVTOC1
+*                                      (option 1)
+CURCCHHR DS    0CL5                    Current DSCB pointer
+CURCC    DS    CL2
+CURHH    DS    CL2
+CURR     DS    C
+*
+HICCHHR  DS    CL5                     Last format 1 pointer from VTOC
+DSCBTRK  DS    C                       # DSCBS on a track
+CCHHR    DS    CL5
+*                                      With DSNAME and start address)
+OUTPBUF  DS    0CL12                   Formatted output buffer
+BUFCMD   DC    C' '
+VOL      DS    CL6
+DPARM    DS    CL5
+*                                      With DSNAME and start address)
+AREA1    DS    CL144                   3 DSCB area's
+AREA2    DS    CL144
+AREA3    DS    CL144
+TIMEDISP DS    CL10
+DATEDISP DS    CL7
+RPFDAPL  DS    5F                      IKJDAIR parameter list
+RPFD08   DS    CL84                    Dair parm block 08 (allocation)
+RPFD18   DS    CL40                    Dair parm block 18 (unalloc.)
+SW       DC    X'00'
+$EOF     EQU   1                       VTOC end of file
+$IOE     EQU   2                       VTOC I/O error
+$IDX     EQU   4                       If on: indexed VTOC detected
+$EOD     EQU   8                       End of data CVAFDSM
+$LONG    EQU   16                      Parm 'LONG' is used (extra line
+*                                      With DSNAME and start address)
+$VOL     EQU   32                      Parm 'VOL' is used (volume
+*                              instead of creation date and no headers)
+LIST     DS    0F
+FORMAT1  DC    A(IECSDSL1)
+FORMAT2  DC    A(AREA2)
+FORMAT3  DC    A(AREA3)
+         DS    0H
+#ALTTR   DS    CL2
+#FREECYL DS    F                       # empty cylinders
+#FREETRK DS    F                       # empty tracks
+#FREEEXT DS    H                       # empty extents
+#FREEVIR DS    F                       # free VTOC index records
+#FREDSCB DS    F                       # blank DSCB's
+LARGCYL  DS    H
+LARGTRK  DS    H
+TRKCYL   DS    F
+D        DC    D'0'
+CRDCNT   DC    PL3'0'
+DSNCNT   DC    PL3'0'                  # Data sets on volume
+EXTABL   DS    0CL140
+#EXTS    DC    AL1(27)                 Number of extents in F5 DSCB
+EXTS     DS    CL135
+         DS    CL4
+         AIF   (NOT &OS390 AND NOT &MVSXA).NOIDX5
+**** Start inclusion DF/DS (JDM1134) or DFP statements
+*
+         TITLE 'DF/DS or DFP control blocks'
+CVPL     CVAFDSM ACCESS=MAPDATA,COUNT=NO,MAP=VOLUME,                   X
+               EXTENTS=EXTABL,MF=L
+*------- do not insert statements here -------------------------------*
+         ORG   CVPL
+CVPLMAP  ICVAFPL DSECT=NO              CVPL MAP
+BUFLIST  ICVAFBFL DSECT=NO
+*
+**** End inclusion DF/DS (JDM1134) or DFP statements
+.NOIDX5  ANOP
+         DS    0H
+         IECSDSL1 (1)
+DSCBLTH  EQU   *-IECSDSL1-L'DS1DSNAM
+VTOCDSNL DS    AL2                     Real length
+VTOCDSN  DS    CL44                    DSNAME to allocate
+WORKL    EQU   *-WORKAREA
+         TITLE 'RPFCOMM DSECT + Other DSECT''s'
+COMMAREA RPFCOMM
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+F3DSCB   DSECT ,                       Format 3 DSCB
+         IECSDSL1 (3)
+F4DSCB   DSECT ,                       Format 4 DSCB
+         IECSDSL1 (4)
+F5DSCB   DSECT ,                       Format 5 DSCB
+         IECSDSL1 (5)
+         AIF   (NOT &OS390 AND NOT &MVSXA).NOEDT
+         AIF  (NOT &LARGE).NOEDT
+         ICVEDT02 DSECT=YES
+.NOEDT   ANOP
+         PRINT NOGEN
+         DCBD  DSORG=PS,DEVD=DA
+         CVT   DSECT=YES,LIST=NO
+VTOCUCB  DSECT
+         IEFUCBOB
+         IEZDEB
+         IKJCPPL
+         IKJDAPL
+         IKJDAP08
+         IKJDAP18
+         END

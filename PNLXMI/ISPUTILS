@@ -1,0 +1,52 @@
+)ATTR
+/* Panel: ISPUTILS with option 4R added for MVS38J      */
+ + TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(GREEN)
+ @ TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(TURQ)
+ % TYPE(TEXT)   INTENS(HIGH) SKIP(ON)    COLOR(WHITE)
+ ¬ TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(YELLOW)
+ _ TYPE(INPUT)  INTENS(LOW)  JUST(LEFT)  COLOR(TURQ)
+ # TYPE(INPUT)  INTENS(LOW)  JUST(ASIS)
+ ~ TYPE(INPUT)  INTENS(HIGH) JUST(LEFT)
+ ! TYPE(INPUT)  INTENS(HIGH) JUST(RIGHT)
+ { TYPE(OUTPUT) INTENS(LOW)  JUST(LEFT)
+ } TYPE(OUTPUT) INTENS(LOW)  JUST(RIGHT)
+ Ý TYPE(OUTPUT) INTENS(HIGH) JUST(LEFT)
+ ¨ TYPE(OUTPUT) INTENS(HIGH) JUST(RIGHT)
+)BODY WIDTH(&ZSCREENW) EXPAND(//)
+%                           Utility selection menu        / /
+%Option  ===>_ZCMD                                                             +
+%
+%   1 @LIBRARY     + Library utility:
++                           Print index listing or entire data set
++                           Print, rename, delete, or browse members
+%   2 @DATASET     + Data set utility:
++                           Display data set information
++                           Allocate, rename, or delete entire data set
++                           Catalog or uncatalog data set
+%   3 @MOVE/COPY   + Move, copy, or promote members or data sets
+%   4 @DSLIST      + Data set list:
++                           Print or display (to process) list of data set names
+%   4R@DSLIST RPF  + Data set list RPF:
++                           Print or display (to process) list of data set names
+%   5 @RESET       + Reset statistics for members of ISPF library
+¬   6 ¬HARDCOPY    + Initiate hardcopy output
+¬   7 ¬VTOC        + Display DISK Volume Table Of Contents
+%   8 @OUTLIST     + Display, delete, or print held (Class Q) JOB output
+%   9 @COMMANDS    + Create/change an application command table
+)INIT
+  .HELP = ISR30000
+)PROC
+  &ZSEL = TRANS( TRUNC (&ZCMD,'.')
+                1,'CMD(RFE 3.1;X) NEWAPPL(ISR)'
+                2,'CMD(RFE 3.2;X) NEWAPPL(ISR)'
+                3,'CMD(RFE 3.3;X) NEWAPPL(ISR)'
+                4,'CMD(RFE 3.4;X) NEWAPPL(ISR)'
+                4R,'PANEL(RPFV) NEWAPPL(ISR)'
+                5,'CMD(RFE 3.5;X) NEWAPPL(ISR)'
+/*              6,'PGM(ISRUHC)'                           */
+/*              7,'PGM(ISRUVT)'                           */
+                8,'CMD(REVOUT *)  NEWAPPL(ISR)'
+                9,'PANEL(ISPUCMA)'
+              ' ',' '
+                *,'?' )
+)END

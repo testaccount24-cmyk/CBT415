@@ -1,0 +1,3452 @@
+RPFJCL   TITLE 'Check syntax of JCL in EDIT workspace'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:    RPFJCL                                            *
+*                                                                     *
+*        Called by: RPFEDIT                                           *
+*                                                                     *
+*        Function:  This program checks the JCL stream in the         *
+*                   EDIT workspace on syntax errors.                  *
+*                   Any errors will be displayed onto the screen.     *
+*                                                                     *
+*        Input:     Pointer to the RPFCOMM area to pickup the EDIT    *
+*                   workspace (COMWSTRT to COMMLAST)                  *
+*                                                                     *
+*        Output:    Error messages on the screen if applicable        *
+*                                                                     *
+*        Note:      Include module RPFJCL2 during link edit.          *
+*                                                                     *
+*        By:        A.J.A.LEEMREIZE/Rob Prins                         *
+*        Date:      May 18,1983                                       *
+*                                                                     *
+*        Change log:                                                  *
+*        Jan 17,2020 RPr: support 'xxM' in the REGION parameter       *
+*        Jan 20,2020 RPr: Give warning with NOTIFY=&SYSUID            *
+*        Apr 27,2020 RPr: support large screen up to 16384 bytes      *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Jul 22,2023 RPr: Skip empty inserted lines for checking.     *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 3
+RPFJCL   CSECT
+RPFJCL   AMODE 31                      *                         @rpa01
+RPFJCL   RMODE 24                      *                         @rpa01
+         PRINT NOGEN
+         BALR  R15,0                   Clean EP register         @rpa01
+         USING *,R15                   Temporary addressability  @rpa01
+         STM   R14,R12,12(R13)         Save registers
+         B     JCLINIT
+SAVE     DC    18F'0'                  Save area
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+JCLINIT  DS    0H
+         LA    R14,SAVE                Pointer to new save area
+         ST    R13,4(,R14)             Save POINTER to old SAVE AREA
+         ST    R14,8(,R13)             Save POINTER to new AREA
+         LR    R13,R14                 Pointer to current save area
+*
+*        Establish the base registers
+*
+         DROP  R15
+         USING SAVE,R13,R3,R4
+         LA    R3,4095(,R13)           2nd
+         LA    R3,1(,R3)                   base register
+         LA    R4,4095(,R3)            3rd
+         LA    R4,1(,R4)                   base register
+         L     R9,VCOMMON              RPFJCL common parameter list
+         USING COMMON,R9
+         XC    0(COMLEN,R9),0(R9)      CLear RPFJCL common area
+         ZAP   ZERO,=P'0'              Initialize
+         ZAP   ONE,=P'1'
+*
+*        This field will be increased if '(' is found and decreased
+*        if ')' found. This field will be used to check the balance
+*        of the '(' and ')'.
+*
+         ZAP   BRFLAG,=P'0'            Balance '(' and ')' counter
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Register usage                                               *
+*                                                                     *
+*---------------------------------------------------------------------*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*---------------------------------------------------------------------*
+*                                                                     *
+*        REGISTER  0    OS                                            *
+*        REGISTER  1    OS                                            *
+*        REGISTER  2    Work register (note: will be changed in TRT)  *
+*        REGISTER  3    Base register 2                               *
+*        REGISTER  4    Base register 3                               *
+*        REGISTER  5    Not used, reserved for 4th base               *
+*        REGISTER  6    Work register                                 *
+*        REGISTER  7    Work register                                 *
+*        REGISTER  8    Work register                                 *
+*        REGISTER  9    Base-register JCLCOMM                         *
+*        REGISTER 10    Pointer to current line in workspace          *
+*        REGISTER 11    Pointer to RPFCOMM                            *
+*        REGISTER 12    Pointer to current character in EDIT workspace*
+*        REGISTER 13    Save area + Base register 1                   *
+*        REGISTER 14    OS                                            *
+*        REGISTER 15    OS                                            *
+*                                                                     *
+*---------------------------------------------------------------------*
+*
+*        Process parameter
+*
+         L     R11,0(,R1)
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Acquire storage for message area                             *
+*                                                                     *
+*---------------------------------------------------------------------*
+         XC    STARTERR,STARTERR       Clear address of msg area
+         GETMAIN R,LV=AREALEN          Acquire storage
+         LTR   R15,15
+         BZ    STCHECK                 Start check
+         LA    R6,ERR999               Msg: error in RPFJCL
+         SUBR  ERRMESS                 Generate message
+         B     CHECKEND                End of routine
+*---------------------------------------------------------------------*
+*                                                                     *
+*        START JCL-CHECK                                              *
+*                                                                     *
+*---------------------------------------------------------------------*
+STCHECK  DS    0H
+         ST    R1,STARTERR             Save pointer to buffer area
+         ST    R1,CURRERR              Current pointer
+         USING COMMAREA,R11            Address RPFCOMM
+         L     R10,COMWSTRT            Pointer to first record
+NEXTLINE DS    0H
+         CL    R10,COMMLAST            All lines in workspace done?
+         BH    CHECKEND                Yes
+         DROP  R11
+         USING WORKSPCE,R10            Address workspace entry a while
+         TM    WORKFLGS,$INSERTD       Empty inserted line?
+         BNO   NEXTLNE1                No: check this line
+         LA    R10,NEXTENT(,R10)       Next entry in EDIT workspace
+         B     NEXTLINE                Skip this line
+NEXTLNE1 MVC   LINENBR,WORKSLIN        Save line number in JCLCOMM
+         LA    R12,WORKDATA            Point to data portion of wrkspc
+         ST    R12,STARTLNE            Save in JCLCOMM
+         DROP  R10                     WORKSPCE not needed anymore
+         LA    R6,71                   Maximum length -1
+         LA    R6,0(R6,R12)            Point to end of line
+         ST    R6,ENDLINE              Save in JCLCOMM
+         CLC   0(3,R12),=C'//*'        Comment statement?
+         BE    INCRLINE                Yes: branch
+         CLI   DATAFLAG,X'FF'          DD DATA ?
+         BE    INSTREAM                yes
+         CLC   0(2,R12),=C'//'         Record has to start with '//'
+         BE    SLASHES                 OK.
+         CLI   FIRSTFLG,X'00'          First record?
+         BE    NOJOBC                  Yes: no jobcard
+         CLI   DATAFLAG,X'F0'          Instream data?
+         BE    INSTREAM                Yes: carry on
+         CLC   0(2,R12),=C'/*'         Skip /* records
+         BE    INCRLINE                OK.
+         LA    R6,ERRSLASH             No slashes
+         SUBR  ERRMESS                 Generate error message
+         B     INCRLIN1                Next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        CHECK COMMENT,    Name field and separation space            *
+*                                                                     *
+*---------------------------------------------------------------------*
+SLASHES  DS    0H
+         XC    DATAFLAG,DATAFLAG       End of instream data
+         LA    R12,2(,R12)             Increase pointer
+         CLI   0(R12),C' '             Name field filled in?
+         BNE   SLASH00A                Yes: check the name
+         CLI   CONTFLAG,X'FF'          Continue comment?
+         BNE   SLASH010                No
+         L     R12,ENDLINE             Pointer to column 72
+         CLI   0(R12),C' '             Continuation?
+         BNE   INCRLIN1                Yes: next line
+         XC    CONTFLAG,CONTFLAG       No: clear flag
+         B     INCRLIN1                Next line in workspace
+SLASH00A DS    0H
+         SUBR  NAMES                   Check name field
+         B     *+4(R15)                Initiate branch list
+         B     SLASH000                Ok
+         B     NAMEERR                 No space, error in name
+SLASH000 DS    0H
+         CLI   CONTFLAG,X'FF'          Continue COMMENT?
+         BNE   SLASH005                No.
+         LA    R6,ERRNOCON             Continuation not received
+         SUBR  ERRMESS                 Issue this message
+         XC    CONTFLAG,CONTFLAG       Clear flag
+SLASH005 DS    0H
+         CLI   0(R12),C'.'             Override statement?
+         BNE   SLASH010                No
+         CLI   EPROCFLG,X'00'          Exec PROC?
+         BE    NAMEERR                 No: error
+         LA    R12,1(,R12)             Increase pointer
+         SUBR  NAMES                   Proc name?
+         B     *+4(R15)                Initiate branchlist
+         B     SLASH010                Good
+         B     NAMEERR                 Error
+SLASH010 DS    0H
+         SUBR  SKIPSPC                 Skip spaces
+         B     *+4(R15)                Initiate branch list
+         B     TESTPROC                Good
+         B     NAMEERR                 No blank, error in name
+         B     INCRLINE                End of record, null record
+NAMEERR  DS    0H
+         LA    R6,ERRNAME              Msg: error in Name
+         SUBR  ERRMESS                 Issue error message
+         B     INCRLINE                Next line
+OPERERR  DS    0H
+         LA    R6,ERROPER              Msg: error in operation
+         SUBR  ERRMESS                 Issue error message
+         B     INCRLINE                Next line
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Check on PROC and PEND statement                             *
+*                                                                     *
+*---------------------------------------------------------------------*
+TESTPROC DS    0H
+         CLI   PROCFLAG,X'FF'          Intream procedure JCL?
+         BNE   TESTJOB                 No: branch
+         CLC   0(4,R12),=C'PEND'       End PROC (PEND) found?
+         BNE   INCRLIN1                No: branch
+         XC    PROCFLAG,PROCFLAG       Reset flag
+         B     INCRLIN1                Next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Check Jobcard, exec card or dd statement                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+TESTJOB  DS    0H
+         CLC   0(3,R12),=C'JOB'        Jobcard?
+         BE    JOBCARD                 Yes: branch
+TESTEXEC DS    0H
+         CLI   FIRSTFLG,X'00'          Is this the first record?
+         BE    NOJOBC                  Yes: no JOB card found
+         CLC   0(4,R12),=C'EXEC'       EXEC statement?
+         BE    EXECCARD                Yes: process EXEC
+TESTDD   DS    0H
+         CLC   0(2,R12),=C'DD'         DD-card?
+         BE    DDSTMNT                 Yes: proces the DD-statement
+         CLC   0(4,R12),=C'PROC'       Start of inline procedure?
+         BNE   TESTDATA                No: branch
+         MVI   PROCFLAG,X'FF'          Mark instream proc (PROC & PEND)
+         B     INCRLIN1                Next line
+TESTDATA DS    0H
+         CLI   DATAFLAG,X'FF'          'DD DATA'
+         BE    INSTREAM                Instream data
+         B     OPERERR                 Error in operation
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Next line                                                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+INCRLINE DS    0H
+         L     R6,STATNBR              Increase number of statements
+         LA    R6,1(,R6)
+         ST    R6,STATNBR
+INCRLIN1 DS    0H
+         LA    R10,NEXTENT(,R10)       Next entry in EDIT workspace
+         B     NEXTLINE
+*---------------------------------------------------------------------*
+*                                                                     *
+*        End of JCL check; display answers on screen                  *
+*                                                                     *
+*---------------------------------------------------------------------*
+         ENTRY CHECKEND
+CHECKEND DS    0H
+         USING COMMAREA,R11
+         L     R1,=V(SCREEN)           Pickup screen
+         MVC   1(1,R1),COMMCMD         Move EW or EWA
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         XR    R6,R6                   Default no centering
+         L     R1,COMMCOLS             Width of screen
+         CH    R1,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R6,R1
+         SH    R6,=H'80'               Standard screen
+         SRL   R6,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R6)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         L     R1,=V(SCREEN)           Point to screen
+         STCM  R0,3,4(R1)              And save R1,C1 in screen
+*
+         LA    R0,2                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R6)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         L     R15,=V(R2C1)            Pickup SBA in screen
+         STCM  R0,3,1(R15)             And save the calculated SBA
+*
+*
+         L     R2,=V(SCRBEGIN)         First line in screen
+         USING SCRLINE,R2              Address it
+         L     R1,COMMSIZE             # rows in the screen
+         BCTR  R1,0                    Discount
+         BCTR  R1,0                            with 2 lines
+         LR    R7,R1                   Copy into register 7
+         MH    R1,=AL2(SCRL#LEN)       * length of screen line
+         LA    R1,SCRLEN(R1)           Carry with first part of screen
+         ST    R1,SCREENL              Save length
+         LA    R8,3                    Start line = line 3
+SCR01    DS    0H
+         MVI   SCRLINE,C' '            Blank
+         MVC   SCRLINE+1(SCRL#LEN-1),SCRLINE  line first
+         MVC   SCRLCLR1,=AL3(WHITE)    Move color 1
+         MVC   SCRLCLR2,=AL3(GREEN)    Move color 2
+         MVI   SCRLSBA,COMMSBA         Move SBA order
+         LR    R0,R8                   Parameter line
+         LA    R1,2                    Parameter column (2+)
+         LA    R1,0(R1,R6)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCRLSBA+1          And Save
+         LA    R2,SCRL#LEN(,R2)        Pointer to next line in screen
+         LA    R8,1(,R8)               Next line number
+         BCT   R7,SCR01                Loop until all done
+*
+*        End of screen setup
+*
+         DROP  R2
+         L     R15,=V(SCRBEGIN)        First line in screen
+         USING SCRLINE,R15             Address it
+         L     R6,STATNBR              Number of statements
+         CVD   R6,WORKDOUB             Convert
+         UNPK  HEADING(6),WORKDOUB     Unpack number of records
+         OI    HEADING+5,X'F0'         Clear sign
+         L     R6,ERRNBR               Number of JCL errors
+         CVD   R6,WORKDOUB             Convert
+         UNPK  HEADING+23(6),WORKDOUB  Unpack number of errors
+         OI    HEADING+28,X'F0'        Clear sign
+         MVC   SCRLMSG,HEADING
+         LA    R15,SCRL#LEN(,R15)
+DISPL050 DS    0H
+         L     R8,STARTERR             Start of area
+         C     R8,CURRERR              No errors?
+         BE    DISPLEND                Yes: end
+         B     DISPL070
+DISPL060 DS    0H
+         L     R15,=V(SCRBEGIN)        First detail line on screen
+DISPL070 DS    0H
+         MVC   SCRL#(6),0(R8)          Line number to screen
+         XR    R6,R6                   Clear register 6
+         LA    R7,MESLEN               Length message
+         LA    R14,ERR999              Highest error number
+         CH    R14,6(R8)               Larger?
+         BL    DISPL075                Yes: error in program
+         LH    R14,6(R8)               No
+DISPL075 DS    0H
+         MR    R6,R14                  Calculate offset
+         L     R6,=V(MESSTXT)          Start address text
+         LA    R6,0(R6,R7)             Address the message
+         MVC   SCRLMSG,0(R6)           and move
+         LA    R8,8(,R8)               Next error message
+         C     R8,CURRERR              All done?
+         BE    DISPLEND                Yes: end of display
+         LA    R15,SCRL#LEN(,R15)      Pointer to next line
+         L     R14,=V(SCREEN)          Calculate end of screen
+         L     R1,SCREENL              + length
+         LA    R14,0(R1,R14)
+         CR    R14,R15                 End of screen?
+         BNE   DISPL070                Next line in workspace
+         BAL   R2,TPUTJ
+         XC    BUFFER,BUFFER           Clear input buffer
+         LA    R1,BUFFER               Buffer address
+         LA    R0,L'BUFFER             Length
+         ICM   R1,8,=B'10000000'       Indicate TGET
+         TGET  (1),(0),R               Read screen
+         OC    BUFFER(3),=CL3' '       Xlate to upper case
+         CLC   BUFFER(3),=C'END'       'END' in upper case?
+         BE    DISPLEN1                Yes
+         L     R15,=V(SCRBEGIN)        First detail line on screen
+         L     R14,=V(SCREEN)          Calculate length
+         L     R1,SCREENL              + length
+         LA    R14,0(R1,R14)
+DISPL080 DS    0H
+         MVC   SCRL#(6),=CL6' '        Clear line number
+         MVI   SCRLMSG,C' '            Clear text
+         MVC   SCRLMSG+1(L'SCRLMSG-1),SCRLMSG
+         LA    R15,SCRL#LEN(,R15)      Next line in workspace
+         CR    R14,R15                 End of screen?
+         BE    DISPL060                Yes
+         B     DISPL080
+DISPLEND DS    0H
+         L     R7,=V(SCREEN)
+         L     R6,SCREENL              Length of screen
+         BAL   R2,TPUTJ
+         LA    R1,BUFFER               Area address
+         LA    R0,L'BUFFER             Length
+         ICM   R1,8,=B'10000000'       Indicate TGET
+         TGET  (1),(0),R               Read screen
+DISPLEN1 DS    0H
+         ICM   R2,15,STARTERR          Address of msg area if there
+         BZ    DISPLEN2                Not there: skip FREEMAIN
+         FREEMAIN R,LV=AREALEN,A=(2)   Release message area
+DISPLEN2 DS    0H
+         L     R13,4(,R13)             Load callers save area
+         XR    R15,R15                 Rc = 0
+         RETURN (14,12),RC=(15)        Return to caller
+TPUTJ    DS    0H
+         L     R0,SCREENL              Length of screen
+         BCTR  R0,0                    Minus 1 of ESC character
+         L     R1,=V(SCREEN)           Address of screen3
+         LA    R1,1(,R1)               Point after ESC (X'27')
+         CALL  TPUTS
+         BR    R2                      Return
+         DROP  R11,R15
+*---------------------------------------------------------------------*
+*                                                                     *
+*        INSTREAM DATA                                                *
+*                                                                     *
+*---------------------------------------------------------------------*
+         SPACE 3
+INSTREAM DS    0H
+         L     R12,STARTLNE            Start of line
+         CLC   DLM,0(R12)              Delimiter found?
+         BNE   INCRLIN1                No: carry on
+         MVI   DATAFLAG,0              Clear DATAFLAG
+         CLC   DLM,=C'/*'              End of instream data?
+         BE    INCRLINE                Yes
+         B     INCRLIN1                Next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        No jobcard                                                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+NOJOBC   DS    0H
+         LA    R6,ERRNOJOB             Msg: No jobcard
+         SUBR  ERRMESS                 Generate error message
+         B     CHECKEND                End of check
+         TITLE 'Check the JOB card'
+***********************************************************************
+*                                                                     *
+*               JJJJJJJJJJ   OOOOOOOOOO   BBBBBBBBBBB                 *
+*               JJJJJJJJJJ  OOOOOOOOOOOO  BBBBBBBBBBBB                *
+*                   JJ      OO        OO  BB        BB                *
+*                   JJ      OO        OO  BB        BB                *
+*                   JJ      OO        OO  BB       BB                 *
+*                   JJ      OO        OO  BBBBBBBBBB                  *
+*                   JJ      OO        OO  BBBBBBBBBB                  *
+*                   JJ      OO        OO  BB       BB                 *
+*             JJ    JJ      OO        OO  BB        BB                *
+*             JJ    JJ      OO        OO  BB        BB                *
+*             JJJJJJJJ      OOOOOOOOOOOO  BBBBBBBBBBBB                *
+*              JJJJJJ        OOOOOOOOOO   BBBBBBBBBBB                 *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+*        Syntax check of the jobcard                                  *
+*                                                                     *
+*---------------------------------------------------------------------*
+JOBCARD  DS    0H
+         MVI   FIRSTFLG,X'FF'          No first line anymore
+         MVI   CARDFLAG,X'01'          This is a jobcard
+         XC    JFLAGS(FJLEN),JFLAGS    Clear parameter flags
+         L     R12,STARTLNE            Start of line
+         LA    R12,2(,R12)             Skip //
+         SUBR  NAMES                   Check on jobname
+         B     *+4(R15)                Initiate branchlist
+         B     JJOBNAME                JOBNAME is present
+         LA    R6,ERRNJOBN             Msg: no JOB name
+         SUBR  ERRMESS                 Issue error message
+         SPACE 2
+JJOBNAME DS    0H
+         SUBR  SKIPSPC                 Skip blank(s)
+         LA    R12,3(,R12)             Skip 'JOB'
+         SUBR  SKIPSPC                 Skip blank(s)
+         B     *+4(R15)                Initiate branchlist
+         B     JCHKACC                 Check account field in jobcard
+         B     JACCTERR                No: blank, error in account fld
+         B     JACCTERR                End of record, error account
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Check accounting information in jobcard                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+JCHKACC  DS    0H                      Check 1st positioal parameter
+         CALL  BALANCE                 () and '' in balance?
+         B     *+4(R15)                Initiate branchlist
+         B     JACCT00A                Yes: ok
+         B     INCRLINE                No
+JACCT00A DS    0H
+         LA    R6,ERRJACC              Error in account field
+         CLI   0(R12),C'('             Does it start with '('?
+         BNE   JACCT000                No: branch
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Set flag
+JACCT000 DS    0H
+*
+*        String for PARMTEST routine. Add always a blank at the end
+*
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$- '
+         CALL  PARMTEST                Test parameter
+         B     *+4(R15)                Initiate branchlist
+         B     JACCT010                OK
+         B     JACCTERR                ERROR.
+JACCT010 DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    JACCTOK                 Yes: branch
+         CLI   0(R12),C')'             End of accounting?
+         BE    JACCT020
+         CALL  DELIMIT                 DELIMITER ?
+         B     *+4(R15)                Initiate branchlist
+         B     JACCT000                Yes: delimiter found
+         B     JACCTERR                No: error
+JACCT020 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Reset flag
+JACCTOK  DS    0H
+         MVI   FJPOS1,X'FF'            Set flag
+         CLI   0(R12),C','             Comma?
+         BNE   JACCTERR                No: error
+         SUBR  DELIMIT                 Next parameter
+         B     *+4(R15)                Initiate branchlist
+         B     JCHKPRN                 Check positional parameter 2
+         B     INCRLINE                No continuation
+JACCTERR DS    0H
+         SUBR  ERRMESS                 Set error message in msg table
+         B     INCRLINE                Process next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Check programmer's name in job card                          *
+*                                                                     *
+*---------------------------------------------------------------------*
+JCHKPRN  DS    0H                      Check 2nd pos. parm (pgmr name)
+         LA    R6,ERRJPRN              Error in programmers name
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$-. '
+         CALL  PARMTEST                Test parameter
+         B     *+4(R15)                Initiate branchlist
+         B     JPRNOK                  OK
+         B     JPRNERR                 ERROR
+JPRNOK   DS    0H
+         MVI   FJPOS2,X'FF'            Set flag
+         CLI   0(R12),C' '             End of record?
+         BE    JNEXTKEY                Comment
+         CLI   0(R12),C','             Comma?
+         BNE   JPRNERR                 No: error
+         SUBR  DELIMIT                 Next parameter
+         B     *+4(R15)                Initiate branchlist
+         B     JOBKEY                  00 - Check keyword parameters
+         B     INCRLINE                04 - no continuation
+JPRNERR  DS    0H
+         SUBR  ERRMESS                 Set the message in the table
+         B     INCRLINE                Next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Check keyword parameters in jobcard                          *
+*                                                                     *
+*---------------------------------------------------------------------*
+JOBKEY   DS    0H
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'ADDRSPC' in jobcard                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+JADDRSPC DS    0H
+         CLC   0(8,R12),=C'ADDRSPC='   Keyword 'ADDRSPC' found?
+         BNE   JCLASS                  No: test other keywords
+         CLI   FJADDRSP,X'FF'          Already specified?
+         BE    JDOUBLE                 Yes
+         MVI   FJADDRSP,X'FF'          Set flag
+         LA    R6,ERRJADDR             Msg: error in ADDRSPC parm
+         LA    R12,8(,R12)             Increase pointer
+         CLC   0(4,R12),=C'VIRT'       VIRT ?
+         BNE   JREAL                   No
+JADDROK  DS    0H
+         LA    R12,4(,R12)             Increase pointer
+         B     JNEXTKEY                Next keyword parameter
+JREAL    DS    0H
+         CLC   0(4,R12),=C'REAL'       ADDRSPC=REAL?
+         BE    JADDROK                 Yes: good
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'CLASS' in jobcard                         *
+*                                                                     *
+*---------------------------------------------------------------------*
+JCLASS   DS    0H
+         CLC   0(6,R12),=C'CLASS='     Keyword CLASS found?
+         BNE   JCOND                   No: test other keywords
+         CLI   FJCLASS,X'FF'           Already specified?
+         BE    JDOUBLE                 Yes
+         MVI   FJCLASS,X'FF'           Set flag
+         LA    R6,ERRJCLAS             Msg: error in CLASS parm
+         LA    R12,6(,R12)             Increase pointer
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 '
+         SUBR  TESTCHAR                A ===> Z or 0 ===> 9 ?
+         B     *+4(R15)                Initiate branchlist
+         B     JCLASSOK                OK.
+         B     JCLASSER                ERROR IN CLASS
+JCLASSOK DS    0H
+         B     JNEXTKEY                Next keyword parameter
+JCLASSER DS    0H
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'COND' in jobcard                          *
+*                                                                     *
+*---------------------------------------------------------------------*
+JCOND    DS    0H
+         CLC   0(5,R12),=C'COND='      Keyword COND found?
+         BNE   JGROUP                  No: branch
+         CLI   FJCOND,X'FF'            Already specified?
+         BE    JDOUBLE                 Yes
+         MVI   FJCOND,X'FF'            Set flag
+         LA    R6,ERRJCOND             Msg: error in COND parm
+         LA    R12,5(,R12)             Increase pointer
+         SUBR  JCONDCDE                Test on JOB COND code
+         B     *+4(R15)                Initiate branchlist
+         B     JCONDOK                 OK.
+         B     JCONDERR                Error in COND parameter
+JCONDOK  DS    0H
+         B     JNEXTKEY                Next keyword parameter
+JCONDERR DS    0H
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'GROUP' in jobcard?                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+JGROUP   DS    0H
+         CLC   0(6,R12),=C'GROUP='     Keyword GROUP found
+         BNE   JMSGCLAS                No: test other keywords
+         CLI   FJGROUP,X'FF'           Already specified?
+         BE    JDOUBLE                 Yes
+         MVI   FJGROUP,X'FF'           Set flag
+         LA    R6,ERRJGROU             Msg: keyword not allowed
+         LA    R12,6(,R12)             Increase pointer
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'MSGCLASS' in jobcard                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+JMSGCLAS DS    0H
+         CLC   0(9,R12),=C'MSGCLASS='  Keyword MSGCLASS found?
+         BNE   JMSGLEVL                No: test other keywords
+         CLI   FJMSGCLS,X'FF'          Already specified?
+         BE    JDOUBLE                 Yes
+         MVI   FJMSGCLS,X'FF'          Set flag
+         LA    R6,ERRJMSGC             Msg: error in MSGCLASS parm
+         LA    R12,9(,R12)             Increase pointer
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 '
+         SUBR  TESTCHAR                A ===> Z OF 0 ===> 9 ?
+         B     *+4(R15)                Initiate branchlist
+         B     JMSGCLOK                Ok
+         B     JMSGCLER                Error in MSGCLASS parameter
+JMSGCLOK DS    0H
+         B     JNEXTKEY                Next keyword parameter
+JMSGCLER DS    0H
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'MSGLEVEL' in jobcard                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+JMSGLEVL DS    0H
+         CLC   0(9,R12),=C'MSGLEVEL='  Keyword MSGLEVEL found?
+         BNE   JNOTIFY                 No: test other keywords
+         CLI   FJMSGLVL,X'FF'          Already specified?
+         BE    JDOUBLE                 Yes: Mutual exclusive
+         MVI   FJMSGLVL,X'FF'          Set flag
+         LA    R6,ERRJMSGL             Msg: error in MSGLEVEL parm
+         LA    R12,9(,R12)             Increase pointer
+         CLI   0(R12),C'('             (
+         BNE   JMSGL010                No end bracket
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Bracket present
+JMSGL010 DS    0H
+         LA    R7,=C'012 '             0 1 Or 2 ?
+         CALL  TESTCHAR                Test if MSGLEVEL = 0, 1 or 2
+         B     *+4(R15)                Initiate branchlist
+         B     JMSGL020                OK.
+         CP    BRFLAG,ZERO             '(' present?
+         BE    JMSGLERR                No
+JMSGL020 DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    JMSGLOK                 No
+         SUBR  DELIMIT                 Next sub parameter?
+         B     *+4(R15)                Initiate branchlist
+         B     JMSGL040                TEST REST
+         B     INCRLINE                No continuation
+JMSGL040 DS    0H
+         CLI   0(R12),C'0'             MESSAGES = 0 ?
+         BE    JMSGL050                Test on ')'
+         CLI   0(R12),C'1'             MESSAGES = 1 ?
+         BNE   JMSGLERR                No: error
+JMSGL050 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C')'             )
+         BNE   JMSGLERR                OK.
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Reset flag ')' found
+JMSGLOK  EQU   *
+         B     JNEXTKEY                Next keyword parameter
+JMSGLERR DS    0H
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'NOTIFY' in jobcard                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+JNOTIFY  DS    0H
+         CLC   0(7,R12),=C'NOTIFY='    Keyword NOTIFY found?
+         BNE   JPASWORD                No: test other keywords
+         CLI   FJNOTIFY,X'FF'          Already specified?
+         BE    JDOUBLE                 Yes: mutual exclusive
+         MVI   FJNOTIFY,X'FF'          Set flag
+         LA    R6,ERRJNOTI             Msg: error in NOTIFY parm
+         LA    R12,7(,R12)             Point after 'NOTIFY='
+         CLC   0(7,R12),=C'&&SYSUID'   NOTIFY=&SYSUID?
+         BNE   JNOTIFY1                No: branch
+         LA    R6,ERSYSUID             Warning: &SYSUID
+         B     JERR                    Error
+JNOTIFY1 DS    0H
+         SUBR  NAMES                   Name?
+         B     *+4(R15)                Initiate branchlist
+         B     JNOTIFOK                No errors
+         B     JNOTIFER                Error in NOTIFY
+JNOTIFOK DS    0H
+         CLI   7(R1),C' '              Maximum length is 7?
+         BNE   JNOTIFER                No: longer
+         B     JNEXTKEY                Next keyword parameter
+JNOTIFER DS    0H
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'PASSWORD' in jobcard                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+JPASWORD DS    0H
+         CLC   0(9,R12),=C'PASSWORD='  Keyword PASSWORD found?
+         BNE   JPERFORM                No: test other keywords
+         CLI   FJPASSW,X'FF'           Already specified?
+         BE    JDOUBLE                 Yes: mutual exclusive
+         MVI   FJPASSW,X'FF'           Set flag
+         LA    R6,ERRJPASS             Msg: keyword not allowed
+         LA    R12,9(,R12)             Increase pointer
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'PERFORM' in jobcard                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+JPERFORM DS    0H
+         CLC   0(8,R12),=C'PERFORM='   Keyword PERFORM found?
+         BNE   JPRTY                   No: test other keywords
+         CLI   FJPERFRM,X'FF'          Already specified?
+         BE    JDOUBLE                 Yes: mutual exclusive
+         MVI   FJPERFRM,X'FF'          Set flag
+         LA    R6,ERRJPERF             Msg: error in PERFORM parm
+         LA    R12,8(,R12)             Increase pointer
+         SUBR  NUMBER                  Number?
+         B     *+4(R15)                Initiate branchlist
+         B     JPERFMOK                Ok
+         B     JPERFMER                Error in PERFORM parameter
+JPERFMOK DS    0H
+         C     R1,=F'1'                Test between 1
+         BL    JPERFMER                < 1: error
+         C     R1,=F'255'              and 255
+         BH    JPERFMER                > 255: error
+         B     JNEXTKEY                Next keyword parameter
+JPERFMER DS    0H
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'PRTY' in jobcard                          *
+*                                                                     *
+*---------------------------------------------------------------------*
+JPRTY    DS    0H
+         CLC   0(4,R12),=C'PRTY='      Keyword PRTY found?
+         BNE   JRD                     No: test other keywords
+         LA    R6,ERRPRTY              Msg: PRTY is not allowed
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'RD' in jobcard                            *
+*                                                                     *
+*---------------------------------------------------------------------*
+JRD      DS    0H
+         CLC   0(3,R12),=C'RD='        Keyword RD found?
+         BNE   JREGION                 No: test other keywords
+         CLI   FJRD,X'FF'              Already specified?
+         BE    JDOUBLE                 Yes: mutual exclusive
+         MVI   FJRD,X'FF'              Set flag
+         LA    R6,ERRJRD               Keyword RD not allowed
+         LA    R12,3(,R12)             Increase pointer
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'REGION' in jobcard                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+JREGION  DS    0H
+         CLC   0(7,R12),=C'REGION='    Keyword REGION found?
+         BNE   JRESTART                No: test other keywords
+         CLI   FJREGION,X'FF'          Already specified?
+         BE    JDOUBLE                 Yes: mutual exclusive
+         MVI   FJREGION,X'FF'          Set flag
+         LA    R6,ERRJREGN             Msg: error in REGION parm
+         LA    R12,7(,R12)             Increase pointer
+         SUBR  NUMBER                  Test on figures/numbers
+         B     *+4(R15)                Initiate branchlist
+         B     JREGNUM                 OK.
+         B     JREGNERR                Error in REGION
+JREGNUM  DS    0H
+         CLI   0(R12),C'K'             K ?
+         BE    JREGNUM2                Yes: good
+         CLI   0(R12),C'M'             M ?
+         BNE   JREGNERR                No: not 'K' or 'M': error
+JREGNUM2 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         B     JNEXTKEY                Next keyword parameter
+JREGNERR DS    0H
+         B     JERR                    Next keyword parameter
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'RESTART' in jobcard                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+JRESTART DS    0H
+         CLC   0(8,R12),=C'RESTART='   Keyword RESTART found?
+         BNE   JTIME                   No: test other keywords
+         CLI   FJRESTRT,X'FF'          Already specified?
+         BE    JDOUBLE                 Yes: mutual exclusive
+         MVI   FJRESTRT,X'FF'          Set flag
+         LA    R6,ERRJREST             Msg: error in RESTART parm
+         LA    R12,8(,R12)             Increase pointer
+         CLI   0(R12),C'*'             *?
+         BNE   JREST010                No
+         LA    R12,1(,R12)             Increase pointer
+         B     JRESTROK                OK
+JREST010 DS    0H
+         SUBR  NAMES                   Test on name
+         B     *+4(R15)                Initiate branchlist
+         B     JREST020                Name OK
+         B     JRESTERR                ERROR
+JREST020 DS    0H
+         CLI   0(R12),C'.'             .
+         BNE   JRESTROK                OK
+         LA    R12,1(,R12)             Increase pointer
+         SUBR  NAMES                   Test on name
+         B     *+4(R15)                Initiate branchlist
+         B     JRESTROK                OK
+         B     JRESTERR                ERROR
+JRESTROK DS    0H
+         B     JNEXTKEY                Next keyword parameter
+JRESTERR DS    0H
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'TIME' in jobcard                          *
+*                                                                     *
+*---------------------------------------------------------------------*
+JTIME    DS    0H
+         CLC   0(5,R12),=C'TIME='      Keyword TIME found?
+         BNE   JTYPRUN                 No: test on other keywords
+         CLI   FJTIME,X'FF'            Already specified?
+         BE    JDOUBLE                 Yes: mutual exclusive
+         MVI   FJTIME,X'FF'            Set flag
+         LA    R6,ERRJTIME             Msg: error in TIME parm
+         LA    R12,5(,R12)             Increase pointer
+         CLI   0(R12),C'('             ( (Paranthese open)
+         BNE   JTIME010                No: branch
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+JTIME010 DS    0H
+         SUBR  NUMBER                  Test number
+         B     *+4(R15)                Initiate branchlist
+         B     JTIME020                Minutes
+         B     JTIME040                No minutes
+JTIME020 DS    0H
+         C     R1,=F'1441'             Time should be less/equal 1440
+         BL    JTIME030                OK
+         B     JTIMEERR                Error
+JTIME030 EQU   *
+         CP    BRFLAG,ZERO             '(' present?
+         BE    JTIMEOK
+JTIME040 DS    0H
+         CLI   0(R12),C','             Comma found?
+         BNE   JTIME070                No: test on paranthese close
+         SUBR  DELIMIT                 Next sub parameter
+         B     *+4(R15)                Initiate branchlist
+         B     JTIME050                Present
+         B     INCRLINE                Go to next line
+JTIME050 DS    0H
+         SUBR  NUMBER                  Test on a number
+         B     *+4(R15)                Initiate branchlist
+         B     JTIME060                OK
+         B     JTIMEERR                Error in TIME parameter
+JTIME060 DS    0H
+         C     R1,=F'60'               Less or equal 60?
+         BL    JTIME070                Yes: good test on ')'
+         B     JTIMEERR                ERROR
+JTIME070 DS    0H
+         CLI   0(R12),C')'             Bracket present?
+         BNE   JTIMEERR                No: error in TIME parm
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+JTIMEOK  DS    0H
+         B     JNEXTKEY                Next keyword
+JTIMEERR DS    0H
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'TYPRUN' in jobcard                        *
+*                                                                     *
+*---------------------------------------------------------------------*
+JTYPRUN  DS    0H
+         CLC   0(7,R12),=C'TYPRUN='    Keyword TYPRUN found?
+         BNE   JUSER                   No: test other keywords
+         CLI   FJTYPRUN,X'FF'          Already specified?
+         BE    JDOUBLE                 Yes: mutual exclusive
+         MVI   FJTYPRUN,X'FF'          Set flag
+         LA    R6,ERRJTYPR             Error in keyword parameter
+         LA    R12,7(,R12)             Increase pointer
+         CLC   0(4,R12),=C'HOLD'       HOLD ?
+         BE    JTYPROK2                OK
+         CLC   0(7,R12),=C'JCLHOLD'    JCLHOLD ?
+         BE    JTYPROK1                OK
+         CLC   0(4,R12),=C'SCAN'       SCAN ?
+         BE    JTYPROK2                OK
+         CLC   0(4,R12),=C'COPY'       COPY ?
+         BE    JTYPROK2                OK
+         B     JERR                    Next keyword parameter
+JTYPROK1 DS    0H
+         LA    R12,3(,R12)             Increase pointer
+JTYPROK2 DS    0H
+         LA    R12,4(,R12)             Increase pointer
+         B     JNEXTKEY                Next keyword parameter
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword paremeter 'USER' in jobcard                          *
+*                                                                     *
+*---------------------------------------------------------------------*
+JUSER    DS    0H
+         CLC   0(5,R12),=C'USER='      Keyword USER found?
+         BNE   JKEYERR                 No: unknown keyword
+         CLI   FJUSER,X'FF'            Already specified?
+         BE    JDOUBLE                 Yes: mutual exclusive
+         MVI   FJUSER,X'FF'            Set flag
+         LA    R6,ERRJUSER             Keyword USER not allowed
+         LA    R12,5(,R12)             Increase pointer
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Unknown keyword paremeter                                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+JKEYERR  DS    0H
+         LA    R6,ERRJKEY              Unknown keyword
+         B     JERR                    Process error and next keyw parm
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Mutual execlusive keyword parameter                          *
+*                                                                     *
+*---------------------------------------------------------------------*
+JDOUBLE  DS    0H
+         LA    R6,ERRJDOUB            Msg: mutual execlusive in jobcard
+*
+*        Call error routine to set the message in the message table
+*        and skip the paremeter
+*
+JERR     DS    0H
+         SUBR  ERRMESS                 Form error message
+         SUBR  SKIPPARM                Skip parameter
+*
+*        Process next keyword parameter in the jobcard if present
+*
+JNEXTKEY DS    0H
+         CLI   0(R12),C','             Comma?
+         BNE   JNEXTK1                 No
+         SUBR  DELIMIT                 Next parameter
+         B     *+4(R15)                Initiate branchlist
+         B     JOBKEY                  Present
+         B     INCRLINE                Next line in EDIT workspace
+JNEXTK1  DS    0H
+         CLI   0(R12),C' '             End of line?
+         BNE   JNEXTK2                 No
+         L     R12,ENDLINE             End of line
+         CLI   0(R12),C' '             Continue comment?
+         BE    INCRLINE                No: carry
+         MVI   CONTFLAG,X'FF'          Set flag
+         B     INCRLINE
+JNEXTK2  DS    0H
+         SUBR  ERRMESS                 ERROR MESSAGE
+         B     INCRLINE                Next line in workspace
+         TITLE 'Check the EXEC card'
+***********************************************************************
+*                                                                     *
+*        EEEEEEEEEEEE  XX        XX  EEEEEEEEEEEE   CCCCCCCCCC        *
+*        EEEEEEEEEEEE  XX        XX  EEEEEEEEEEEE  CCCCCCCCCCCC       *
+*        EE             XX      XX   EE            CC        CC       *
+*        EE              XX    XX    EE            CC                 *
+*        EE               XX  XX     EE            CC                 *
+*        EEEEEEEE          XXXX      EEEEEEEE      CC                 *
+*        EEEEEEEE          XXXX      EEEEEEEE      CC                 *
+*        EE               XX  XX     EE            CC                 *
+*        EE              XX    XX    EE            CC                 *
+*        EE             XX      XX   EE            CC        CC       *
+*        EEEEEEEEEEEE  XX        XX  EEEEEEEEEEEE  CCCCCCCCCCCC       *
+*        EEEEEEEEEEEE  XX        XX  EEEEEEEEEEEE   CCCCCCCCCC        *
+*                                                                     *
+***********************************************************************
+*                                                                     *
+*        Syntax check EXEC statement                                  *
+*                                                                     *
+*---------------------------------------------------------------------*
+EXECCARD DS    0H
+         MVI   CARDFLAG,X'02'          This is an EXEC statement
+         XC    EFLAGS(FELEN),EFLAGS    Clear parameter flags
+         L     R12,STARTLNE            Start of line
+         LA    R12,2(,R12)             Skip //
+         SUBR  NAMES                   Check on name field
+         SUBR  SKIPSPC                 Skip space(s)
+         LA    R12,4(,R12)             Skip 'EXEC'
+         SUBR  SKIPSPC                 Skip SPACES
+         B     *+4(R15)                Initiate branchlist
+         B     ECHKPOS1                Good
+         B     EPOS1ERR                Error, no space
+         B     EPOS1ERR                Error, no positional parms
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Check positional parameters in the EXEC statement            *
+*                                                                     *
+*---------------------------------------------------------------------*
+ECHKPOS1 DS    0H
+         CALL  BALANCE                 () and '' balanced?
+         B     *+4(R15)                Initiate branchlist
+         B     ECHKPOS2                yes
+         B     INCRLINE                No
+ECHKPOS2 DS    0H
+         XC    EPROCFLG,EPROCFLG       CLEAR PROCEDURE FLAG
+         CLC   0(4,R12),=C'PGM='       PGM= ?
+         BNE   ECHKPS11                No
+         LA    R12,4(,R12)             Increase pointer
+         SUBR  NAMES                   Program name after 'PGM='?
+         B     *+4(R15)                Initiate branch list
+         B     EXECKEY1                Keywork parm
+         CLC   0(2,R12),=C'*.'         Reference?
+         BNE   EPOS1ERR                No: error
+         LA    R12,2(,R12)             Increase pointer
+         SUBR  NAMES                   Check program name
+         B     *+4(R15)                Initiate branchlist
+         B     EPOSDDN                 Good
+         B     EPOS1ERR                Error
+EPOSDDN  DS    0H
+         CLI   0(R12),C'.'             '.' present?
+         BNE   EPOS1ERR                No: error
+         LA    R12,1(,R12)             Increase pointer
+         SUBR  NAMES                   Test on DDname
+         B     *+4(R15)                Initiate branchlist
+         B     EPOSSTEP                OK
+         B     EPOS1ERR                ERROR
+EPOSSTEP DS    0H
+         CLI   0(R12),C'.'             Period present?
+         BNE   EXECKEY1                No
+         LA    R12,1(,R12)             Increase pointer
+         SUBR  NAMES                   Test on name
+         B     *+4(R15)                Initiate branchlist
+         B     EXECKEY1                Good
+         B     EPOS1ERR                Error
+ECHKPS11 DS    0H
+         MVI   EPROCFLG,X'FF'          Set flag
+         CLC   0(5,R12),=C'PROC='      PROC=  found?
+         BNE   ECHKPS12                No: branch
+         LA    R12,5(,R12)             Increase pointer
+         SUBR  NAMES                   Procedure name
+         B     *+4(R15)                Initiate branchlist
+         B     EXECKEY1                Keyword parameter?
+         B     EPOS1ERR                Error: no pos. parameter
+ECHKPS12 DS    0H
+         SUBR  NAMES                   Test on PROC name
+         B     *+4(R15)                Initiate branchlist
+         B     EXECKEY1                Test on keyword parameters
+         B     EPOS1ERR                No positional parms
+EPOS1ERR DS    0H
+         LA    R6,ERREPOS1             No positional parm with EXEC
+         SUBR  ERRMESS                 Form error message
+         B     INCRLINE                Next line in EDIT workspace
+EXECKEY1 DS    0H
+         CLI   0(R12),C','             Comma?
+         BE    EPARMS                  Yes: keywords
+         CLI   0(R12),C' '             End of record?
+         BNE   EPOS1ERR                No: error in pos. parms
+         B     ENEXTKEY                Comment?
+EPARMS   DS    0H
+         SUBR  DELIMIT                 Check keyword parameters
+         B     *+4(R15)                Initiate branchlist
+         B     EXECKEY                 Keywords present
+         B     INCRLINE                No continuation
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Check keyword parameters in EXEC statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+EXECKEY  DS    0H
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'ACCT' in EXEC statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+EACCT    DS    0H
+         CLC   0(5,R12),=C'ACCT='      Keyword ACCT= found?
+         BE    EACCT020                Yes: branch
+         CLC   0(5,R12),=C'ACCT.'      Keyword ACCT. found?
+         BNE   EADDRSPC                No: test other keywords
+         LA    R12,5(,R12)             Increase pointer
+         CLI   EPROCFLG,X'FF'          EXEC PROC ?
+         BNE   EACCTERR                No: error
+         SUBR  NAMES                   Step name?
+         B     *+4(R15)                Initiate branchlist
+         B     EACCT010                Good
+         B     EACCTERR                Error
+EACCT010 DS    0H
+         CLI   0(R12),C'='             = ?
+         BNE   EACCTERR                No: error
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C','             Nullify parameter?
+         BE    EACCTOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    EACCTOK                 Yes
+         B     EACCT030
+EACCT020 DS    0H
+         LA    R12,5(,R12)             Increase pointer
+EACCT030 DS    0H
+         CLI   FEACCT,X'FF'            Already specified?
+         BE    EDOUBLE                 yes
+         MVI   FEACCT,X'FF'            Set flag
+         LA    R6,ERREACCT             Msg: error in ACCT parm
+         CLI   0(R12),C'('             Starts with '('
+         BNE   EACCT040                No
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+EACCT040 DS    0H
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$- '
+         CALL  PARMTEST                Test parameter
+         B     *+4(R15)                Initiate branchlist
+         B     EACCT050                OK
+         B     EACCTERR                ERROR.
+EACCT050 DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    EACCTOK                 No
+         CLI   0(R12),C')'             End of accounting?
+         BE    EACCT060
+         CALL  DELIMIT                 DELIMITER ?
+         B     *+4(R15)                Initiate branchlist
+         B     EACCT040                Yes
+         B     EACCTERR                Error.
+EACCT060 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+EACCTOK  DS    0H
+         B     ENEXTKEY                Next keyword parameter
+EACCTERR DS    0H
+         B     EXERR          Process error, skip parm and next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'ADDRSPC' in EXEC statement                *
+*                                                                     *
+*---------------------------------------------------------------------*
+EADDRSPC DS    0H
+         CLC   0(8,R12),=C'ADDRSPC='   Keyword ADDRSPC= found?
+         BE    EADDR020                Yes: found
+         CLC   0(8,R12),=C'ADDRSPC.'   Keyword ADDRSPC. found?
+         BNE   ECOND                   No: test other keywords
+         LA    R6,ERREADDR             Msg: error in ADDRSPC parm
+         LA    R12,8(,R12)             Increase pointer
+         CLI   EPROCFLG,X'FF'          EXEC PROC=?
+         BNE   EADDRERR                No: error
+         SUBR  NAMES                   Step name?
+         B     *+4(R15)                Initiate branchlist
+         B     EADDR010                Good
+         B     EADDRERR                Error
+EADDR010 DS    0H
+         CLI   0(R12),C'='             = ?
+         BNE   EADDRERR                No: error
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C','             Nullify parameter?
+         BE    EADDROK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    EADDROK                 Yes
+         B     EADDR030
+EADDR020 DS    0H
+         LA    R6,ERREADDR             Msg: error in ADDRSPC parm
+         LA    R12,8(,R12)             Increase pointer
+EADDR030 DS    0H
+         CLI   FEADDRSP,X'FF'          Already specified?
+         BE    EDOUBLE                 yes
+         MVI   FEADDRSP,X'FF'          Set flag
+         CLC   0(4,R12),=C'VIRT'       ADDRSPC=VIRT?
+         BNE   EADDR050                No
+EADDR040 DS    0H
+         LA    R12,4(,R12)             Increase pointer
+EADDROK  EQU   *
+         B     ENEXTKEY                Next keyword parameter
+EADDR050 DS    0H
+         CLC   0(4,R12),=C'REAL'       REAL ?
+         BE    EADDR040                yes
+EADDRERR DS    0H
+         B     EXERR          Process error, skip parm and next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'COND' in EXEC statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+ECOND    DS    0H
+         CLC   0(5,R12),=C'COND='      Keyword COND= found?
+         BE    ECOND020                Yes: branch
+         CLC   0(5,R12),=C'COND.'      Keyword COND. found?
+         BNE   EDPRTY                  No: test other keywords
+         LA    R6,ERRECOND             Msg: error in COND parm
+         LA    R12,5(,R12)             Increase pointer
+         CLI   EPROCFLG,X'FF'          EXEC PROC ?
+         BNE   ECONDERR                ERROR
+         SUBR  NAMES                   Test step name
+         B     *+4(R15)                Initiate branchlist
+         B     ECOND010                OK
+         B     ECONDERR                ERROR
+ECOND010 DS    0H
+         CLI   0(R12),C'='             = ?
+         BNE   ECONDERR                ERROR
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C','             Nullify parameter?
+         BE    ECONDOK                 yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    ECONDOK                 yes
+         B     ECOND030
+ECOND020 DS    0H
+         LA    R6,ERRECOND             Error in keyword parameter
+         LA    R12,5(,R12)             Increase pointer
+ECOND030 DS    0H
+         CLI   FECOND,X'FF'            Already specified?
+         BE    EDOUBLE                 yes
+         MVI   FECOND,X'FF'            Set flag
+         SUBR  ECONDCDE                Test on EXEC condition code
+         B     *+4(R15)                Initiate branchlist
+         B     ECONDOK                 OK.
+         B     ECONDERR                Error in COND parameter
+ECONDOK  DS    0H
+         B     ENEXTKEY                Next keyword parameter
+ECONDERR DS    0H
+         B     EXERR          Process error, skip parm and next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'DPRTY' in EXEC statement                  *
+*                                                                     *
+*---------------------------------------------------------------------*
+EDPRTY   DS    0H
+         CLC   0(6,R12),=C'DPRTY='     Keyword DPRTY= found?
+         BE    EDPRT020                Yes: found
+         CLC   0(6,R12),=C'DPRTY.'     Keyword DPRTY. found?
+         BNE   EDYNAM                  No: test other keywords
+         LA    R6,ERREDPRT             Msg: error in DPRTY parm
+         LA    R12,6(,R12)             Increase pointer
+         SUBR  NAMES                   Stepname
+         B     *+4(R15)                Initiate branchlist
+         B     EDPRT010                OK
+         B     EDPRT040                Error
+EDPRT010 DS    0H
+         CLI   0(R12),C'='             = ?
+         BNE   EDPRT040                No: error
+         LA    R12,1(,R12)             Increase pointer
+         B     EDPRT030
+EDPRT020 DS    0H
+         LA    R6,ERREDPRT             Msg: error in DPRTY parm
+         LA    R12,6(,R12)             Increase pointer
+EDPRT030 DS    0H
+         CLI   FEDPRTY,X'FF'           Already specified?
+         BE    EDOUBLE                 yes
+         MVI   FEDPRTY,X'FF'           Set flag
+         CLI   0(R12),C'('             '(' present?
+         BNE   EDPRT040                No
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add 1, because '(' found
+EDPRT040 DS    0H
+         B     EXERR          Process error, skip parm and next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'DYNAMNBR' in EXEC statement               *
+*                                                                     *
+*---------------------------------------------------------------------*
+EDYNAM   DS    0H
+         CLC   0(9,R12),=C'DYNAMNBR='  Keyword DYNAMNBR= found?
+         BE    EDYNM020                yes
+         CLC   0(9,R12),=C'DYNAMNBR.'  Keyword DYNAMNBR. found?
+         BNE   EPARM                   No
+         LA    R6,ERREDYNM             Msg: Error in DYNAMNBR parm
+         LA    R12,9(,R12)             Increase pointer
+         CLI   EPROCFLG,X'FF'          EXEC PROC ?
+         BNE   EDYNMERR                ERROR
+         SUBR  NAMES                   Stepname ?
+         B     *+4(R15)                Initiate branchlist
+         B     EDYNM010                OK
+         B     EDYNMERR                ERROR
+EDYNM010 DS    0H
+         CLI   0(R12),C'='             = ?
+         BNE   EDYNMERR                ERROR
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C','             Nullify parameter?
+         BE    EDYNMOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    EDYNMOK                 Yes
+         B     EDYNM030
+EDYNM020 DS    0H
+         LA    R6,ERREDYNM             Msg: error in DYNAMNBR parm
+         LA    R12,9(,R12)             Increase pointer
+EDYNM030 DS    0H
+         CLI   FEDYNAM,X'FF'           Already specified?
+         BE    EDOUBLE                 yes
+         MVI   FEDYNAM,X'FF'           Set flag
+         SUBR  NUMBER                  Number?
+         B     *+4(R15)                Initiate branchlist
+         B     EDYNM040                Good
+         B     EDYNMERR                Error in DYNAMNBR
+EDYNM040 DS    0H
+         C     R1,=F'1'                DYNAMNBR = at least 1?
+         BL    EDYNMERR                Error if low
+         C     R1,=F'1635'             DYNAMNBR not > 1635?
+         BH    EDYNMERR                Error: too high
+EDYNMOK  DS    0H
+         B     ENEXTKEY                Next keyword parameter
+EDYNMERR DS    0H
+         B     EXERR          Process error, skip parm and next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'PARM' in EXEC statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+EPARM    DS    0H
+         CLC   0(5,R12),=C'PARM='      Keyword PARM= found?
+         BE    EPARM020                Yes: branch
+         CLC   0(5,R12),=C'PARM.'      Keyword PARM. found?
+         BNE   EPERFORM                No: test other keywords
+         LA    R6,ERREPARM             Msg: error in PARM parm
+         LA    R12,5(,R12)             Increase pointer
+         CLI   EPROCFLG,X'FF'          EXEC PROC ?
+         BNE   EPARMERR                ERROR
+         SUBR  NAMES                   Check step name
+         B     *+4(R15)                Initiate branchlist
+         B     EPARM010                OK
+         B     EPARMERR                ERROR
+EPARM010 DS    0H
+         CLI   0(R12),C'='             = ?
+         BNE   EPARMERR                ERROR
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C','             Nullify parameter?
+         BE    EPARMOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    EPARMOK                 Yes
+         B     EPARM030
+EPARM020 DS    0H
+         LA    R6,ERREPARM             Msg: error in PARM parm
+         LA    R12,5(,R12)             Increase pointer
+EPARM030 DS    0H
+         CLI   FEPARM,X'FF'            Already specified?
+         BE    EDOUBLE                 yes
+         MVI   FEPARM,X'FF'            Set flag
+         CLI   0(R12),C'('             Start with '(' (bracket open)?
+         BNE   EPARM040                No
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+EPARM040 DS    0H
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$ '
+         CALL  PARMTEST                Test parameter
+         B     *+4(R15)                Initiate branchlist
+         B     EPARM050                OK
+         B     EPARMERR                ERROR.
+EPARM050 DS    0H
+         CP    BRFLAG,ZERO             '(' (bracket open) present?
+         BE    EPARMOK                 No
+         CLI   0(R12),C')'             ')' (bracket close) present?
+         BE    EPARM060
+         CALL  DELIMIT                 DELIMITER ?
+         B     *+4(R15)                Initiate branchlist
+         B     EPARM040                yes
+         B     EPARMERR                ERROR.
+EPARM060 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+EPARMOK  DS    0H
+         B     ENEXTKEY                Next keyword parameter
+EPARMERR DS    0H
+         B     EXERR          Process error, skip parm and next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        PERFORM keyword in EXEC statement                            *
+*                                                                     *
+*---------------------------------------------------------------------*
+EPERFORM DS    0H
+         CLC   0(8,R12),=C'PERFORM='   Keyword PERFORM= found?
+         BE    EPERF020                Yes: found
+         CLC   0(8,R12),=C'PERFORM.'   Keyword PERFORM. found?
+         BNE   ERD                     No test other keywords
+         LA    R6,ERREPERF             Msg: error in PERFORM parm
+         LA    R12,8(,R12)             Increase pointer
+         CLI   EPROCFLG,X'FF'          EXEC PROC ?
+         BNE   EPERFERR                No: error
+         SUBR  NAMES                   Step name?
+         B     *+4(R15)                Initiate branchlist
+         B     EPERF010                OK
+         B     EPERFERR                ERROR
+EPERF010 DS    0H
+         CLI   0(R12),C'='             = ?
+         BNE   EPERFERR                ERROR
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C','             Nullify parameter?
+         BE    EPERFOK                 yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    EPERFOK                 yes
+         B     EPERF030
+EPERF020 DS    0H
+         LA    R6,ERREPERF             Msg: error in PERFORM parm
+         LA    R12,8(,R12)             Increase pointer
+EPERF030 DS    0H
+         CLI   FEPERFRM,X'FF'          Already specified?
+         BE    EDOUBLE                 yes
+         MVI   FEPERFRM,X'FF'          Set flag
+         SUBR  NUMBER                  Number?
+         B     *+4(R15)                Initiate branchlist
+         B     EPERFOK                 Good
+         B     EPERFERR                ERROR IN PERFORM
+EPERFOK  DS    0H
+         C     R1,=F'1'                < 1?
+         BL    EPERFERR                Yes: error
+         C     R1,=F'255'              > 255?
+         BH    EPERFERR                Yes: error
+         B     ENEXTKEY                Next keyword parameter
+EPERFERR DS    0H
+         B     EXERR          Process error, skip parm and next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        RD keyword in EXEC statement?                                *
+*                                                                     *
+*---------------------------------------------------------------------*
+ERD      DS    0H
+         CLC   0(3,R12),=C'RD='        Keyword RD= found?
+         BE    ERD020                  Yes: branch
+         CLC   0(3,R12),=C'RD.'        Keyword RD. found?
+         BNE   EREGION                 No: test other keywords
+         LA    R6,ERRERD               Msg: error in RD parm
+         LA    R12,3(,R12)             Increase pointer
+         SUBR  NAMES                   Stepname?
+         B     *+4(R15)                Initiate branchlist
+         B     ERD010                  OK
+         B     ERD040                  ERROR
+ERD010   DS    0H
+         CLI   0(R12),C'='             = ?
+         BNE   ERD040                  ERROR
+         LA    R12,1(,R12)             Increase pointer
+         B     ERD030
+ERD020   DS    0H
+         LA    R6,ERRERD               Msg: error in RD parm
+         LA    R12,3(,R12)             Increase pointer
+ERD030   DS    0H
+         CLI   FERD,X'FF'              Already specified?
+         BE    EDOUBLE                 yes
+         MVI   FERD,X'FF'              Set flag
+ERD040   DS    0H
+         B     EXERR          Process error, skip parm and next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter REGION in EXEC statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+EREGION  DS    0H
+         CLC   0(7,R12),=C'REGION='    Keyword REGION= found?
+         BE    EREGN020                Yes: branch
+         CLC   0(7,R12),=C'REGION.'    Keyword REGION. found?
+         BNE   ETIME                   No: test other keywords
+         LA    R6,ERREREGN             Msg: error in REGION parm
+         LA    R12,7(,R12)             Increase pointer
+         CLI   EPROCFLG,X'FF'          EXEC PROC ?
+         BNE   EREGNERR                ERROR
+         SUBR  NAMES                   Check on stepname
+         B     *+4(R15)                Initiate branchlist
+         B     EREGN010                OK
+         B     EREGNERR                ERROR
+EREGN010 DS    0H
+         CLI   0(R12),C'='             = ?
+         BNE   EREGNERR                ERROR
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C','             Nullify parameter?
+         BE    EREGNOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    EREGNOK                 Yes
+         B     EREGN030
+EREGN020 DS    0H
+         LA    R6,ERREREGN             Msg: error in REGION parm
+         LA    R12,7(,R12)             Increase pointer
+EREGN030 DS    0H
+         CLI   FEREGION,X'FF'          Already specified?
+         BE    EDOUBLE                 Yes: mutual exclusive
+         MVI   FEREGION,X'FF'          Set flag
+         SUBR  NUMBER                  Test on number
+         B     *+4(R15)                Initiate branchlist
+         B     EREGNUM                 OK.
+         B     EREGNERR                Error in REGION parameter
+EREGNUM  DS    0H
+         CLI   0(R12),C'K'             K ?
+         BNE   EREGNM2                 No: test on 'M'
+         LA    R12,1(,R12)             Increase pointer
+         B     EREGNOK
+EREGNM2  DS    0H
+         CLI   0(R12),C'M'             M ?
+         BNE   EREGNERR                No: error
+         LA    R12,1(,R12)             Increase pointer
+EREGNOK  DS    0H
+         B     ENEXTKEY                Next keyword parameter
+EREGNERR DS    0H
+         B     EXERR          Process error, skip parm and next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'TIME' in EXEC statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+ETIME    DS    0H
+         CLC   0(5,R12),=C'TIME='      TIME= ?
+         BE    ETIME020                yes
+         CLC   0(5,R12),=C'TIME.'      TIME. ?
+         BNE   EKEYERR                 No
+         LA    R6,ERRETIME             Msg: error in TIME parm
+         LA    R12,5(,R12)             Increase pointer
+         CLI   EPROCFLG,X'FF'          EXEC PROC ?
+         BNE   ETIMEERR                No: error
+         SUBR  NAMES                   Check on stepname
+         B     *+4(R15)                Initiate branchlist
+         B     ETIME010                OK
+         B     ETIMEERR                Error
+ETIME010 DS    0H
+         CLI   0(R12),C'='             = ?
+         BNE   ETIMEERR                No: error
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C','             Nullify parameter?
+         BE    ETIMEOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    ETIMEOK                 Yes
+         B     ETIME030
+ETIME020 DS    0H
+         LA    R6,ERRETIME             Msg: error in TIME parm
+         LA    R12,5(,R12)             Increase pointer
+ETIME030 DS    0H
+         CLI   FETIME,X'FF'            Already specified?
+         BE    JDOUBLE                 yes
+         MVI   FETIME,X'FF'            Set flag
+         CLI   0(R12),C'('             '(' found?
+         BNE   ETIME040                No: test TIME figures
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+ETIME040 DS    0H
+         SUBR  NUMBER                  Test number
+         B     *+4(R15)                Initiate branchlist
+         B     ETIME050                Minutes
+         B     ETIME070                No minutes
+ETIME050 DS    0H
+         C     R1,=F'1441'             <= 1440?
+         BL    ETIME060                Yes: good
+         B     ETIMEERR                Else error
+ETIME060 DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    ETIMEOK                 No
+ETIME070 DS    0H
+         CLI   0(R12),C','             Comma?
+         BNE   ETIME100                No: test on ')'
+         SUBR  DELIMIT                 Next sub parameter?
+         B     *+4(R15)                Initiate branchlist
+         B     ETIME080                Present
+         B     INCRLINE                No continuation
+ETIME080 DS    0H
+         SUBR  NUMBER                  Test on numbers/figures
+         B     *+4(R15)                Initiate branchlist
+         B     ETIME090                OK
+         B     ETIMEERR                ERROR
+ETIME090 DS    0H
+         C     R1,=F'60'               Minutes/seconds < 60?
+         BL    ETIME100                Yes: test on ')'
+         B     ETIMEERR                Else error
+ETIME100 DS    0H
+         CLI   0(R12),C')'             )
+         BNE   ETIMEERR                ERROR
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+ETIMEOK  DS    0H
+         B     ENEXTKEY                Next keyword parameter
+ETIMEERR DS    0H
+         B     EXERR          Process error, skip parm and next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Unknown keyword paremeter                                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+EKEYERR  DS    0H
+         CLI   EPROCFLG,X'00'          PROCEDURE CALL
+         LA    R6,ERREKEY              Msgid = Unknown keyword
+         BNE   EKEYERR1                yes
+         SUBR  ERRMESS                 Form error message
+         SUBR  SKIPPARM                Skip parameter
+         B     ENEXTKEY                Next keyword parameter
+EKEYERR1 DS    0H
+         CLI   0(R12),C'='             = ?
+         BE    EKEYERR2                Yes
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BNE   EKEYERR1                No: test again
+         SUBR  ERRMESS                 Unknown keyword
+         B     INCRLINE                Next line in workspace
+EKEYERR2 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    INCRLINE                Yes
+         CLI   0(R12),C' '             End of line?
+         BE    INCRLINE                Yes: next line
+         CLI   0(R12),C','             DELIMITER
+         BE    ENEXTKEY                Yes
+         CLI   0(R12),C''''            Between quotes?
+         BNE   EKEYERR2                No
+EKEYERR3 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BNE   EKEYERR4                No
+         SUBR  ERRMESS                 ERROR
+         B     INCRLINE                Next line in workspace
+EKEYERR4 DS    0H
+         CLI   0(R12),C''''            Second quote?
+         BNE   EKEYERR3                No
+         B     EKEYERR2                yes
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Duplicate keyword parameter                                  *
+*                                                                     *
+*---------------------------------------------------------------------*
+EDOUBLE  DS    0H
+         LA    R6,ERREDOUB             Msgid = Unknown keyword parm
+*
+*        Call error routine to set the message in the message table
+*        and skip the paremeter
+*
+EXERR    DS    0H
+         SUBR  ERRMESS                 Form error message
+         SUBR  SKIPPARM                Skip parameter
+*
+*        Process next keyword parameter in the EXEC card if present
+*
+ENEXTKEY DS    0H
+         CLI   0(R12),C','             Comma?
+         BNE   ENEXTK1                 No
+         SUBR  DELIMIT                 Next parameter
+         B     *+4(R15)                Initiate branchlist
+         B     EXECKEY                 Present
+         B     INCRLINE                No continuation
+ENEXTK1  DS    0H
+         CLI   0(R12),C' '             End of line?
+         BNE   ENEXTK2                 No
+         L     R12,ENDLINE             Load end of line
+         CLI   0(R12),C' '             CONTINUE COMMENT ?
+         BE    INCRLINE                No
+         MVI   CONTFLAG,X'FF'          Set flag
+         B     INCRLINE
+ENEXTK2  DS    0H
+         SUBR  ERRMESS                 ERROR MESSAGE
+         B     INCRLINE                Next line in workspace
+         TITLE 'Check the DD card'
+***********************************************************************
+*                                                                     *
+*                     DDDDDDDDDDD   DDDDDDDDDDD                       *
+*                     DDDDDDDDDDDD  DDDDDDDDDDDD                      *
+*                     DD        DD  DD        DD                      *
+*                     DD        DD  DD        DD                      *
+*                     DD        DD  DD        DD                      *
+*                     DD        DD  DD        DD                      *
+*                     DD        DD  DD        DD                      *
+*                     DD        DD  DD        DD                      *
+*                     DD        DD  DD        DD                      *
+*                     DD        DD  DD        DD                      *
+*                     DDDDDDDDDDDD  DDDDDDDDDDDD                      *
+*                     DDDDDDDDDDD   DDDDDDDDDDD                       *
+*                                                                     *
+***********************************************************************
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Syntax check DD-statement                                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDSTMNT  DS    0H
+         MVI   CARDFLAG,X'03'          This is a DD-statement
+         XC    DFLAGS(FDLEN),DFLAGS    CLEAR PARAMETER FLAGS
+         LA    R12,2(,R12)             SKIP 'DD'
+         SUBR  SKIPSPC                 SKIP blanks
+         B     *+4(R15)                Initiate branchlist
+         B     DCHKPOS                 OK.
+         B     DDPOSERR                ERROR; no blank
+         B     INCRLINE                Error; No positional parm
+         SPACE 2
+DDPOSERR DS    0H
+         LA    R6,ERRDPOS              ERROR CODE
+         SUBR  ERRMESS                 Form error message
+         B     INCRLINE                Next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Check positional parameter in DD-statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+DCHKPOS  DS    0H
+         CALL  BALANCE                 () and '' balanced?
+         B     *+4(R15)                Initiate branchlist
+         B     DCHKPOS1                yes
+         B     INCRLINE                No
+DCHKPOS1 DS    0H
+         CLI   0(R12),C'*'             Instream data?
+         BE    DDSTAR                  Yes: process
+         CLC   0(4,R12),=C'DATA'       Instream data?
+         BE    DDDATA                  Yes: process
+         CLC   0(5,R12),=C'DUMMY'      DUMMY DATASET ?
+         BE    DDDUMMY                 yes
+         CLC   0(5,R12),=C'DYNAM'      DYNAMIC ALLOCATION ?
+         BE    DDDYNAM                 yes
+         B     DDKEY                   CHECK KEYWORD PARAMETERS
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Positional parameter '*' in DD-statement                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDSTAR   DS    0H
+         LA    R6,ERRSTAR              Msg: error in DD *
+         MVI   DATAFLAG,X'F0'          DD * in DD statement, set flag
+         MVC   DLM,=C'/*'              DEFAULT DELIMITER
+         MVI   DFLAGS,X'FF'            Set DFLAGS
+         MVC   DFLAGS+1(FDLEN-1),DFLAGS
+         XC    FDDLM,FDDLM             DLM allowed
+         XC    DCBBLKSZ,DCBBLKSZ       DCB=BLKSIZE allowed
+         XC    DCBBUFNO,DCBBUFNO       DCB=BUFNO allowed
+         XC    DCBLRECL,DCBLRECL       DCB=LRECL allowed
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C' '             End of record?
+         BE    INCRLINE                Yes
+         CLI   0(R12),C','             Continue with keyword parms
+         BNE   DDSTARER                No
+         SUBR  DELIMIT                 Continue with keywords?
+         B     *+4(R15)                Initiate branchlist
+         B     DDKEY                   Keyword paremeters present
+         B     INCRLINE                No continuation
+DDSTARER DS    0H
+         SUBR  ERRMESS                 Form error message
+         B     INCRLINE                Next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Positional parameter DATA in DD-statement                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDDATA   DS    0H
+         LA    R6,ERRDDATA             Set msg to error in DD DATA
+         MVI   DATAFLAG,X'FF'          DD DATA in dd-stmnt, set flag
+         MVC   DLM,=C'/*'              Default delimiter statement
+         MVI   DFLAGS,X'FF'            Set DFLAGS
+         MVC   DFLAGS+1(FDLEN-1),DFLAGS
+         XC    FDDLM,FDDLM             DLM allowed
+         XC    DCBBLKSZ,DCBBLKSZ       DCB=BLKSIZE allowed
+         XC    DCBBUFNO,DCBBUFNO       DCB=BUFNO allowed
+         XC    DCBLRECL,DCBLRECL       DCB=LRECL allowed
+         LA    R12,4(,R12)             Increase pointer
+         CLI   0(R12),C' '             End of record?
+         BE    INCRLINE                Yes:
+         CLI   0(R12),C','             Contine with keyword parameters?
+         BNE   DDDATAER                No:
+         SUBR  DELIMIT                 Continue with keywords?
+         B     *+4(R15)                Initiate branchlist
+         B     DDKEY                   Keywords present
+         B     INCRLINE                No continuation: next line
+DDDATAER DS    0H
+         SUBR  ERRMESS                 Form error message
+         B     INCRLINE                Next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Positional parameter 'DUMMY' in DD-statement                 *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDDUMMY  DS    0H
+         LA    R6,ERRDUMMY             Set msg to error in DD DUMMY
+         MVI   FDDNAME,X'FF'           DDNAME not allowed
+         LA    R12,5(,R12)             Increase pointer
+         CLI   0(R12),C' '             End of record?
+         BE    INCRLINE                Yes
+         CLI   0(R12),C','             Contine with keyword parameters?
+         BNE   DDDUMMER                No
+         SUBR  DELIMIT                 Continue with keywords?
+         B     *+4(R15)                Initiate branchlist
+         B     DDKEY                   Keywords present
+         B     INCRLINE                No continuation
+DDDUMMER DS    0H
+         SUBR  ERRMESS                 Form error message
+         B     INCRLINE                Next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Positional parameter 'DYNAM' in DD-statement                 *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDDYNAM  DS    0H
+         LA    R6,ERRDYNAM             Msgid = Error in DYNAM
+         LA    R12,5(,R12)             Increase pointer
+         CLI   0(R12),C' '             End of record?
+         BE    INCRLINE                Yes: next record
+         SUBR  ERRMESS                 Form error message
+         B     INCRLINE                Next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Check keyword parameters in DD-statement                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDKEY    DS    0H
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'AMP' in DD-statement                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+DAMP     DS    0H
+         CLC   0(4,R12),=C'AMP='       Keyword AMP found?
+         BNE   DBURST                  No: test other keywords
+         LA    R12,4(,R12)             Increase pointer
+         CLI   FDAMP,X'FF'             Already specified?
+         BE    DDOUBLE                 Yes: mutual exclusive
+         MVI   FDAMP,X'FF'             Set flag
+         LA    R6,ERRDAMP              Msgid = Invalid AMP
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DAMP000                 No:
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DAMPOK                  Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DAMPOK                  Yes
+DAMP000  DS    0H
+         SUBR  SKIPPARM                Skip parameter
+         B     *+4(R15)                Initiate branchlist
+DAMPOK   DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DAMPERR  DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'BURST' in DD-statement                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+DBURST   DS    0H
+         CLC   0(6,R12),=C'BURST='     Keyword BURST found?
+         BNE   DCHARS                  No: test other keywords
+         CLI   FDBURST,X'FF'           Already specified?
+         BE    DDOUBLE                 Yes: mutual exclusive
+         MVI   FDBURST,X'FF'           Set flag
+         LA    R6,ERRDBURS             Msg: BURST not allowed
+         LA    R12,6(,R12)             Increase pointer
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'CHARS' in DD-statement                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+DCHARS   DS    0H
+         CLC   0(6,R12),=C'CHARS='     Keyword CHARS found?
+         BNE   DCHKPT                  No
+         CLI   FDCHARS,X'FF'           Already specified?
+         BE    DDOUBLE                 Yes: mutual exclusive
+         MVI   FDCHARS,X'FF'           Set flag
+         LA    R6,ERRDCHAR             Msg: CHARS not allowed
+         LA    R12,6(,R12)             Increase pointer
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'CHKPT' in DD-statement                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+DCHKPT   DS    0H
+         CLC   0(6,R12),=C'CHKPT='     Keyword CHKPT found?
+         BNE   DCOPIES                 No
+         CLI   FDCHKPT,X'FF'           Already specified?
+         BE    DDOUBLE                 Yes
+         MVI   FDCHKPT,X'FF'           Set flag
+         LA    R6,ERRDCHKP             Msg: Keyword not allowed
+         LA    R12,6(,R12)             Increase pointer
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'COPIES' in DD-statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+DCOPIES  DS    0H
+         CLC   0(7,R12),=C'COPIES='    Keyword COPIES found?
+         BNE   DDCB                    No
+         LA    R12,7(,R12)             Increase pointer
+         CLI   FDCOPIES,X'FF'          Already specified?
+         BE    DDOUBLE                 Yes
+         MVI   FDCOPIES,X'FF'          Set flag
+         LA    R6,ERRDCOP              Msg: error in COPIES parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DCOP000                 No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DCOPOK                  Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DCOPOK                  Yes
+DCOP000  DS    0H
+         SUBR  NUMBER                  Test on Number
+         B     *+4(R15)                Initiate branchlist
+         B     DCOPOK                  00 - ok
+         B     DCOPERR                 04 - error
+DCOPOK   DS    0H
+         C     R1,=F'1'                < 1?
+         BL    DCOPERR                 Yes: error
+         C     R1,=F'255'              > 255?
+         BH    DCOPERR                 Yes: error
+         B     DNEXTKEY                Next keyword parameter
+DCOPERR  DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'DCB' in DD-statement                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDCB     DS    0H
+         CLC   0(4,R12),=C'DCB='       Keyword DCB found?
+         BNE   DDNAME                  No
+         LA    R12,4(,R12)             Increase pointer
+         CLI   FDDCB,X'FF'             Already specified?
+         BE    DDOUBLE                 Yes: mutual exclusive
+         MVI   FDDCB,X'FF'             Set flag
+         LA    R6,ERRDDCB              Msg: error in DCB parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DDCB000                 No: branch
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DDCBOK                  Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DDCBOK                  Yes
+DDCB000  DS    0H
+         CLI   0(R12),C'('             '(' ?
+         BNE   DDCB005                 TEST ATTRIBUTES
+         AP    BRFLAG,ONE              Bracket open is present
+         LA    R12,1(,R12)             Increase pointer
+DDCB005  DS    0H
+         SUBR  DCBATTR                 Test all DCB attributes
+         B     *+4(R15)                Initiate branchlist
+         B     DDCB010                 OK
+         B     DDCB020                 No attribute list
+DDCB010  DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    DDCBOK                  No
+         B     DDCB070                 Yes
+DDCB020  DS    0H
+         SUBR  DSNTEST                 Test on a DSNAME
+         B     *+4(R15)                Initiate branchlist
+         B     DDCB050                 Yes: test attributes
+         B     DDCBERR                 No DSNAME
+DDCB050  DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    DDCBOK                  No
+         CLI   0(R12),C','             Separation comma?
+         BNE   DDCB070                 Mo: test on ')'
+         SUBR  DELIMIT                 Continue subparameters
+         B     *+4(R15)                Initiate branchlist
+         B     DDCB060                 OK.
+         B     INCRLINE                No continuation: next line
+DDCB060  DS    0H
+         SUBR  DCBATTR                 Test all DCB attributes
+         B     *+4(R15)                Initiate branchlist
+         B     DDCB070                 OK
+         B     DDCBERR                 Error in attributes
+DDCB070  DS    0H
+         CLI   0(R12),C')'             ')' present?
+         BNE   DDCBERR                 Error in attributes if not
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+DDCBOK   DS    0H
+         B     DNEXTKEY                Next keyword
+DDCBERR  DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'DDNAME' in DD-statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDNAME   DS    0H
+         CLC   0(7,R12),=C'DDNAME='    Keyword DDNAME found?
+         BNE   DDEST                   No: test other keywords
+         LA    R12,7(,R12)             Increase pointer
+         CLI   FDDNAME,X'FF'           Already specified?
+         BE    DDOUBLE                 Yes
+         MVI   FDDNAME,X'FF'           Set flag
+         LA    R6,ERRDDNM              Msg: Error in DDNAME parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DDNAM000                No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DDNAMOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DDNAMOK                 Yes
+DDNAM000 DS    0H
+         MVI   DFLAGS,X'FF'            Set DFLAGS
+         MVC   DFLAGS+1(FDLEN-1),DFLAGS
+         XC    DCBDIAGN,DCBDIAGN       DCB=DIAGNS allowed
+         XC    DCBBLKSZ,DCBBLKSZ       DCB=BLKSIZE allowed
+         XC    DCBBUFNO,DCBBUFNO       DCB=BUFNO allowed
+         SUBR  NAMES                   Test on a name
+         B     *+4(R15)                Initiate branchlist
+         B     DDNAMOK                 OK.
+         B     DDNAMERR                ERROR.
+DDNAMOK  DS    0H
+         B     DNEXTKEY                OK.
+DDNAMERR DS    0H
+         SUBR  ERRMESS                 Form error message
+         B     INCRLINE                Next line in workspace
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'DEST' in DD-statement                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDEST    DS    0H
+         CLC   0(5,R12),=C'DEST='      Keyword DEST found?
+         BNE   DDISP                   No: test other keywords
+         LA    R12,5(,R12)             Increase pointer
+         CLI   FDDEST,X'FF'            Already specified?
+         BE    DDOUBLE                 Yes
+         MVI   FDDEST,X'FF'            Set flag
+         LA    R6,ERRDDEST             Msg: error in DEST parm
+         CLI   EPROCFLG,X'FF'          Override statement?
+         BNE   DDEST000                No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DDESTOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DDESTOK                 Yes
+DDEST000 DS    0H
+         SUBR  NAMES                   Test on a name
+         B     *+4(R15)                Initiate branchlist
+         B     DDESTOK                 OK.
+         B     DDESTERR                ERROR IN DEST
+DDESTOK  DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DDESTERR DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'DISP' in DD-statement                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDISP    DS    0H
+         CLC   0(5,R12),=C'DISP='      Keyword DISP found?
+         BNE   DDLM                    No: test other keywords
+         LA    R12,5(,R12)             Increase pointer
+         CLI   FDDISP,X'FF'            Already specified?
+         BE    DDOUBLE                 Yes
+         MVI   FDDISP,X'FF'            Set flag
+         LA    R6,ERRDDISP             Msg: error in DISP parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DDISP000                No: branch
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DDISPOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DDISPOK                 Yes
+DDISP000 DS    0H
+         CLI   0(R12),C'('             ( ?
+         BNE   DDISP010                No
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+DDISP010 DS    0H
+         CLC   0(3,R12),=C'NEW'        NEW ?
+         BNE   DDISP020                No
+         LA    R12,3(,R12)             Increase pointer
+         B     DDISP050
+DDISP020 DS    0H
+         CLC   0(3,R12),=C'OLD'        OLD ?
+         BNE   DDISP030                No: test other DISP values
+         LA    R12,3(,R12)             Increase pointer
+         B     DDISP050
+DDISP030 DS    0H
+         CLC   0(3,R12),=C'SHR'        DISP=SHR?
+         BNE   DDISP035                No
+         LA    R12,3(,R12)             Increase pointer
+         B     DDISP050
+DDISP035 DS    0H
+         CLC   0(5,R12),=C'SHARE'      SHARE ?
+         BNE   DDISP040                No
+         LA    R12,5(,R12)             Increase pointer
+         B     DDISP050
+DDISP040 DS    0H
+         CLC   0(3,R12),=C'MOD'        MOD ?
+         BNE   DDISP045                No
+         LA    R12,3(,R12)             Increase pointer
+         B     DDISP050
+DDISP045 DS    0H
+         CLI   0(R12),C','             DEFAULT ?
+         BNE   DDISPERR                ERROR
+         CP    BRFLAG,ZERO             '(' Present?
+         BE    DDISPERR                No: error
+DDISP050 DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    DDISPOK                 Yes: good
+         CLI   0(R12),C','             , present?
+         BNE   DDISP140
+         SUBR  DELIMIT                 Next subparameter?
+         B     *+4(R15)                Initiate branchlist
+         B     DDISP055                Good
+         B     INCRLINE                No subparameter: next record
+DDISP055 DS    0H
+         CLC   0(6,R12),=C'DELETE'     DELETE ?
+         BNE   DDISP060                No
+         LA    R12,6(,R12)             Point after DELETE
+         B     DDISP100
+DDISP060 DS    0H
+         CLC   0(4,R12),=C'KEEP'       KEEP ?
+         BNE   DDISP070                No
+         LA    R12,4(,R12)             Point after KEEP
+         B     DDISP100
+DDISP070 DS    0H
+         CLC   0(4,R12),=C'PASS'       PASS ?
+         BNE   DDISP080                No
+         LA    R12,4(,R12)             Point after PASS
+         B     DDISP100
+DDISP080 DS    0H
+         CLC   0(5,R12),=C'CATLG'      CATLG ?
+         BNE   DDISP090                No
+         LA    R12,5(,R12)             Point after CATLG
+         B     DDISP100
+DDISP090 DS    0H
+         CLC   0(7,R12),=C'UNCATLG'    UNCATLG ?
+         BNE   DDISP095                No
+         LA    R12,7(,R12)             POINT after UNCATLG
+         B     DDISP100
+DDISP095 DS    0H
+         CLI   0(R12),C','             DEFAULT ?
+         BNE   DDISPERR                No
+DDISP100 DS    0H
+         CLI   0(R12),C','             ',' (comma) present?
+         BNE   DDISP140
+         SUBR  DELIMIT                 Next subparameter?
+         B     *+4(R15)                Initiate branchlist
+         B     DDISP105                Good
+         B     INCRLINE                No: next line
+DDISP105 DS    0H
+         CLC   0(6,R12),=C'DELETE'     DELETE ?
+         BNE   DDISP110                No
+         LA    R12,6(,R12)             Point after DELETE
+         B     DDISP140
+DDISP110 DS    0H
+         CLC   0(4,R12),=C'KEEP'       KEEP ?
+         BNE   DDISP120                No
+         LA    R12,4(,R12)             Point after KEEP
+         B     DDISP140
+DDISP120 DS    0H
+         CLC   0(5,R12),=C'CATLG'      CATLG ?
+         BNE   DDISP130                No
+         LA    R12,5(,R12)             Point after CATLG
+         B     DDISP140
+DDISP130 DS    0H
+         CLC   0(7,R12),=C'UNCATLG'    UNCATLG ?
+         BNE   DDISPERR                No
+         LA    R12,7(,R12)             POINT after UNCATLG
+DDISP140 DS    0H
+         CLI   0(R12),C')'             ) present?
+         BNE   DDISPERR
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+DDISPOK  DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DDISPERR DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'DLM' in DD-statement                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDLM     DS    0H
+         CLC   0(4,R12),=C'DLM='       Keyword DLM found?
+         BNE   DDSID                   No: test other keywords
+         LA    R12,4(,R12)             Increase pointer
+         CLI   FDDLM,X'FF'             Already specified?
+         BE    DDOUBLE                 yes
+         MVI   FDDLM,X'FF'             Set flag
+         LA    R6,ERRDDLM              Msg: error in DLM parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DDLM000                 No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DDLMOK                  Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DDLMOK                  Yes
+DDLM000  DS    0H
+         CLI   0(R12),C''''            ' (quote) present?
+         BE    DDLM030                 yes
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$ '
+         SUBR  TESTCHAR                Test character
+         B     *+4(R15)                Initiate branchlist
+         B     DDLM010                 OK
+         B     DDLMERR                 ERROR.
+DDLM010  DS    0H
+         MVC   DLM(1),0(R1)            First character
+         SUBR  TESTCHAR                Test character
+         B     *+4(R15)                Initiate branchlist
+         B     DDLM020                 OK
+         B     DDLMERR                 ERROR.
+DDLM020  DS    0H
+         MVC   DLM+1(1),0(R1)          First character
+         B     DDLMOK                  OK
+DDLM030  DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         CLC   0(2,R12),=C''''''       '' present?
+         BNE   DDLM040                 No
+         MVI   DLM,C''''               First character
+         LA    R12,2(,R12)             Increase pointer
+         B     DDLM060
+DDLM040  DS    0H
+         CLC   0(2,R12),=C'&&&&'       && present?
+         BNE   DDLM050                 No
+         MVI   DLM,C'&&'               First character
+         LA    R12,2(,R12)             Increase pointer
+         B     DDLM060
+DDLM050  DS    0H
+         CLI   0(R12),C''''            End of string?
+         BE    DDLMERR                 Yes: error
+         MVC   DLM(1),0(R12)           First character
+         LA    R12,1(,R12)             Increase pointer
+DDLM060  DS    0H
+         CLC   0(2,R12),=C''''''       Quotes present?
+         BNE   DDLM070                 No
+         MVI   DLM+1,C''''             Second character
+         LA    R12,2(,R12)             Increase pointer
+         B     DDLM090
+DDLM070  DS    0H
+         CLC   0(2,R12),=C'&&&&'       And signs presemt?
+         BNE   DDLM080                 No
+         MVI   DLM+1,C'&&'             Second character
+         LA    R12,2(,R12)             Increase pointer
+         B     DDLM090
+DDLM080  DS    0H
+         CLI   0(R12),C''''            End of string?
+         BE    DDLMERR                 Yes: error
+         MVC   DLM+1(1),0(R12)         Second character
+         LA    R12,1(,R12)             Increase pointer
+DDLM090  DS    0H
+         CLI   0(R12),C''''            End of string
+         BNE   DDLMERR                 No: error
+         LA    R12,1(,R12)             Increase pointer
+DDLMOK   DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DDLMERR  DS    0H
+         MVC   DLM,=C'/*'              Default delimiter statement
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'DSID' in DD-statement                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDSID    DS    0H
+         CLC   0(5,R12),=C'DSID='      Keyword DSID found?
+         BNE   DDSNAME                 No: test other keywords
+         CLI   FDDSID,X'FF'            Already specified?
+         BE    DDOUBLE                 Yes
+         MVI   FDDSID,X'FF'            Set flag
+         LA    R6,ERRDDSID             Msg: DSID not allowed
+         LA    R12,5(,R12)             Increase pointer
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'DSNAME' or 'DSN' in DD-statement          *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDSNAME  DS    0H
+         CLC   0(4,R12),=C'DSN='       Keyword DSN found?
+         BE    DDSN                    Yes
+         CLC   0(7,R12),=C'DSNAME='    Keyword DSNAME found?
+         BNE   DFCB                    No: test other keywords
+         LA    R12,3(,R12)             Increase pointer
+DDSN     DS    0H
+         LA    R12,4(,R12)             Increase pointer
+         CLI   FDDSN,X'FF'             Already specified?
+         BE    DDOUBLE                 yes
+         MVI   FDDSN,X'FF'             Set flag
+         LA    R6,ERRDDSN              Msg: error in DSNAME
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DDSN000                 No: branch
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DDSNOK                  Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DDSNOK                  Yes
+DDSN000  DS    0H
+         SUBR  DSNTEST                 Test on DSNAME
+         B     *+4(R15)                Initiate branchlist
+         B     DDSNOK                  OK
+         B     DDSNERR                 ERROR
+DDSNOK   DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DDSNERR  DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'FCB' in DD-statement                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+DFCB     DS    0H
+         CLC   0(4,R12),=C'FCB='       Keyword FCB found?
+         BNE   DFLASH                  No: test other keywords
+         LA    R12,4(,R12)             Increase pointer
+         CLI   FDFCB,X'FF'             Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDFCB,X'FF'             Set flag
+         LA    R6,ERRDFCB              Msg: Error in FCB parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DFCB000                 No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DFCBOK                  Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DFCBOK                  Yes
+DFCB000  DS    0H
+         CLI   0(R12),C'('             '(' open paranthese present?
+         BNE   DFCB010                 No: branch
+         AP    BRFLAG,ONE              Set flag (open par. present)
+         LA    R12,1(,R12)             Increase pointer
+DFCB010  DS    0H
+         SUBR  NAMES                   Test on FCB name
+         B     *+4(R15)                Initiate branchlist
+         B     DFCB020                 Good
+         B     DFCBERR                 Bad
+DFCB020  DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    DFCBOK                  No: branch
+         CLI   0(R12),C','             ',' present?
+         BNE   DFCB040
+         SUBR  DELIMIT                 Continue with subparameters
+         B     *+4(R15)                Initiate branchlist
+         B     DFCB025                 OK
+         B     INCRLINE                NO CONTINUATION
+DFCB025  DS    0H
+         CLC   0(5,R12),=C'ALIGN'      ALIGN ?
+         BNE   DFCB030                 No
+         LA    R12,5(,R12)             Increase pointer
+         B     DFCB040                 ) present?
+DFCB030  DS    0H
+         CLC   0(6,R12),=C'VERIFY'     VERIFY ?
+         BNE   DFCBERR                 No
+         LA    R12,5(,R12)             Increase pointer
+DFCB040  DS    0H
+         CLI   0(R12),C')'             ) present?
+         BNE   DFCBERR                 ERROR
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+DFCBOK   DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DFCBERR  DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'FLASH' in DD-statement                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+DFLASH   DS    0H
+         CLC   0(6,R12),=C'FLASH='     Keyword FLASH found?
+         BNE   DFREE                   No: test next keyword
+         CLI   FDFLASH,X'FF'           Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDFLASH,X'FF'           Set flag
+         LA    R6,ERRDFLAS             Keyword FLASH not allowed
+         LA    R12,6(,R12)             Increase pointer
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'FREE' in DD-statement                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+DFREE    DS    0H
+         CLC   0(5,R12),=C'FREE='      Keyword FREE found?
+         BNE   DHOLD                   No: test other keywords
+         LA    R12,5(,R12)             Increase pointer
+         CLI   FDFREE,X'FF'            Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDFREE,X'FF'            Set flag
+         LA    R6,ERRDFREE             Msg: Error in FREE parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DFREE000                No: branch
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DFREEOK                 Yes: good
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DFREEOK                 Yes: good
+DFREE000 DS    0H
+         CLC   0(3,R12),=C'END'        END ?
+         BNE   DFREE010                No: test FREE=CLOSE
+         LA    R12,3(,R12)             Increase pointer
+         B     DFREEOK                 OK
+DFREE010 DS    0H
+         CLC   0(5,R12),=C'CLOSE'      CLOSE ?
+         BNE   DFREEERR                No: error in FREE parm
+         LA    R12,5(,R12)             Increase pointer
+DFREEOK  DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DFREEERR DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'HOLD' in DD-statement                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+DHOLD    DS    0H
+         CLC   0(5,R12),=C'HOLD='      Keyword HOLD found?
+         BNE   DLABEL                  No: test other keywords
+         LA    R12,5(,R12)             Increase pointer
+         CLI   FDHOLD,X'FF'            Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDHOLD,X'FF'            Set flag
+         LA    R6,ERRDHOLD             Msg: error in HOLD parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DHOLD000                No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DHOLDOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DHOLDOK                 Yes
+DHOLD000 DS    0H
+         CLC   0(3,R12),=C'YES'        HOLD=YES?
+         BNE   DHOLD010                No
+         LA    R12,3(,R12)             Increase pointer
+         B     DHOLDOK                 OK
+DHOLD010 DS    0H
+         CLC   0(2,R12),=C'NO'         HOLD=NO?
+         BNE   DHOLDERR                No: indeed
+         LA    R12,2(,R12)             Increase pointer
+DHOLDOK  DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DHOLDERR DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'LABEL' in DD-statement                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+DLABEL   DS    0H
+         CLC   0(6,R12),=C'LABEL='     Keyword LABEL found?
+         BNE   DMODIFY                 No: test next keyword
+         LA    R12,6(,R12)             Increase pointer
+         CLI   FDLABEL,X'FF'           Already specified?
+         BE    DDOUBLE                 Yes
+         MVI   FDLABEL,X'FF'           Set flag
+         LA    R6,ERRDLABL             Msg: error in LABEL parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DLAB000                 No: branch
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DLABOK                  Yes: good
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DLABOK                  Yes: good
+DLAB000  DS    0H
+         CLI   0(R12),C'('             '('
+         BNE   DLAB010                 No: branch
+         AP    BRFLAG,ONE              Add presence of '('
+         LA    R12,1(,R12)             Increase pointer
+         CLI   0(R12),C','             NO SEQ. NUMBER
+         BE    DLAB030                 Yes
+DLAB010  DS    0H
+         SUBR  NUMBER                  SEQUENCE NUMBER
+         B     *+4(R15)                Initiate branchlist
+         B     DLAB020                 OK
+         B     DLAB160                 Test EXPDT and RETPD
+DLAB020  DS    0H
+         C     R1,=F'1'                Less than 1?
+         BL    DLABERR                 Yes: error
+         C     R1,=F'9999'             More than 9999
+         BH    DLABERR                 Yes: error
+         CP    BRFLAG,ZERO             '(' (bracket open) present?
+         BE    DLABOK                  No: branch (good)
+         CLI   0(R12),C','             , present?
+         BNE   DLAB200                 Test on ')'
+DLAB030  DS    0H
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DLAB035                 Yes
+         B     INCRLINE                No: next record
+DLAB035  DS    0H
+         CLI   0(R12),C','             , present?
+         BE    DLAB110                 Yes: good
+         CLC   0(2,R12),=C'SL'         SL ?
+         BNE   DLAB040                 No
+         LA    R12,2(,R12)             Increase pointer
+         B     DLAB110                 TEST ,
+DLAB040  DS    0H
+         CLC   0(3,R12),=C'SUL'        SUL ?
+         BNE   DLAB050                 No
+         LA    R12,3(,R12)             Increase pointer
+         B     DLAB110                 TEST ,
+DLAB050  DS    0H
+         CLC   0(2,R12),=C'AL'         AL ?
+         BNE   DLAB060                 No
+         LA    R12,2(,R12)             Increase pointer
+         B     DLAB110                 TEST ,
+DLAB060  DS    0H
+         CLC   0(3,R12),=C'AUL'        AUL ?
+         BNE   DLAB070                 No
+         LA    R12,3(,R12)             Increase pointer
+         B     DLAB110                 TEST ,
+DLAB070  DS    0H
+         CLC   0(3,R12),=C'NSL'        NSL ?
+         BNE   DLAB080                 No
+         LA    R12,3(,R12)             Increase pointer
+         B     DLAB110                 TEST ,
+DLAB080  DS    0H
+         CLC   0(2,R12),=C'NL'         NL ?
+         BNE   DLAB090                 No
+         LA    R12,2(,R12)             Increase pointer
+         B     DLAB110                 TEST ,
+DLAB090  DS    0H
+         CLC   0(3,R12),=C'BLP'        BLP ?
+         BNE   DLAB100                 No
+         LA    R12,3(,R12)             Increase pointer
+         B     DLAB110                 TEST ,
+DLAB100  DS    0H
+         CLC   0(2,R12),=C'LTM'        LTM ?
+         BNE   DLAB160                 RETPD OD EXPDT ?
+         LA    R12,3(,R12)             Increase pointer
+DLAB110  DS    0H
+         CLI   0(R12),C','             , present?
+         BNE   DLAB200                 TEST )
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DLAB115                 yes
+         B     INCRLINE                No
+DLAB115  DS    0H
+         CLI   0(R12),C','             , present?
+         BE    DLAB130                 Yes
+         CLC   0(8,R12),=C'PASSWORD'   PASSWORD ?
+         BNE   DLAB120                 No
+         LA    R12,8(,R12)             Increase pointer
+         B     DLAB130                 TEST ,
+DLAB120  DS    0H
+         CLC   0(8,R12),=C'NOPWREAD'   NOPWREAD ?
+         BNE   DLAB160                 Test RETPD and EXPDT
+         LA    R12,8(,R12)             Increase pointer
+DLAB130  DS    0H
+         CLI   0(R12),C','             , present?
+         BNE   DLAB200                 Test on close parenthese
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DLAB135                 yes
+         B     INCRLINE                No
+DLAB135  DS    0H
+         CLC   0(2,R12),=C'IN'         IN ?
+         BNE   DLAB140                 No
+         LA    R12,2(,R12)             Increase pointer
+         B     DLAB150                 TEST ,
+DLAB140  DS    0H
+         CLC   0(3,R12),=C'OUT'        OUT ?
+         BNE   DLAB160                 TEST RETPD EN EXPDT
+         LA    R12,3(,R12)             Increase pointer
+DLAB150  DS    0H
+         CLI   0(R12),C','             , present?
+         BNE   DLAB200                 TEST )
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DLAB160                 yes
+         B     INCRLINE                No
+DLAB160  DS    0H
+         CLC   0(6,R12),=C'RETPD='     RETPD= ?
+         BNE   DLAB170                 No
+         LA    R12,6(,R12)             Increase pointer
+         B     DLAB180                 Test number
+DLAB170  DS    0H
+         CLC   0(6,R12),=C'EXPDT='     EXPDT= ?
+         BNE   DLABERR                 ERROR
+         LA    R12,6(,R12)             Increase pointer
+DLAB180  DS    0H
+         SUBR  NUMBER                  Test on number
+         B     *+4(R15)                Initiate branchlist
+         B     DLAB190                 TEST )
+         B     DLABERR                 ERROR
+DLAB190  DS    0H
+         CP    BRFLAG,ZERO             ')' present?
+         BE    DLABOK                  No: finished
+DLAB200  DS    0H
+         CLI   0(R12),C')'             ')' present?
+         BNE   DLABERR                 No: error
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+DLABOK   DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DLABERR  DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'MODIFY' in DD-statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+DMODIFY  DS    0H
+         CLC   0(7,R12),=C'MODIFY='    Keyword MODIFY found?
+         BNE   DMSVGP                  No: test other keywords
+         CLI   FDMODIFY,X'FF'          Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDMODIFY,X'FF'          Set flag
+         LA    R6,ERRDMODI             Msg: MODIFY not allowed
+         LA    R12,7(,R12)             Increase pointer
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'MSVGP' in DD-statement                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+DMSVGP   DS    0H
+         CLC   0(6,R12),=C'MSVGP='     Keyword MSVGP found?
+         BNE   DOUTLIM                 No: test other keywords
+         CLI   FDMSVGP,X'FF'           Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDMSVGP,X'FF'           Set flag
+         LA    R6,ERRDMSVG             Msg: MSVGP not allowed
+         LA    R12,6(,R12)             Increase pointer
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'OUTLIM' in  DD-statement                  *
+*                                                                     *
+*---------------------------------------------------------------------*
+DOUTLIM  DS    0H
+         CLC   0(7,R12),=C'OUTLIM='    Keyword OUTLIM found?
+         BNE   DPROTECT                No: test other keywords
+         LA    R12,7(,R12)             Increase pointer
+         CLI   FDOUTLIM,X'FF'          Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDOUTLIM,X'FF'          Set flag
+         LA    R6,ERRDOUTL             Msg: error in OUTLIM parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DOUTL000                No: branch
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DOUTLOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DOUTLOK                 Yes
+DOUTL000 DS    0H
+         SUBR  NUMBER                  Test number of OUTLIM lines
+         B     *+4(R15)                Initiate branchlist
+         B     DOUTLOK                 OK
+         B     DERR                 Process error and scan next keyword
+DOUTLOK  DS    0H
+         B     DNEXTKEY                Next keyword parameter
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'PROTECT' in DD-statement                  *
+*                                                                     *
+*---------------------------------------------------------------------*
+         SPACE 3
+DPROTECT DS    0H
+         CLC   0(8,R12),=C'PROTECT='   Keyword PROTECT found?
+         BNE   DQNAME                  No: test other keywords
+         CLI   FDPROTEC,X'FF'          Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDPROTEC,X'FF'          Set flag
+         LA    R6,ERRDPROT             Msg: PROTECT is not allowed
+         LA    R12,8(,R12)             Increase pointer
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'QNAME' in DD-statement                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+DQNAME   DS    0H
+         CLC   0(6,R12),=C'QNAME='     Keyword QNAME found?
+         BNE   DSPACE                  No: test other keywords
+         LA    R12,6(,R12)             Increase pointer
+         CLI   FDQNAME,X'FF'           Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDQNAME,X'FF'           Set flag
+         LA    R6,ERRDQNAM             Msg: error in QNAME parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DQNAM000                No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DQNAMOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DQNAMOK                 Yes
+DQNAM000 DS    0H
+         SUBR  NAMES                   QNAME
+         B     *+4(R15)                Initiate branchlist
+         B     DQNAMOK                 OK
+         B     DERR                 Process error and scan next keyword
+DQNAMOK  DS    0H
+         B     DNEXTKEY                Next keyword parameter
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'SPACE' in DD-statement                    *
+*        Example: SPACE=(TRK,(10,3,3),RLSE,ROUND)                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+DSPACE   DS    0H
+         CLC   0(6,R12),=C'SPACE='     Keyword SPACE found?
+         BNE   DSUBSYS                 No: test other keywords
+         LA    R12,6(,R12)             Increase pointer
+         CLI   FDSPACE,X'FF'           Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDSPACE,X'FF'           Set flag
+         LA    R6,ERRDSPAC             Msg: error in SPACE parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DSPAC000                No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DSPACOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DSPACOK                 Yes
+DSPAC000 DS    0H
+         CLI   0(R12),C'('             '(' present?
+         BNE   DSPACERR                No: error
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Bracket '(' found
+         CLC   0(3,R12),=C'TRK'        TRK ?
+         BNE   DSPAC010                No: test CYL
+         LA    R12,3(,R12)             Increase pointer
+         B     DSPAC035                And test the quantities
+DSPAC010 DS    0H
+         CLC   0(3,R12),=C'CYL'        CYL ?
+         BNE   DSPAC020                No: test ABSTR
+         LA    R12,3(,R12)             Increase pointer
+         B     DSPAC035                TEST QUANTITY
+DSPAC020 DS    0H
+         CLC   0(5,R12),=C'ABSTR'      ABSTR ?
+         BNE   DSPAC030                No: test if value is block
+         LA    R12,5(,R12)             Increase pointer
+         B     DSPAC160                TEST REST
+DSPAC030 DS    0H
+         SUBR  NUMBER                  Block alloc. (xxxx,(pp,ss,dir))
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC035                Ok: numerics found, BLK alloc.
+*                                      R12 is set in NUMBER routine
+         B     DSPACERR                Error: no TRK/CYL/ABSTR/nnnn
+DSPAC035 DS    0H
+         CLI   0(R12),C','             ',' after CYL/TRK/ABSTR/number?
+         BNE   DSPACERR                No: error
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC040                Yes
+         B     INCRLINE                No: next record
+DSPAC040 DS    0H
+         CLI   0(R12),C'('             '(' (bracket open) present?
+         BNE   DSPAC050                No: branch
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+DSPAC050 DS    0H
+         SUBR  NUMBER                  Test validity primary quantity
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC060                OK
+         B     DSPACERR                ERROR
+DSPAC060 DS    0H
+         CP    BRFLAG,ONE              ( present?
+         BE    DSPAC090                No: test if comma present
+         CLI   0(R12),C','             ',' (comma) present?
+         BNE   DSPAC080                No: test on end bracket ')'
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC065                Yes: continue
+         B     INCRLINE                Next entry in workspace
+DSPAC065 DS    0H
+         CLI   0(R12),C','             ',' (comma) present?
+         BE    DSPAC070                Yes: branch
+         SUBR  NUMBER                  Process number of sec. quantity
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC070                00, ok process
+         B     DSPACERR                04, Not numeric
+DSPAC070 DS    0H
+         CLI   0(R12),C','             ',' (comma) present?
+         BNE   DSPAC080                No test end bracket ')'
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC075                Yes, next space subparm
+         B     INCRLINE                Next record
+DSPAC075 DS    0H
+         SUBR  NUMBER                  Test # directory blocks
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC080                00, ok test on ')'
+         B     DSPACERR                04, not numeric
+DSPAC080 DS    0H
+         CLI   0(R12),C')'             ')' present?
+         BNE   DSPACERR                No end bracket, error
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+DSPAC090 DS    0H
+         CLI   0(R12),C','             ',' (comma) present?
+         BNE   DSPAC150                No: test if ')' present
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC095                Yes: continuation
+         B     INCRLINE                No: next entry in workspace
+DSPAC095 DS    0H
+         CLI   0(R12),C','             ',' (comma) present?
+         BE    DSPAC100                Yes: process RLSE/CONTIG etc.
+         CLC   0(4,R12),=C'RLSE'       RLSE?
+         BNE   DSPAC110                No CONTIG/MXIG/ALX/
+         LA    R12,4(,R12)             Increase pointer
+DSPAC100 DS    0H
+         CLI   0(R12),C','             ',' (comma) present?
+         BNE   DSPAC150                No: test if ')' present
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC110                Yes
+         B     INCRLINE                No: next entry in workspace
+DSPAC110 DS    0H
+         CLI   0(R12),C','             ',' (comma) present?
+         BE    DSPAC140                Yes, comma is found
+         CLC   0(6,R12),=C'CONTIG'     CONTIG ?
+         BNE   DSPAC120                No
+         LA    R12,6(,R12)             Increase pointer
+         B     DSPAC140                Test on ','
+DSPAC120 DS    0H
+         CLC   0(4,R12),=C'MXIG'       MXIG ?
+         BNE   DSPAC130                No
+         LA    R12,4(,R12)             Increase pointer
+         B     DSPAC140                Test on ','
+DSPAC130 DS    0H
+         CLC   0(3,R12),=C'ALX'        ALX ?
+         BNE   DSPACERR                No: error
+         LA    R12,3(,R12)             Increase pointer
+         B     DSPAC140                Test on ','
+DSPAC140 DS    0H
+         CLI   0(R12),C','             ',' (comma) present?
+         BNE   DSPAC150                TEST )
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC145                Yes
+         B     INCRLINE                No
+DSPAC145 DS    0H
+         CLC   0(5,R12),=C'ROUND'      ROUND parameter in SPACE?
+         BNE   DSPACERR                No: error
+         LA    R12,5(,R12)             Increase pointer
+DSPAC150 DS    0H
+         CLI   0(R12),C')'             Test on close bracket  ')'
+         BNE   DSPACERR                No: error
+         LA    R12,1(,R12)             Increase pointer
+         B     DSPACOK                 SPACE parameter found OK
+DSPAC160 DS    0H
+         CLI   0(R12),C','             ',' (comma) present?
+         BNE   DSPACERR                No: error
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC165                Yes
+         B     INCRLINE                No
+DSPAC165 DS    0H
+         CLI   0(R12),C'('             '(' bracket open present?
+         BNE   DSPACERR                No: branch
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+         SUBR  NUMBER                  Test number Primary quantity
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC170                OK
+         B     DSPACERR                ERROR
+DSPAC170 DS    0H
+         CLI   0(R12),C','             , present?
+         BNE   DSPACERR                ERROR
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC175                Yes: present
+         B     INCRLINE                No: go to next record
+DSPAC175 DS    0H
+         SUBR  NUMBER                  ADDRESS ?
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC180                Yes: found
+         B     DSPACERR                Error
+DSPAC180 DS    0H
+         CLI   0(R12),C','             , present?
+         BNE   DSPAC190                TEST )
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC185                Yes
+         B     INCRLINE                No
+DSPAC185 DS    0H
+         SUBR  NUMBER                  INDEX OF DIRECTORY
+         B     *+4(R15)                Initiate branchlist
+         B     DSPAC190                OK. TEST )
+         B     DSPACERR                ERROR
+DSPAC190 DS    0H
+         CLI   0(R12),C')'             ')' (bracket close) present?
+         BNE   DSPACERR                ERROR
+         LA    R12,1(,R12)             Increase pointer
+         CP    BRFLAG,ONE              More brackets  (in balance)?
+         BE    DSPACOK                 No
+         SP    BRFLAG,ONE              Add presence of '('
+         CLI   0(R12),C')'             ')' present?
+         BNE   DSPACERR                No: error
+         LA    R12,1(,R12)             Increase pointer
+DSPACOK  DS    0H
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+         B     DNEXTKEY                Next keyword parameter
+DSPACERR DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'SUBSYS' in DD-statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+DSUBSYS  DS    0H
+         CLC   0(7,R12),=C'SUBSYS='    Keyword SUBSYS specified?
+         BNE   DSYSOUT                 No: test other keywords
+         CLI   FDSUBSYS,X'FF'          Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDSUBSYS,X'FF'          Set flag
+         LA    R6,ERRDSUBS             Msg: SUBSYS not allowed
+         LA    R12,7(,R12)             Increase pointer
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'SYSOUT' in DD-statement                   *
+*                                                                     *
+*---------------------------------------------------------------------*
+DSYSOUT  DS    0H
+         CLC   0(7,R12),=C'SYSOUT='    Keyword SYSOUT found?
+         BNE   DTERM                   No: test other keywords
+         LA    R12,7(,R12)             Increase pointer
+         CLI   FDSYSUT,X'FF'           Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDSYSUT,X'FF'           Set flag
+         LA    R6,ERRDSYST             Msg: error in SYSOUT parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DSYST000                No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DSYSTOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DSYSTOK                 Yes
+DSYST000 DS    0H
+         CLI   0(R12),C'('             '(' present?
+         BNE   DSYST010                No: branch
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+DSYST010 DS    0H
+         LA    R7,=C'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789* '
+         SUBR  TESTCHAR                A ===> Z OF 0 ===> 9 OF * ?
+         B     *+4(R15)                Initiate branchlist
+         B     DSYST020                Yes
+         B     DSYSTERR                ERROR.
+DSYST020 DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    DSYSTOK                 No: branch
+         CLI   0(R12),C','             ',' present?
+         BNE   DSYST040                TEST )
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSYST025                Yes
+         B     INCRLINE                No continuation
+DSYST025 DS    0H
+         CLI   0(R12),C','             ',' present?
+         BE    DSYST030                Yes: branch
+         SUBR  NAMES                   Program name
+         B     *+4(R15)                Initiate branchlist
+         B     DSYST030                TEST ,
+         B     DSYSTERR                ERROR
+DSYST030 DS    0H
+         CLI   0(R12),C','             ',' present?
+         BNE   DSYST040                No: brannch
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DSYST040                Yes
+         B     INCRLINE                No continuation: next line
+DSYST040 DS    0H
+         CLI   0(R12),C')'             ')' (bracket close) present?
+         BNE   DSYST050                No
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+         LA    R12,1(,R12)             Increase pointer
+         B     DSYSTOK
+DSYST050 DS    0H
+         LA    R12,1(,R12)             Increase pointer
+         C     R12,ENDLINE             End of line?
+         BE    DSYSTERR                Yes: error
+         B     DSYST040                No
+DSYSTOK  DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DSYSTERR DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter TERM in DD-statement                       *
+*                                                                     *
+*---------------------------------------------------------------------*
+DTERM    DS    0H
+         CLC   0(5,R12),=C'TERM='      TERM= ?
+         BNE   DUCS                    No
+         LA    R12,5(,R12)             Increase pointer
+         CLI   FDTERM,X'FF'            Already specified?
+         BE    DDOUBLE                 Yes: double specified
+         MVI   FDTERM,X'FF'            Set flag
+         LA    R6,ERRDTERM             Msg: error in TERM parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DTERM000                No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DTERMOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DTERMOK                 Yes
+DTERM000 DS    0H
+         CLC   0(2,R12),=C'TS'         TS ?
+         BNE   DTERMERR                ERROR
+         LA    R12,2(,R12)             Increase pointer
+DTERMOK  DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DTERMERR DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'UCS' in DD-statement                      *
+*                                                                     *
+*---------------------------------------------------------------------*
+DUCS     DS    0H
+         CLC   0(4,R12),=C'UCS='       Keyword UCS present?
+         BNE   DUNIT                   No: test other keywords
+         LA    R12,4(,R12)             Increase pointer
+         CLI   FDUCS,X'FF'             Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDUCS,X'FF'             Set flag
+         LA    R6,ERRDUCS              Msg: error in UCS parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DUCS000                 No
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DUCSOK                  Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DUCSOK                  Yes
+DUCS000  DS    0H
+         CLI   0(R12),C'('             '(' present?
+         BNE   DUCS010                 No: branch
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+DUCS010  DS    0H
+         SUBR  NAMES                   Character set name
+         B     *+4(R15)                Initiate branchlist
+         B     DUCS020                 OK
+         B     DUCSERR                 ERROR
+DUCS020  DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    DUCSOK                  No
+         CLI   0(R12),C','             ',' present?
+         BNE   DUCS050                 No: test if ')' present
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DUCS025                 Yes
+         B     INCRLINE                NO CONTINUATION
+DUCS025  DS    0H
+         CLI   0(R12),C','             , present? ?
+         BE    DUCS030                 Yes
+         CLC   0(4,R12),=C'FOLD'       FOLD ?
+         BNE   DUCS040                 No
+         LA    R12,4(,R12)             Increase pointer
+DUCS030  DS    0H
+         CLI   0(R12),C','             , present?
+         BNE   DUCS050                 TEST )
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DUCS040                 00 - ok
+         B     INCRLINE                04 - no continuation
+DUCS040  DS    0H
+         CLC   0(6,R12),=C'VERIFY'     VERIFY ?
+         BNE   DUCSERR                 ERROR
+         LA    R12,6(,R12)             Increase pointer
+DUCS050  DS    0H
+         CLI   0(R12),C')'             ) present?
+         BNE   DUCSERR                 ERROR
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+DUCSOK   DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DUCSERR  DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'UNIT' in DD-statement                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+DUNIT    DS    0H
+         CLC   0(5,R12),=C'UNIT='      Keyword UNIT present
+         BNE   DVOLUME                 No: test other keywords
+         LA    R12,5(,R12)             Increase pointer
+         CLI   FDUNIT,X'FF'            Already specified?
+         BE    DDOUBLE                 Yes: more than 1 time specified
+         MVI   FDUNIT,X'FF'            Set flag
+         LA    R6,ERRDUNIT             Msg: Error in UNIT parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DUNIT000                No: branch
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DUNITOK                 Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DUNITOK                 Yes
+DUNIT000 DS    0H
+         CLC   0(4,R12),=C'AFF='       AFF= ?
+         BE    DUNIT060                Yes: process UNIT=AFF
+         CLI   0(R12),C'('             '(' present?
+         BNE   DUNIT010                No
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+DUNIT010 DS    0H
+         SUBR  SKIPPARM                Skip parameter
+         CP    BRFLAG,ZERO             '(' present?
+         BE    DUNITOK                 No: branch
+         CLI   0(R12),C','             ',' present?
+         BNE   DUNIT050                No: test on ')'
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DUNIT015                Good
+         B     INCRLINE                No continuation: next line
+DUNIT015 DS    0H
+         CLI   0(R12),C','             , present?
+         BE    DUNIT030                yes
+         CLI   0(R12),C'P'             P ?
+         BNE   DUNIT020                No
+         LA    R12,1(,R12)             Increase pointer
+         B     DUNIT030                TEST ,
+DUNIT020 DS    0H
+         SUBR  NUMBER                  UNIT COUNT ?
+         B     *+4(R15)                Initiate branchlist
+         B     DUNIT030                TEST ,
+         B     DUNIT040                TEST DEFER
+DUNIT030 DS    0H
+         CLI   0(R12),C','             , present?
+         BNE   DUNIT050                TEST )
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DUNIT040                Yes
+         B     INCRLINE                No continuation: next line
+DUNIT040 DS    0H
+         CLC   0(5,R12),=C'DEFER'      DEFER in UNIT keyword?
+         BNE   DUNITERR                No: error
+         LA    R12,5(,R12)             Increase pointer
+DUNIT050 DS    0H
+         CLI   0(R12),C')'             ) present?
+         BNE   DUNITERR                ERROR
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+         B     DUNITOK
+DUNIT060 DS    0H
+         LA    R12,4(,R12)             Increase pointer
+         SUBR  NAMES                   TEST on DDNAME
+         B     *+4(R15)                Initiate branchlist
+         B     DUNITOK                 OK.
+         B     DUNITERR
+DUNITOK  DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DUNITERR DS    0H
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Keyword parameter 'VOL=' or 'VOLUME=' in DD-statement        *
+*                                                                     *
+*---------------------------------------------------------------------*
+DVOLUME  DS    0H
+         CLC   0(4,R12),=C'VOL='       Keyword VOL found?
+         BE    DVOL000                 Yes
+         CLC   0(7,R12),=C'VOLUME='    Keyword VOLUME found?
+         BNE   DKEYERR                 No: error
+         LA    R12,3(,R12)             Increase pointer
+DVOL000  DS    0H
+         LA    R12,4(,R12)             Increase pointer
+         CLI   FDVOLUME,X'FF'          Already specified?
+         BE    DDOUBLE                 Yes
+         MVI   FDVOLUME,X'FF'          Set flag
+         LA    R6,ERRDVOL              Msg: error in VOL parm
+         CLI   EPROCFLG,X'FF'          Override?
+         BNE   DVOL010                 No: branch
+         CLI   0(R12),C','             Nullify parameter?
+         BE    DVOLOK                  Yes
+         CLI   0(R12),C' '             Nullify parameter?
+         BE    DVOLOK                  Yes
+DVOL010  DS    0H
+         CLI   0(R12),C'('             ( present?
+         BNE   DVOL060                 Test REF and SER
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+         CLC   0(7,R12),=C'PRIVATE'    PRIVATE?
+         BNE   DVOL020                 No: TEST
+         LA    R12,7(,R12)             Increase pointer
+DVOL020  DS    0H
+         CLI   0(R12),C','             , (comma) present?
+         BNE   DVOL110                 No: error
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DVOL025                 Yes:
+         B     INCRLINE                No continuation
+DVOL025  DS    0H
+         CLC   0(6,R12),=C'RETAIN'     RETAIN ?
+         BNE   DVOL030                 No TEST ,
+         LA    R12,6(,R12)             Increase pointer
+DVOL030  DS    0H
+         CLI   0(R12),C','             , present?
+         BNE   DVOL110                 ERROR
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Inititiate branchlist
+         B     DVOL035                 Yes
+         B     INCRLINE                NO CONTINUATION
+DVOL035  DS    0H
+         SUBR  NUMBER                  Process volume sequence number
+         CLI   0(R12),C','             , present?
+         BNE   DVOL060                 ERROR
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Inititiate branchlist
+         B     DVOL045                 Yes
+         B     INCRLINE                NO CONTINUATION
+DVOL045  DS    0H
+         SUBR  NUMBER                  VOLUME COUNT ?
+         B     *+4(R15)                Initiate branchlist
+         B     DVOL050                 yes
+         B     DVOL060                 No
+DVOL050  DS    0H
+         CLI   0(R12),C','             , present
+         BNE   DVOL110                 No
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DVOL060                 Yes: good
+         B     INCRLINE                NO CONTINUATION
+DVOL060  DS    0H
+         CLC   0(4,R12),=C'SER='       SER= ?
+         BE    DVOL070                 Yes
+         CLC   0(4,R12),=C'REF='       REF= ?
+         BNE   DVOLERR                 ERROR
+         LA    R12,4(,R12)             Increase pointer
+         SUBR  DSNTEST                 TEST on DSNAME
+         B     *+4(R15)                Inititiate branchlist
+         B     DVOL110                 Ok: test on bracket close
+         B     DVOLERR                 ERROR
+DVOL070  DS    0H
+         LA    R12,4(,R12)             Increase pointer
+         CLI   0(R12),C'('             ( present?
+         BNE   DVOL080                 No
+         LA    R12,1(,R12)             Increase pointer
+         AP    BRFLAG,ONE              Add presence of '('
+DVOL080  DS    0H
+         SUBR  VOLSER                  VOLSER ?
+         B     *+4(R15)                Initiate branchlist
+         B     DVOL090                 OK
+         B     DVOLERR                 ERROR
+DVOL090  DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    DVOL110                 If zero, branch
+         CLI   0(R12),C','             ',' present?
+         BNE   DVOL100                 No: test if ')' present
+         SUBR  DELIMIT                 Continue subparameters?
+         B     *+4(R15)                Initiate branchlist
+         B     DVOL080                 Yes: test next subparameters
+         B     INCRLINE                No: next entry in workspace
+DVOL100  DS    0H
+         CLI   0(R12),C')'             ')' present?
+         BNE   DVOLERR                 No: error
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+DVOL110  DS    0H
+         CP    BRFLAG,ZERO             '(' present?
+         BE    DVOLOK                  No: branch
+         CLI   0(R12),C')'             ')' present?
+         BNE   DVOLERR                 No: error
+         LA    R12,1(,R12)             Increase pointer
+         SP    BRFLAG,ONE              Minus 1, because ')' found
+DVOLOK   DS    0H
+         B     DNEXTKEY                Next keyword parameter
+DVOLERR  DS    0H
+         SUBR  ERRMESS                 Form error message
+         SUBR  SKIPPARM                Skip parameter
+         B     DNEXTKEY                Next keyword parameter
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Unknown keyword parameter in DD-statement                    *
+*                                                                     *
+*---------------------------------------------------------------------*
+DKEYERR  DS    0H
+         LA    R6,ERRDKEY              Msg: unknown keyword in DD
+         B     DERR                 Process error and scan next keyword
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Mutual execlusive keyworde parameter in DD-statement         *
+*                                                                     *
+*---------------------------------------------------------------------*
+DDOUBLE  DS    0H
+         LA    R6,ERRDDOUB             Msg: mutual exclusive keywords
+*
+*        Call error routine to set the message in the message table
+*        and skip the paremeter
+*
+DERR     DS    0H
+         SUBR  ERRMESS                 Form error message
+         SUBR  SKIPPARM                Skip parameter
+*
+*        Next keyword parameter if present in DD-statement
+*
+DNEXTKEY DS    0H
+         C     R12,ENDLINE             End of line?
+         BNE   DNEXTK00                No
+         B     INCRLINE                Next line in workspace
+DNEXTK00 DS    0H
+         BL    DNEXTK01                Beyond end?
+         SUBR  ERRMESS                 Yes
+         B     INCRLINE                Next line in workspace
+DNEXTK01 DS    0H
+         CLI   0(R12),C','             Comma ?
+         BNE   DNEXTK1                 No
+         SUBR  DELIMIT                 Next parameter
+         B     *+4(R15)                Initiate branchlist
+         B     DDKEY                   Present
+         B     INCRLINE                No continuation received
+DNEXTK1  DS    0H
+         CLI   0(R12),C' '             End of line?
+         BNE   DNEXTK2                 No
+         L     R12,ENDLINE             Load end of line
+         CLI   0(R12),C' '             Continue comment?
+         BE    INCRLINE                No
+         MVI   CONTFLAG,X'FF'          Set flag
+         B     INCRLINE
+DNEXTK2  DS    0H
+         SUBR  ERRMESS                 Issue error message
+         B     INCRLINE                Next line in workspace
+         TITLE 'Working storage'
+*
+         LTORG ,
+VCOMMON  DC    V(COMMON)
+BUFFER   DS    CL10
+*---------------------------------------------------------------------
+*                                                                    *
+*        LAY-OUT Screen                                              *
+*                                                                    *
+*---------------------------------------------------------------------
+SCREENL  DS    A                       Length of screen
+HEADING  DC    CL40'XXXXXX JCL statements; XXXXXX messages'
+MESLEN   EQU   40
+         DROP  ,
+         RCTOSBA                       Convert Row/Column to SBA
+         COPY  TPUTS
+         DROP  ,
+         TITLE 'Error messages'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Error messages:                                              *
+*        Do not insert a message in this table, but append a new      *
+*        at the end.                                                  *
+*        The number of the message (after the string) should          *
+*        correspond with the message number in JCLCOMM                *
+*                                                                     *
+*---------------------------------------------------------------------*
+MESSTXT  CSECT
+         DC    CL40'// missing, instream data?'                 00
+         DC    CL40'Error in name field'                        01
+         DC    CL40'Unknown operation'                          02
+         DC    CL40'Jobcard missing'                            03
+         DC    CL40'No JOBNAME specified'                       04
+         DC    CL40'Error in account field'                     05
+         DC    CL40'Error in programmer name'                   06
+         DC    CL40'Error in ADDRSPC parm in jobcard'           07
+         DC    CL40'Error in CLASS parm in jobcard'             08
+         DC    CL40'Error in COND parm in jobcard'              09
+         DC    CL40'GROUP specified; is RACF installed?'        10
+         DC    CL40'Error in MSGCLASS parm in JOB card'         11
+         DC    CL40'Error in MSGLEVEL parm in JOB card'         12
+         DC    CL40'Error in NOTIFY parm in JOB card'           13
+         DC    CL40'PASSWORD specified; is RACF installed?'     14
+         DC    CL40'Error in PERFORM parm in jobcard'           15
+         DC    CL40'Use of PRTY is restricted'                  16
+         DC    CL40'Do not specify RD in JOB card'              17
+         DC    CL40'Error in REGION parm in JOB card'           18
+         DC    CL40'Error in RESTART parm in JOB card'          19
+         DC    CL40'Error in TIME parm in JOB card'             20
+         DC    CL40'Error in TYPRUN parm in JOB card'           21
+         DC    CL40'USER specified; is RACF installed?'         22
+         DC    CL40'Expected continuation not received'         23
+         DC    CL40'Double KEYWORD parm in JOB card'            24
+         DC    CL40'Unknown parameter in JOB card'              25
+         DC    CL40'Error in pos parm in EXEC-card'             26
+         DC    CL40'Error in ACCT parm in EXEC-card'            27
+         DC    CL40'Error in ADDRSPC parm in EXEC-card'         28
+         DC    CL40'Error in COND parm in EXEC-card'            29
+         DC    CL40'Use of DPRTY is restricted'                 30
+         DC    CL40'Error in DYNAMNBR parm in EXEC-card'        31
+         DC    CL40'Error in execute parm in EXEC-card'         32
+         DC    CL40'Error in PERFORM parm in EXEC-card'         33
+         DC    CL40'Do not specify RD parm in EXEC-card'        34
+         DC    CL40'Error in REGION parm in EXEC-card'          35
+         DC    CL40'Error in TIME parm in EXEC-card'            36
+         DC    CL40'Unknown parameter in EXEC-card'             37
+         DC    CL40'Double keyword parm in EXEC-card'           38
+         DC    CL40'Error in DD *'                              39
+         DC    CL40'Error in positional parameter'              40
+         DC    CL40'Error in DD DATA'                           41
+         DC    CL40'Error in DD DUMMY'                          42
+         DC    CL40'Error in DD DYNAM'                          43
+         DC    CL40'Error in AMP parm in DD-card'               44
+         DC    CL40'Do not specify BURST'                       45
+         DC    CL40'Do not specify CHARS'                       46
+         DC    CL40'Do not specify CHKPT'                       47
+         DC    CL40'Error in COPIES parm in DD-card'            48
+         DC    CL40'Error in DCB parm in DD-card'               49
+         DC    CL40'Error in DDNAME parm in DD-card'            50
+         DC    CL40'Error in DEST parm in DD-card'              51
+         DC    CL40'Error in DISP parm in DD-card'              52
+         DC    CL40'Error in DLM parm in DD-card'               53
+         DC    CL40'Do not specify DSID'                        54
+         DC    CL40'Error in DSNAME parm in DD-card'            55
+         DC    CL40'Error in FCB parm in DD-card'               56
+         DC    CL40'Do not specify FLASH'                       57
+         DC    CL40'Error in FREE parm in DD-card'              58
+         DC    CL40'Error in HOLD parm in DD-card'              59
+         DC    CL40'Error in LABEL parm in DD-card'             60
+         DC    CL40'Do not specify MODIFY'                      61
+         DC    CL40'Do not specify MSVGP'                       62
+         DC    CL40'Error in OUTLIM parm in DD-card'            63
+         DC    CL40'Protect specified; is RACF installed?'      64
+         DC    CL40'Error in QNAME parm in DD-card'             65
+         DC    CL40'Error in SPACE parm in DD-card'             66
+         DC    CL40'Do not specify SUBSYS'                      67
+         DC    CL40'Error in SYSOUT parm in DD-card'            68
+         DC    CL40'Error in TERM parm in DD-card'              69
+         DC    CL40'Error in UCS parm in DD-card'               70
+         DC    CL40'Error in UNIT parm in DD-card'              71
+         DC    CL40'Error in VOLUME parm in DD-card'            72
+         DC    CL40'Unknown parameter in DD-card'               73
+         DC    CL40'Mutually exclusive keywords specified'      74
+         DC    CL40'Unbalanced parenthesis'                     75
+         DC    CL40'Unbalanced apostrophes'                     76
+         DC    CL40'Warning: &&SYSUID found, is exit instled?'  77
+         DC    CL40'Error in program; contact RPF builders'     78
+         TITLE 'Screen area'
+SCREEN   CSECT
+         DC    X'27'                   Escape character TPUT FULLSCR
+SCRCMD   DC    X'00C2'                 EW/EWA unlock
+R1C1     DC    X'1100001DF8'           R01 C01
+         DC    C'RPF JCL check -------------------------'
+         DC    C'----------------------------------------',X'1DF0'
+R2C1     DC    X'110000',X'1DF8'       R02 C01
+         ENTRY R2C1
+         DC    C'Cmd =>',X'1DC113'
+REPLY    DC    CL3'   ',X'1DF0'
+SCRLEN   EQU   *-SCREEN                Length header of screen
+         ENTRY SCRBEGIN
+SCRBEGIN EQU   *
+         DS    97CL60           Max 97 lines, mapped with SCRLINE DSECT
+*                               + header = 99 lines
+         TITLE 'Screen detail line'
+SCRLINE  DSECT
+SCRLSBA  DS    XL3                     SBA (rx, c2+)
+SCRLCLR1 DS    XL3                     Color of line number in screen
+SCRL#    DS    CL10                    Line number with JCL error
+SCRLCLR2 DS    XL3                     Color of JCL error message
+         DS    C                       blank
+SCRLMSG  DS    CL40                    JCL error message
+SCRL#LEN EQU   *-SCRLINE               Length of entry
+         TITLE 'JCLCOMM and RPFCOMM'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        COMMON AREA                                                  *
+*                                                                     *
+*---------------------------------------------------------------------*
+         PRINT GEN
+COMMON   JCLCOMM
+         EJECT
+*---------------------------------------------------------------------*
+*                                                                     *
+*        RPFCOMM area                                                 *
+*                                                                     *
+*---------------------------------------------------------------------*
+COMMAREA RPFCOMM
+         END

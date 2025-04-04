@@ -1,0 +1,470 @@
+RPFSUB   TITLE 'S U B M I T  ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFSUB.                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFBRO and RPFEDIT                            *
+*                                                                     *
+*        Function:      SUBMIT the workspace, which is pointed to     *
+*                       by the field COMWSTRT in RPFCOMM or           *
+*                       SUBMIT the input DCB with ddname in COMMPRM   *
+*                       to the job execution queue.                   *
+*                       A data set will be allocated, to              *
+*                       which the workspace will be written.       @rp1
+*                       After this the TSO command processor       @rp1
+*                       SUBMIT will be invoked.                    @rp1
+*                                                                     *
+*                       The input will be written on a new allocated  *
+*                       data set and the TSO Submit command will be   *
+*                       invoked.                                      *
+*                                                                     *
+*        Registers:     Register 12 is the base register              *
+*                       Register 13 points to the workarea            *
+*                       Register 11, points to RPFCOMM                *
+*                       Register 10, points to an EDIT workspace entry*
+*                       Register 8, point to a field receiving the    *
+*                                   JOBNAME.                          *
+*                                                                     *
+*        Input:         Register 1: 2 fullwords                       *
+*                       Fullword 1 = Address of RPFCOMM set in reg.7  *
+*                       Fullword 2 = Address of field, that receives  *
+*                                    the jobname and will be in reg.8 *
+*                       COMMPRM in RPFCOMM:                           *
+*                       - If COMMPRM contains 'INP=WORKSPCE' the      *
+*                         EDIT workspace will be used as input.       *
+*                       - If COMMPRM contains 'INP=xxxxxxxx'          *
+*                         the data set with DDNAME=xxxxxxxx will be   *
+*                         used as input.                              *
+*                                                                     *
+*        Returncodes    0  Submit OK                                  *
+*                       4  Allocation internal reader failed          *
+*                       8  No JOB statement found                     *
+*                       12 No card image data set                     *
+*                       16 Input data set is empty.                   *
+*                                                                     *
+*        Change log:                                                  *
+*        Jun 21,2001 RPr: Do not SUBMIT inserted lines with no data   *
+*        Apr 04,2004 RPr: Leave FULLSCR mode on 3270 model 5       @rp2
+*        Dec 17,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Jan 11,2019 RPr: Move JCL records below the line before   @rp3
+*        Mar 24,2019 RPr: Do not set FULLSCR off anymore           @rp4
+*        Apr 15,2019 RPr: Test card image and refuse SUBMIT if        *
+*                         LRECL of the data is not 80 bytes.          *
+*        May 21,2021 RPr: RPFSUB made suitable for SUBMIT in RPFBRO   *
+*                         and SUBMIT in RPFEDIT.                      *
+*        May 27,2021 RPr: RPFSUB made reentrant                       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFSUB   CSECT
+RPFSUB   AMODE 31                                                @rpa01
+RPFSUB   RMODE 24                                                @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFSUB,R12              Provide addressability
+         L     R11,0(,R1)              Get RPFCOMM
+         L     R8,4(,R1)               Point to field receiving jobname
+         GETMAIN R,LV=WORKL            Obtain storage for workarea
+         ST    R1,8(0,R13)             Forward pointer
+         ST    R13,4(0,R1)             Backward pointer
+         LR    R13,R1
+         USING WORKAREA,R13            Address our workspace
+         B     START                   Branch around constantes
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         USING COMMAREA,R11            Make RPFCOMM addressable
+         MVC   SUBDCB,DCB1             Copy the ...
+         MVC   INTRDR,DCB2                         model DCB's
+         MVC   CMDVERB,=CL08'SUBMIT ''' Move TSO verb name
+         MVC   CMDOFFS,=H'7'           Offset to first operand
+         MVI   SW,0                    Clear switch
+         USING WORKSPCE,R10            Address workspace record
+         L     R10,COMWSTRT            First record in workspace
+         CLC   =C'INP=WORKSPCE',COMMPRM   submit from EDIT workspace?
+         BNE   CHECKDCB                No: check LRECL of DCB
+         OI    SW,$WORKSP              Flag if workspace used
+         L     R1,COMMRECL             Pickup record length
+         CH    R1,=H'80'               Is it a card image data set
+*                                      and workspace?
+         BNE   SUBERR3                 No: terminate with rc = 12
+         B     SUB000A                 Carry on
+CHECKDCB DS    0H
+         MVC   SUBDCB+DCBDDNAM-IHADCB(8),COMMPRM+4
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (SUBDCB),MF=(E,COMOPN)  Open input
+         CLC   SUBDCB+DCBLRECL-IHADCB(2),=H'80' Card image data set?
+         BE    CHECKDC3                Yes: good
+         BAL   R14,CLOSE               Close input DCB
+         B     SUBERR3                 Notify error
+CHECKDC3 DS    0H
+         BAL   R14,GETINP              Read first record
+         TM    SW,$EOF                 Do we have input?
+         BNO   SUB000                  Yes: carry
+         BAL   R14,CLOSE               Close the input
+         B     SUBERR4                 Return code 16: input empty
+SUB000A  DS    0H
+         MVC   GETAREA(80),WORKDATA    Move workspace entry to area
+SUB000   DS    0H
+         MVI   0(R8),C' '              Clear ...
+         MVC   1(7,R8),0(R8)           ... JOB name
+SUB002   CLC   GETAREA(2),=C'//'       JCL card?
+         BE    SUB006                  Yes: try to find JOB name
+SUB004   DS    0H
+         TM    SW,$WORKSP              Submit from EDIT workspace
+         BNO   SUB004A                 No: read a record
+         LA    R10,NEXTENT(,R10)       Next record in workspace
+         C     R10,COMMLAST            Beyond last record?
+         BH    SUBERR2                 Yes: do not fill in JOBNAME
+         MVC   GETAREA(80),WORKDATA    Copy workspace record
+         B     SUB002                  Test next record
+SUB004A  EQU   *
+         BAL   R14,GETINP              Read a record
+         TM    SW,$EOF                 End of file?
+         BNO   SUB002                  No: Test again if JCL present
+         BAL   R14,CLOSE               Close input
+         B     SUBERR2                 No JOB statement found
+SUB006   DS    0H
+         LA    R3,GETAREA+2            Point after '//'
+         LA    R4,14                   The word 'JOB' should start
+*                                      before column 16
+SUB008   CLC   0(5,R3),=C' JOB '       The word 'JOB' found?
+         BE    SUB010                  Yes: good
+         LA    R3,1(,R3)               Next position
+         BCT   R4,SUB008               Loop until found or all done
+         B     SUB004                  Take next record
+SUB010   DS    0H
+         LA    R2,GETAREA+2            Point to JOBNAME
+         LA    R3,8                    JOB name is max 8 bytes
+SUB012   DS    0H                      Build JOB name
+         CLI   0(R2),C' '              End of JOB name?
+         BE    SUB014
+         MVC   0(1,R8),0(R2)           Move character into JOB name
+         LA    R8,1(,R8)               Next position
+         LA    R2,1(,R2)
+         BCT   R3,SUB012               Loop
+SUB014   DS    0H
+         TM    SW,$WORKSP              Submit from EDIT workspace
+         BO    SUB014A                 Yes: carry on
+         BAL   R14,CLOSE               Close and free the buffers
+SUB014A  DS    0H
+         MVI   SUBDSN,C' '             Blank DSNAME ...
+         MVC   SUBDSN+1(L'SUBDSN-1),SUBDSN          first
+         MVC   SUBDSN(8),COMMUSER      Move user id as HLQ         @rp1
+         LA    R4,SUBDSN               Point to data set name      @rp1
+         LA    R3,8                    User id = max 7 bytes       @rp1
+         XR    R5,R5                   Count non blank bytes       @rp1
+SUB015   DS    0H                                                  @rp1
+         CLI   0(R4),C' '              Blank found?                @rp1
+         BE    SUB016                  Yes: end of test            @rp1
+         LA    R4,1(,R4)               Next character of userid    @rp1
+         LA    R5,1(,R5)               Count the bytes             @rp1
+         BCT   R3,SUB015               Loop until length calc.     @rp1
+SUB016   DS    0H                                                  @rp1
+         MVC   0(6,R4),=C'.SUB.D'      2nd qualifier of temp. ds   @rp1
+         LA    R4,6(,R4)               Adjust pointer              @rp1
+         TIME  DEC                     Get current time            @rp1
+         SRL   R0,4                    Shift out fractions
+         ST    R0,TIMEWORK             Store time                  @rp1
+         ST    R1,DATEWORK               and date                  @rp1
+         UNPK  0(5,R4),DATEWORK        Set date (YYDDD) in DSNAME  @rp1
+         OI    4(R4),X'F0'             Remove signe                @rp1
+         MVC   5(2,R4),=C'.T'          Next qualifier with time    @rp1
+         OI    TIMEWORK+3,X'0F'        Insert sign in time         @rp1
+         UNPK  TIMEDISP(7),TIMEWORK    Unpack the time             @rp1
+         MVC   7(6,R4),TIMEDISP+1      Time in data set name       @rp1
+         MVC   13(5,R4),=C'.CNTL'      Low level qualifier         @rp1
+         LA    R5,24(,R5)              Real length subdsn calcul.  @rp1
+         ST    R5,LDSN                 Save length                 @rp1
+         STCM  R5,3,SUBDSNL            and also save for allocation
+*
+         LA    R14,RPFD08              Point to allocation parm block
+         XC    RPFD08,RPFD08           Clear
+         USING DAPB08,R14              Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'INTRD'     DDNAME to allocate
+         LA    R0,SUBDSNL              Length DSN + DSN
+         ST    R0,DA08PDSN           Length and temporary data set name
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+*
+         AIF   (&SVS).CTLG
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         AGO   .NOCTLG
+.CTLG    ANOP
+         MVI   DA08DPS2,DA08CAT        For SVS a submit data set
+*                                      should be cataloged
+.NOCTLG  ANOP
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,COMMUNIT       Move UNIT name
+         MVC   DA08PSWD,DA08MNM        No password
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVI   DA08PQTY+3,X'05'        5 cylinders primary
+         MVI   DA08SQTY+3,X'03'        3 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         LR    R1,R14                  Parameter for CALLTS
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R14                     RPFD08
+         LTR   15,15                   Test completion of allocation
+         BNZ   SUBERR1                 Set RC=4 and return to caller
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (INTRDR,OUTPUT),MF=(E,COMOPN)
+         TM    SW,$WORKSP              Submit from EDIT workspace
+         BNO   SUB028                  Copy input DCB to submit file
+         L     R10,COMWSTRT            First record in workspace
+         LA    R4,NEXTENT              Increment for BXLE
+         L     R5,COMMLAST             Point to end of workspace
+         LA    R5,86(,R5)              Minus 1
+*
+*        Copy EDIT workspace to SUBMIT data set
+*
+SUB026   DS    0H                      Loop to fill INTRDR file
+         TM    WORKFLGS,$INSERTD       An inserted line with no data?
+         BO    SUB027                  Yes: skip this line
+         MVC   GETAREA(80),WORKDATA    Move below  16MB line       @rp3
+         BAL   R14,PUTIT               Write to submit data set
+SUB027   DS    0H                                                  @rp1
+         BXLE  R10,R4,SUB026           Loop until all data written @rp1
+         B     SUB030                  Data set filled
+*
+*        Copy Input data set (INP=ddname) to SUBMIT data set
+*
+SUB028   DS    0H                                                  @rp1
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (SUBDCB),MF=(E,COMOPN)  Open input DCB
+SUB029   DS    0H                                                  @rp1
+         BAL   R14,GETINP              Read a record
+         TM    SW,$EOF                 End of file?
+         BO    SUB029A                 Yes: submit output data set
+         BAL   R14,PUTIT               No: write record ...
+         B     SUB029                  ... read next record
+SUB029A  DS    0H                                                  @rp1
+         BAL   R14,CLOSE               Close input
+*
+*        SUBMIT the output to the job execution queue or use the
+*        TSO command SUBMIT.
+*
+SUB030   DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE (INTRDR),MF=(E,COMCLS)  Close file
+         LA    R2,INTRDR               DCB
+         FREEPOOL (2)
+         MVC   CMDOPER,SUBDSN          Move data set to submit     @rp1
+         L     R5,LDSN                 Length of data set name     @rp1
+         LA    R4,CMDOPER                                          @rp1
+         LA    R4,0(R4,R5)             Adjust to end of DSName     @rp1
+         MVI   0(R4),C''''             Move ending quote           @rp1
+         LA    R5,9(,R5)               'SUBMIT' + space + 2 quotes @rp1
+         LA    R5,4(,R5)               + Two length fields         @rp1
+         STH   R5,CMDL                 Length of buffer            @rp1
+         LA    R2,21                   Default line 21
+         CLI   COMMCMD,COMMEW          Do we have a 24x80 screen?
+         BNE   *+8                     No: carry
+         LA    R2,1                    Else set to line 1
+         AIF   (&SVS).SVS1
+         STLINENO LINE=(2),MODE=OFF    Set FULLSCR off
+.SVS1    ANOP
+SUB038   DS    0H                                                  @rp1
+         L     R1,COMMCPPL             Load CPPL address           @rp1
+         USING CPPL,R1                 Get addressability          @rp1
+         L     R2,CPPLECT              Get ECT address             @rp1
+         USING ECT,R2                  (Environment Control Table) @rp1
+         MVC   SUBCBUF,CPPLCBUF        Save old CBUF address       @rp1
+         LA    R0,SUBCMD               Verb + operands SUBMIT command
+         ST    R0,CPPLCBUF             Move SUB command            @rp1
+         MVI   ECTSWS,X'00'            Clear flags                 @rp1
+         MVC   ECTPCMD,=CL8'SUBMIT'    Move command name           @rp1
+         RPFSA24                       Switch to amode 24        @rpa01
+         XC    LNKLST(8),LNKLST        Clear EP and DCB address
+         LINK  EP=SUBMIT,SF=(E,LNKLST) Invoke TSO SUBMIT command   @rp1
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R1,COMMCPPL             Load CPPL address again     @rp1
+         MVC   CPPLCBUF,SUBCBUF        Restore pointer CPPLCBUF    @rp1
+         XC    RPFD18,RPFD18           Clear parameter block
+         LA    R14,RPFD18              Point to unallocation parm blk
+         USING DAPB18,R14              Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'INTRD'     DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         LA    R0,SUBDSNL              Free the data set instead of
+         ST    R0,DA18PDSN             DD-name to avoid dangling
+*                                      by the SUBMIT TSO command
+         LR    R1,R14                  Unalloc.   parameter block
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R14                     RPFD18
+*
+         AIF   (NOT &SVS).NOALC
+         XC    RPFD08,RPFD08           Clear
+         LA    R14,RPFD08              Point to allocation parm blk
+         USING DAPB08,R14              Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'INTRD'     DDNAME to allocate
+         LA    R0,SUBDSNL              Length DSN + DSN
+         ST    R0,DA08PDSN           Length and temporary data set name
+         MVI   DA08DSP1,DA08OLD        DISP=OLD,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVI   DA08UNIT,C' '           Provide no ...
+         MVC   DA08UNIT+1(7),DA08UNIT             UNIT name
+         MVC   DA08PSWD,DA08MNM        No password
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         LR    R1,R14                  Parameter for CALLTS
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R14                     RPFD08
+         LA    R14,RPFD18              Point to unallocation parm blk
+         USING DAPB18,R14              Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'INTRD'     DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         LR    R1,R14                  Unalloc.   parameter block
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R14
+.NOALC   ANOP
+         DROP  R1,R2                   CPPL and ECT
+         AIF   (&SVS).SVS2
+         STFSMODE ON,INITIAL=NO,NOEDIT=YES
+.SVS2    ANOP
+SUBMITTD DS    0H
+         XR    R15,R15                 Rc = 0, no errors
+*             J O B          S U B M I T T E D ****
+         B     SUBEND                  Return to caller
+SUBERR1  DS    0H                      Allocation failed
+         LA    R15,4                   Rc = 4
+         B     SUBEND                  Allocation fail internal reader
+SUBERR2  DS    0H
+         LA    R15,8                   Rc = 8
+         B     SUBEND                  No JOB statement
+SUBERR3  DS    0H
+         LA    R15,12                  Rc = 12, no card image data set
+         B     SUBEND                  No card image data
+SUBERR4  DS    0H
+         LA    R15,16                  Rc = 16, input data set empty
+*
+SUBEND   DS    0H                      End of RPFSUB
+         XC    COMMPRM,COMMPRM         Clear COMMPRM in RPFCOMM
+         LR    R3,R13                  Area to free
+         L     R13,4(,R13)             Callers save area
+         LR    R4,R15                  Save register 15
+         FREEMAIN R,LV=WORKL,A=(3)     Free workarea
+         LR    R15,R4                  Restore register 14
+         RETURN (14,12),RC=(15)        Return with no errors
+         TITLE 'Read a record from the input DCB'
+GETINP   DS    0H
+         ST    R14,R14GET              Save register 14
+         RPFSA24                       Enter addressing mode 24
+         GET   SUBDCB,GETAREA          Read a record
+         B     GETINP9
+GETINP3  DS    0H                      EODAD
+         OI    SW,$EOF                 Mark input EOF
+GETINP9  DS    0H
+         RPFSA31                       Restore addressing mode
+         L     R14,R14GET              Restore register 14
+         BR    R14                     Return
+*
+         TITLE 'Close input DCB'
+CLOSE    DS    0H
+         ST    R14,R14CLS              Save register 14
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE (SUBDCB),MF=(E,COMCLS)  Close input
+         LA    R2,SUBDCB               Point to DCB
+         FREEPOOL (2)                  Release the buffers
+         L     R14,R14CLS              Restore register 14
+         BR    R14                     Return
+*
+PUTIT    DS    0H                      EODAD
+         ST    R14,R14PUT              Save register 14
+         RPFSA24                       Switch to amode 24        @rpa01
+         PUT   INTRDR,GETAREA          Write to submit data set    @rp3
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R14,R14PUT              Restore register 14
+         BR    R14                     Return
+*
+         DS    0F
+         TITLE 'Constants'
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         PRINT NOGEN
+DCB1     DCB   DDNAME=XXXXXXXX,MACRF=GM,EODAD=GETINP3,DSORG=PS,        X
+               SYNAD=GETINP3
+DCB1L    EQU   *                       Length of DCB
+DCB2     DCB   DDNAME=INTRD,MACRF=PM,LRECL=80,RECFM=FB,                X
+               BLKSIZE=3200,DSORG=PS
+DCB2L    EQU   *                       Length of DCB
+         LTORG
+*
+*
+         COPY  CALLTS
+*
+WORKAREA DSECT
+SAVE     DS    18F                     Save area
+SUBDCB   DS    CL(DCB1L-DCB1)          Copy of DCB1
+INTRDR   DS    CL(DCB2L-DCB2)          Copy of DCB2
+LNKLST   DS    XL8                     LINK SF=L
+R12TS    DS    F                       Save register 12 CALLTS
+R14CLS   DS    F                       Save register 14 CLOSE
+R14GET   DS    F                       Save register 14 GETINP
+R14PUT   DS    F                       Save register 14 PUTIT
+R14TS    DS    F                       Save register 14 CALLTS
+LDSN     DS    F                       'REAL' length SUBDSN        @rp1
+TIMEWORK DS    F                                                   @rp1
+DATEWORK DS    F                                                   @rp1
+SUBCBUF  DS    F                       Save original CPPLCBUF      @rp1
+*
+RPFDAPL  DS    5F                      DAIR parameter list
+ECB      DS    F                       ECB for DAIR
+RPFD08   DS    CL84                    DAIR allocation parm block
+RPFD18   DS    CL40                    DAIR unallocation parm block
+*
+GETAREA  DS    CL80                    Input record
+TIMEDISP DS    CL7                     0hhmmss in EBCDIC
+*
+SUBDSNL  DS    AL2                     \___ Do not insert between ___/
+SUBDSN   DS    CL44                    /                             \
+         DS    0F
+SUBCMD   DS    0CL57
+CMDL     DS    H                       LENGTH OF CMD-BUFFER
+CMDOFFS  DC    H'07'                   Offset to first operand     @rp1
+CMDVERB  DC    CL08'SUBMIT '''         Command name                @rp1
+CMDOPER  DS    CL45                    Operands of SUBMIT command
+SW       DS    X                       Flags
+$EOF     EQU   128                     Input DCB is End of File
+$WORKSP  EQU   64                      Workspace used instead of DCB
+WORKL    EQU   *-WORKAREA
+         PRINT GEN
+         DROP
+         TITLE 'RPF COMMON AREA'
+COMMAREA RPFCOMM
+         IKJCPPL
+         IKJDAPL
+         IKJDAP08
+         IKJDAP18
+         IKJECT
+         CVT   DSECT=YES,LIST=NO
+         PRINT NOGEN
+         DCBD  DSORG=PS,DEVD=DA
+         END

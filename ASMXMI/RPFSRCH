@@ -1,0 +1,682 @@
+RPFSRCH  TITLE 'Search strings in a data set'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFSRCH. RPF option 3.8                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFUTIL                                       *
+*                                                                     *
+*        Function:      Process sequential data sets or partitioned   *
+*                       data sets to search a given string and write  *
+*                       the matched lines on a temporary data set.    *
+*                                                                     *
+*                       If the data set is partitioned:               *
+*                       Process the directory of the PDS(E)           *
+*                       and read all the members in this data set.    *
+*                                                                     *
+*                       If the data set is sequential:                *
+*                       Search the contents of the data set.          *
+*                                                                     *
+*                       Pickup the search string from COMMSRCH in     *
+*                       RPFCOMM and scan the contents                 *
+*                       of the data of presence of the search         *
+*                       string. If the string is found write the      *
+*                       line(s) on a print data set (RECFM=FBA,       *
+*                       LRECL=133,BLKSIZE=6118).                      *
+*                       After completion of the search, invoke        *
+*                       RPFBRO to display and/or print the data set.  *
+*                                                                     *
+*        Input:         Field COMMSRCH, a max. 25 bytes field         *
+*                       containing the search string.                 *
+*                                                                     *
+*                       Field COMMSRNB Skip numbers                   *
+*                       If the value = 'Y':                           *
+*                       The last 8 columns of F(B) data sets will     *
+*                       not be searched or the first 8 columns of V(B)*
+*                       data sets will not be searched.               *
+*                       If the value = 'C':                           *
+*                       If fixed data with record length 80, the      *
+*                       first 6 bytes and the last 8 bytes are not    *
+*                       searched. If variable data or fixed not card  *
+*                       image, the behaviour is the same as 'Y'.      *
+*                       If the value = 'N':                           *
+*                       The string will be searched in the entire     *
+*                       record.                                       *
+*                                                                     *
+*                       Field COMMCASE Ignore case                    *
+*                       If the value = 'Y':                           *
+*                       String is matched, no matter if the string    *
+*                       contains upper-, lower- or mixed case         *
+*                       characters.                                   *
+*                       If the value = 'N':                           *
+*                       String is only matched if the value is        *
+*                       exactly the same.                             *
+*                                                                     *
+*        Registers:     Register 12 is the base register.             *
+*                       Register 11 contains the address of RPFCOMM.  *
+*                       Register 13 contains the address of our       *
+*                       working storage with the SAVE area.           *
+*                                                                     *
+*        Notes:         The SYS1.(A)MODGEN macro library should be    *
+*                       included in the SYSLIB concatenation of the   *
+*                       assembly.                                     *
+*                                                                     *
+*        Subroutines:   RPFBRO,   For the browse and print function   *
+*                       RPFCNVDT, Convert the Julian date             *
+*                                                                     *
+*        Return codes:  00 - no errors                                *
+*                       04 - errors occurred, message in COMMPRM      *
+*                                                                     *
+*        Change log:                                                  *
+*        Nov 03,2019 RPr: Initial version.                            *
+*        Jan 13,2020 RPr: Allow quoted search strings                 *
+*        Nov 09,2020 RPr: Intercept I/O error PDS(E) directory.       *
+*        May 25,2020 RPr: IKJDAIR used for allocation PRINT data set. *
+*        Aug 19,2021 RPr: RPFSRCH made re-entrant and re-usable.      *
+*        Mar 11,2022 RPr: Field COMMSRNB, skip numbers Y/C/N tested.  *
+*                         skip SEARCH of last 8 columns of F(B) data  *
+*                         or first 8 columns of V(B) data if COMMSRNB *
+*                         is Y and skip first 6 and last 8 cols if C. *
+*        Aug 11,2022 RPr: Field COMMCASE, Ignore case tested.         *
+*                         If Y, then SEARCH will be done and upper    *
+*                         lower and mixed case will match. With N,    *
+*                         only the exact value will be matched.       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFSRCH  CSECT                         *
+RPFSRCH  AMODE 31
+RPFSRCH  RMODE 24
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFSRCH,R12             Provide addressability
+         L     R11,0(,R1)              Obtain RPFCOMM area
+         USING COMMAREA,R11            Address RPFCOMM
+         GETMAIN R,LV=WORKL            Obtain working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(0,R13)             Forward pointer
+         LR    R13,R1                  Exchange save area
+         USING WORKAREA,R13            Make working storage addressable
+         B     RPFINITT                Branch around save area
+*
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+RPFINITT DS    0H
+         MVC   HDR1DSN,COMMDSN         Move DSN of PDS(E)
+         MVC   SRCHSTR,COMMSRCH        Pickup search string
+         CLI   COMMCASE,C'N'           Ignore case = N?
+         BE    START01                 Yes: do not xlate to upper
+         TR    SRCHSTR,COMTCAPS        Xlate to caps
+START01  DS    0H
+         MVC   HDR1STR,SRCHSTR         Move string in header
+         MVC   HTXT1,=CL24'1RPF Search strings in: '
+         MVC   HTXT2,=CL15',Search String='
+         MVI   HTXT3,C' '
+         MVC   HTXT4,=CL7'  Page '
+         MVC   ERR1TXT,ERR1MDL         Move message to work. stg.
+         MVI   PRTLINE-1,C' '          For MVC   PRTLINE,PRTLINE-1
+         MVI   SW,0                    Init the switch
+         ZAP   LINECNT,=P'99'          Force a initial page skip
+         ZAP   PAGECNT,=P'0'           Initial page number
+         ZAP   TOTAL,=P'0'             Init total records
+         ZAP   HITCNT,=P'0'            Init total number of hits
+         MVC   RPFWORK,MDLWORK         Copy ...
+         MVC   RPFWORK2,MDLWORK2            model ...
+         MVC   RPFPRINT,MDLPRINT                  DCB's
+         LA    R0,JFCB                 Job file control block
+         ST    R0,EXLST                Save JFCB in exit list
+         MVI   EXLST,X'87'             JFCB exit is last entry
+         LA    R0,EXLST                Exit list (JFCB + DCB abend)
+         STCM  R0,B'0111',RPFWORK+DCBEXLSA-IHADCB
+         L     R2,X'4C'                Get pointer CVT
+         MVC   YYDDD,56(R2)            Get date from CVT
+         MVI   DDMMYY,X'FF'            Jul. date is 4 bytes
+         L     R15,EPCNVDT             Entry point RPFCNVDT
+         LA    R0,YYDDD                Parm 1 for RPFCNVDT
+         LA    R1,DDMMYY               Parm 2 for RPFCNVDT
+         STM   R0,R1,PRMCNV            Save in PARM
+         LA    R1,PRMCNV
+         BALR  R14,R15                 Convert Julian to Gregorian
+         MVC   JULTODAY(4),CC          Year
+         MVI   JULTODAY+4,C'-'
+         MVC   JULTODAY+5(2),MONNBR    Number of month (eg 1=jan)
+         MVI   JULTODAY+7,C'-'
+         MVC   JULTODAY+8(2),DD        Daynumber in the month
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R3,RPFD08               Point to allocation parm block
+         USING DAPB08,R3               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFPRINT'  DDNAME to allocate
+         LA    R0,PRTDSNL              Length + data set name
+         ST    R0,DA08PDSN             Temporary data set name
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name (SYSDA)
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVI   DA08PQTY+3,X'09'        9 cylinders primary and...
+         MVI   DA08SQTY+3,X'09'        9 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         LR    R1,R3                   Point to allocation parm block
+         BAL   R14,CALLTS
+         LTR   R15,R15                 Alloc OK?
+         BZ    SRCH001                 Error..
+         UNPK  DBW(5),DA08DARC(3)      Expand each byte
+         NC    DBW(4),=X'0F0F0F0F0F0F' Clear hi order nibbles
+         TR    DBW(4),=C'0123456789ABCDEF'
+         MVC   ERR1TXT+15(4),DBW       Move to user field
+         MVC   COMMPRM,ERR1TXT         Msg: Alloc error xxxx PRINT
+         B     RPFERROR                Handle up the error
+         DROP  R3                      RPFD08
+*---------------------------------------------------------------------*
+*                                                                     *
+*        If the search is between quotes, remove quotes and calculate *
+*        the length of the part between the quotes.                   *
+*        If not quoted or no ending quote:                            *
+*        determine the real length of the Search String by removing   *
+*        the not significant trailing blanks.                         *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SRCH001  DS    0H
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (RPFPRINT,(OUTPUT)),MF=(E,COMOPN)
+         LA    R1,SRCHSTR              Pickup 1st position string
+         CLI   0(R1),C''''             Does string start with a quote?
+         BNE   SRCH020                 No: skip trailing blanks
+         LA    R3,L'SRCHSTR-1          Scan max 24 chars (minus 1st ')
+         XR    R2,R2                   count the bytes
+         MVC   SRCHSTR(L'SRCHSTR-1),SRCHSTR+1 remove start quote
+         MVI   SRCHSTR+24,X'40'        Blank in last position
+SRCH005  DS    0H
+         CLI   0(R1),C''''             Does string end with a quote?
+         BE    SRCH030                 Yes found
+         LA    R2,1(,R2)               Count length
+         LA    R1,1(,R1)               Next position in string
+         BCT   R3,SRCH005              Loop
+SRCH020  DS    0H                      .. blanks
+         LA    R2,L'SRCHSTR            Maximum length
+         LA    R1,SRCHSTR+24           Pickup last position string
+SRCH025  DS    0H
+         CLI   0(R1),C' '              Not significant blank?
+         BNE   SRCH030                 No: real length found
+         BCTR  R1,0                    Discount to previous position
+         BCT   R2,SRCH025              Discount length with 1 and loop
+SRCH030  DS    0H
+         ST    R2,LENSTR               Save length of string
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Check if the data set is a PDS(E) or sequential. If          *
+*        sequential, skip reading the directory blocks.               *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         TM    COMMFLG1,$COMMSEQ       Is data set a PDS(E)?
+         BO    SEQ001                  No: process seq. data set
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Read the directory blocks of the PDS(E) and call the         *
+*        MEMSRCH routine to scan the contents of all the members.     *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+PDS001   DS    0H
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  RPFWORK2,MF=(E,COMOPN)  Open PDSDCB
+         LA    R4,RPFWORK2             DCB in register 4
+         USING IHADCB,R4               Address DCBD
+         TM    DCBOFLGS,DCBOFOPN       Successful open?
+         BO    PDS003                  Yes: good
+         MVC   COMMPRM,ERR2TXT         Error: open data set failed
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFPRINT,MF=(E,COMCLS)  Close output
+         FREEPOOL RPFPRINT             And get rid of the buffers
+         B     RPFERROR                Handle up the error
+         DROP  R4                      Kill addressability of DCB
+PDS003   DS    0H
+         LA    R3,DIRAREA              Load directory block output
+         RPFSA24                       Switch to amode 24
+         LA    R2,RPFWORK2             DCB address
+         XC    DECB(DECBL),DECB        Clear Data Event Control Block
+         READ  DECB,SF,(2),(3),'S',MF=E
+         CHECK DECB                    Wait for completion
+         RPFSA31                       Switch to amode 31
+         LR    R5,R3                   Same address in register 5
+         AH    R5,0(R3)                Add # of bytes of dirblk
+         BCTR  R5,0                    Minus 1 for BXLE
+         LA    R3,2(,R3)               Point to first member
+         USING PDS2,R3                 Address the directory entry @rpb
+PDS009   DS    0H
+         CLI   0(R3),X'FF'             End if file?
+         BE    PDS019                  Yes: close data set
+         RPFSA24                       Enter AMODE24 (destroys R1)
+         LR    R1,R3                   Pickup member name
+         BAL   R14,MEMSRCH             Search string in member
+         RPFSA31                       Restore addressing mode
+         XR    R4,R4                   Register 4 will receive # halfw.
+         NI    PDS2INDC,B'00011111'    Zero first 3 bits of C byte
+         IC    R4,PDS2INDC             Insert 'C' byte or dir. block
+         AR    R4,R4                   *2 because halfwords
+         AH    R4,=H'12'               + Minimum length member entry
+         BXLE  R3,R4,PDS009            Next member if possible
+         B     PDS003                  Read next directory block
+*                                      not all members fits in workspc.
+*        SYNAD error of PDS directory
+PDSSYN   DS    0H
+         RPFSA31                       Restore addressing mode
+         MVC   COMMPRM,ERR3TXT         Msg: PDS(E) I/O error
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFWORK2,MF=(E,COMCLS)  CLose PDS DCB
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFPRINT,MF=(E,COMCLS)  Close output
+         FREEPOOL RPFPRINT             And get rid of the buffers
+         B     RPFERROR                Handle up the error
+*                                      not all members fits in workspc.
+PDS019   DS    0H                      End of file PDSDCB
+*
+*        All directories read, end of routine
+*
+         DROP  R3
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFWORK2,MF=(E,COMCLS)  Close the file
+         B     TOTALS                  Print totals in RPFPRINT
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Process the SEARCH in a sequential data set and call the     *
+*        MEMSRCH routine to scan the contents.                        *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SEQ001   DS    0H
+         RPFSA24                       Enter AMODE24
+         XR    R1,R1                   No member provided in MEMSRCH
+         BAL   R14,MEMSRCH             Search string in member
+         RPFSA31                       Restore addressing mode
+TOTALS   DS    0H
+         OI    SW,$TOTAL               Mark Total line to be printed
+         RPFSA24                       Enter AMODE24
+         BAL   R14,PRT                 And print
+         RPFSA31                       Restore addressing mode
+CLOSE    DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFPRINT,MF=(E,COMCLS)  Close the print file
+         FREEPOOL RPFPRINT
+         XC    COMMPRM,COMMPRM         Clear COMMPRM in RPFCOMM
+         MVC   COMMPRM(8),=C'RPFPRINT' DDname of data set
+         RPFSA24                       Enter AMODE24
+         ST    R11,PRMLST1             Address of RPFCOMM
+         LA    R1,PRMLST1              In register 1
+         XC    LNKLST(8),LNKLST        Clear SF field
+         LINK  EP=RPFBRO,SF=(E,LNKLST) Invoke the browse processor
+         RPFSA31                       Restore addressing mode
+         XR    R15,R15                 Rc = 0
+         B     RETURN                  Return
+*
+RPFERROR DS    0H
+         LA    R15,4                   Rc = 4, errors detected
+RETURN   DS    0H
+         LR    R2,R15                  Save returncode
+         LA    R1,RPFD18               Unallocation parameter block
+         XC    RPFD18,RPFD18           Clear unallocation parm block
+         USING DAPB18,R1               Address it
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'RPFPRINT'  DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         DROP  R1                      RPFD18
+         BAL   R14,CALLTS              Call RPFDAIR
+         LR    R3,R13                  Our working storage
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release working storage
+         LR    R15,R2                  Restore returncode
+         RETURN (14,12),RC=(15)        Return
+*
+         TITLE 'Invoke IKJDAIR, entry via BAL R14,CALLTS'
+CALLTS   DS    0H
+         ST    R14,R14TS               Save register 14
+         LR    R15,R1                  Parm block
+         L     R14,COMMCPPL            Pickup our CPPL
+         LA    R1,RPFDAPL              Pickup DAPL
+         USING CPPL,R14
+         USING DAPL,R1
+         MVC   DAPLUPT(4),CPPLUPT
+         MVC   DAPLECT(4),CPPLECT
+         XC    ECB,ECB                 Clear Event control block
+         LA    R0,ECB
+         ST    R0,DAPLECB              Set A(ECB) in DAPL
+         MVC   DAPLPSCB(4),CPPLPSCB
+         ST    R15,DAPLDAPB
+         RPFSA24
+         CALLTSSR EP=IKJDAIR,MF=(E,RPFDAPL)
+         RPFSA31
+         DROP  R1,R14                  DAPL and CPPL
+         L     R14,R14TS               Restore register 14
+         BR    R14                     Return
+         TITLE 'Read the member and scan the contents'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:    MEMSRCH                                          *
+*                                                                     *
+*        Function:   Read member or data set to process the search    *
+*                    string.                                          *
+*                    If 1 or more matches are found in the data,      *
+*                    the involved lines will be written upon the      *
+*                    RPFPRINT data set, which is dynamically          *
+*                    allocated.                                       *
+*                                                                     *
+*        Note:       This routine is entered in 24 bit addressing mode*
+*                                                                     *
+*        Input       R1, contains the adress of the membername        *
+*                        or contains zero if the data set is          *
+*                        sequential.                                  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+MEMSRCH  DS    0H
+         STM   R2,R14,SAVEMSRC         Save the registers
+         NI    SW,255-$MBRHDR          Reset Member header switch
+         ZAP   LINENBR,=P'0'           Init line number
+         LR    R2,R1                   A(member name)
+         LTR   R2,R2                   Is data set sequential?
+         BNZ   MEMS002                 No: continue
+         OI    SW,$MBRHDR              Avoid printing member header
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  RPFWORK,MF=(E,COMOPN)   Do a normal open
+         B     MEMS003                 and branch
+MEMS002  DS    0H
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         RDJFCB RPFWORK,MF=(E,COMOPN)  Read the Job file control block
+         MVC   JFCB+44(8),0(R2)        Move member name into JCFB
+         OI    JFCB+86,X'01'           Mark PDSname(member)
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  RPFWORK,TYPE=J,MF=(E,COMOPN) Open the DCB
+MEMS003  DS    0H
+         LA    R5,GETAREA              Pickup record
+         LA    R6,4(,R5)               Get area +4
+         MVI   0(R6),C' '              Blank this
+         MVC   1(255,R6),0(R6)                  ... field
+         TM    COMMFLG4,$COMVB         Variable records?
+         BO    *+6                     Yes: address of area is good
+         LR    R5,R6                   Else skip RDW
+         GET   RPFWORK,(5)             Read the record
+         MVC   GETAREA2,GETAREA+4      Move record
+         LA    R1,16                   OC 16 times
+         LA    R15,GETAREA2            Start of area
+MEMS005  DS    0H
+         CLI   COMMCASE,C'N'           Ignore case = N?
+         BE    MEMS007                 Yes: do not xlate to upper
+         TR    0(16,R15),COMTCAPS      Xlate to upper case
+MEMS007  DS    0H
+         LA    R15,16(,R15)            Next part
+         BCT   R1,MEMS005              Loop until all done
+         AP    LINENBR,=P'1'           Count record (line number)
+         AP    TOTAL,=P'1'             Count total number of records
+         L     R3,COMMRECL             Pickup LRECL
+         TM    COMMFLG4,$COMVB         Variable records?
+         BNO   MEMS009                 No: branch
+         LH    R3,0(,R5)               Load length from RDW
+         SH    R3,=H'4'                Minus RDW
+MEMS009  DS    0H
+         LA    R5,GETAREA2             Pickup record
+         CLI   COMMSRNB,C'Y'           Skip sequence numbers?
+         BE    MEMS011                 Yes: search 8 bytes less
+         CLI   COMMSRNB,C'C'           Skip sequence numbers of COBOL
+         BNE   MEMS015                 No: carry
+MEMS011  DS    0H
+         SL    R3,=F'8'                Search 8 bytes less
+         TM    COMMFLG4,$COMVB         Variable records?
+         BNO   MEMS013                 No: branch
+         LA    R5,8(,R5)               Skip sequence numbers in 1-8
+         B     MEMS015                 Carry on
+MEMS013  DS    0H
+         CLI   COMMSRNB,C'C'           Skip sequence numbers of COBOL
+         BNE   MEMS015                 Yes: skip another 6 bytes
+         CLC   COMMRECL,=F'80'         Card image?
+         BNE   MEMS015                 No: same as COMMSRNB = Y
+         LA    R5,6(,R5)               Skip sequence numbers in 1-6
+*                                      and 73-80
+         SL    R3,=F'6'                Search another 6 bytes less
+MEMS015  DS    0H
+         L     R2,LENSTR               Length of Search string
+         SR    R3,R2                   # columns to search
+         BNP   MEMS003                 Read next record if <= 0
+         BCTR  R2,0                    Minus 1 for execute
+MEMS017  DS    0H
+         EX    R2,CLCSTR               Compare with string
+         BE    MEMS019                 Yes: found, print record
+         LA    R5,1(,R5)               Next position in record
+         BCT   R3,MEMS017              Search entire record
+         B     MEMS003                 Read next record, * not found *
+MEMS019  DS    0H
+         AP    HITCNT,=P'1'            Increase number of hits
+         LA    R1,GETAREA              A(record)
+         BAL   R14,PRT                 Print upon RPFPRINT
+         B     MEMS003                 Read next record
+MEMS999  DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFWORK,MF=(E,COMCLS)
+         FREEPOOL RPFWORK              Get rid of the buffers
+         LM    R2,R14,SAVEMSRC         Restore the registers
+         BR    R14                     Return
+CLCSTR   CLC   0(0,R5),SRCHSTR         << executed >>
+         TITLE 'Write record onto temporary data set'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:    PRT                                              *
+*                                                                     *
+*        Function:   Write record on the RPFPRINT data set if a       *
+*                    hit is found of the Search String.               *
+*                    This routine runs in addressing mode 24.         *
+*                    If flag $TOTAL is set, only the totals will be   *
+*                    printed (end of routine).                        *
+*                                                                     *
+*        Input       R1, address of the record to be written.         *
+*                    If flag $TOTAL is on, R1 is unpredictable.       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+PRT      DS    0H
+         ST    R14,R14PRT              Save register 14
+         LR    R5,R1                   Pickup record if there
+PRT001   DS    0H
+         CP    LINECNT,=P'50'          Line counter reached
+         BNH   PRT005                  No: go to print
+         ZAP   LINECNT,=P'2'           Reset line counter
+         AP    PAGECNT,=P'1'           Increase
+         MVC   HDR1PAGE,PATPAGE        Move pattern
+         ED    HDR1PAGE,PAGECNT        And convert
+         PUT   RPFPRINT,HEADER1        Write header record
+         MVC   PRTLINE,PRTLINE-1       Blank line
+         PUT   RPFPRINT,PRTLINE        Write blank line
+PRT005   DS    0H
+         TM    SW,$TOTAL               Totals line to be printed?
+         BO    PRT009                  Yes: print the totals lines
+         TM    SW,$MBRHDR              Member header printed?
+         BO    PRT007                  Yes: do not write line with
+*                                      member name
+         MVC   PRTLINE,PRTLINE-1       Blank line
+         PUT   RPFPRINT,PRTLINE        Write blank line
+         MVC   PRTLINE+1(8),=C'Member: '
+         MVC   PRTLINE+9(8),JFCB+44    Move member name
+         PUT   RPFPRINT,PRTLINE        Write line with member name
+         AP    LINECNT,=P'2'           Increase
+PRT007   DS    0H
+         OI    SW,$MBRHDR              Mark member header printed
+         L     R3,COMMRECL             Pickup record length
+         TM    COMMFLG4,$COMVB         Do we have variable records?
+         BNO   PRT008                  No: length is good
+         LH    R3,0(,R5)               Pick length from RDW
+         SH    R3,=H'4'                Minus RDW
+PRT008   LA    R5,4(,R5)               Point to data portion
+         MVC   PRTLINE,PRTLINE-1       Blank line
+         MVC   PRTLINE+1(8),PATLINE    Pattern
+         ED    PRTLINE+1(8),LINENBR    Edit line number
+         MVC   PRTLINE+12(121),0(R5)   Move record in print line
+         TR    PRTLINE+12(121),COMTRTAB and remove invalid characters
+         PUT   RPFPRINT,PRTLINE        Write data line
+         AP    LINECNT,=P'1'           Increase
+         C     R3,=F'121'              Record length > 121?
+         BNH   PRT999                  Good, finished
+         MVC   PRTLINE,PRTLINE-1       Blank line
+         MVC   PRTLINE+1(8),=C' -------' Mark continuation
+         MVC   PRTLINE+12(121),121(R5) Move 2nd part of record in line
+         TR    PRTLINE+12(121),COMTRTAB and remove invalid characters
+         PUT   RPFPRINT,PRTLINE        Write data line
+         AP    LINECNT,=P'1'           Increase
+         C     R3,=F'242'              Record length > 242 (max 255)
+         BNH   PRT999                  Good, finished
+         MVC   PRTLINE,PRTLINE-1       Blank line
+         MVC   PRTLINE+1(8),=C' -------' Mark continuation
+         MVC   PRTLINE+10(13),242(R5)  Move 3rd part of record in line
+         TR    PRTLINE+12(13),COMTRTAB and remove invalid characters
+         PUT   RPFPRINT,PRTLINE        Write data line
+         AP    LINECNT,=P'1'           Increase
+         B     PRT999                  Finished
+PRT009   DS    0H
+*
+*        All data scanned, print the total hits and total scanned
+*        records.
+*
+         MVC   PRTLINE,PRTLINE-1       Blank line
+         PUT   RPFPRINT,PRTLINE        Write data line
+         MVC   PRTLINE+1(24),=C'Total records with hits:'
+         MVC   PRTLINE+25(10),PATTOTAL Move edit pattern
+         ED    PRTLINE+25(10),HITCNT   # records searched
+         PUT   RPFPRINT,PRTLINE        Write data line
+         MVC   PRTLINE+1(24),=C'Total records searched: '
+         MVC   PRTLINE+25(10),PATTOTAL Move edit pattern
+         ED    PRTLINE+25(10),TOTAL    # records searched
+         PUT   RPFPRINT,PRTLINE        Write data line
+         MVC   PRTLINE,PRTLINE-1       Blank line
+         MVC   PRTLINE+1(19),=C'Skip line numbers: '
+         MVC   PRTLINE+20(1),COMMSRNB  Skip line numbers = Y, C or N
+         PUT   RPFPRINT,PRTLINE        Write data line
+         MVC   PRTLINE,PRTLINE-1       Blank line
+         MVC   PRTLINE+1(19),=CL20'Ignore case:'
+         MVC   PRTLINE+20(1),COMMCASE  Ignore case = Y or N
+         PUT   RPFPRINT,PRTLINE        Write data line
+PRT999   DS    0H
+         L     R14,R14PRT              Restore register 14
+         BR    R14
+         PRINT NOGEN                   SUPPRESS PRINT FOR DCB
+MDLWORK  DCB   DSORG=PS,DDNAME=RPFWORK,MACRF=GM,EODAD=MEMS999,         X
+               EROPT=SKP
+MDLWRKL  EQU   *-MDLWORK
+MDLWORK2 DCB   DSORG=PO,DDNAME=RPFWORK2,MACRF=R,BLKSIZE=256,RECFM=F,   X
+               SYNAD=PDSSYN
+MDLWRK2L EQU   *-MDLWORK2
+MDLPRINT DCB   DSORG=PS,DDNAME=RPFPRINT,MACRF=PM,RECFM=FBA,LRECL=133,  X
+               BLKSIZE=6118            Output with SEARCH results
+MDLPRTL  EQU   *-MDLPRINT
+         PRINT GEN
+ERR1MDL  DC    CL25'-- Alloc error xxxx PRINT'  +15
+ERR2TXT  DC    CL25'---- Open data set failed'
+ERR3TXT  DC    CL25'--------------- I/O error'
+*
+PRTDSNL  DC    AL2(10)                 Real length of field below
+PRTDSN   DC    CL44'&&&&RPFPRINT'      DSN of temporary PRINT out
+*
+PATPAGE  DC    XL7'4020206B202120'
+PATLINE  DC    XL8'4020202020202120'
+PATTOTAL DC    XL10'40206B2020206B202120'
+         LTORG ,
+         DROP  ,
+         TITLE 'Working storage'
+*
+WORKAREA DSECT                         Working storage
+SAVE     DS    18F                     Our save area = 1st field
+DBW      DS    D                       Work field
+SAVEMSRC DS    13F                     Save registers MEMSRCH
+R14PRT   DS    F                       Save register 14 PRT routine
+R14TS    DS    F                       Save register 14 CALLTS routine
+LENSTR   DS    F                       Actual length of Search String
+PRMCNV   DS    2F                      PARM for RPFCNVDT
+PRMLST1  DS    F                       PARM for RPFBRO
+RPFDAPL  DS    5F                      IKJDAIR parameter list
+ECB      DS    F                       an ECB for DAIR
+RPFD08   DS    CL84                    DAIR allocation parm block
+RPFD18   DS    CL40                    DAIR unallocation parm block
+*
+RPFWORK  DS    CL(MDLWRKL)             DCB's
+RPFWORK2 DS    CL(MDLWRK2L)            ,,
+RPFPRINT DS    CL(MDLPRTL)             ,,
+DECB     READ  DECB2,SF,0,0,'S',MF=L
+DECBL    EQU   *-DECB
+LNKLST   LINK  EP=*,SF=L
+*
+EXLST    DS    0F                      JFCB exit RPFWORK
+         DC    X'87',AL3(JFCB)
+JFCB     DS    CL176
+*
+LINECNT  DS    PL2
+*
+LINENBR  DS    PL4                     Line number
+PAGECNT  DS    PL3
+TOTAL    DS    PL4
+HITCNT   DS    PL4
+SW       DS    X
+$MBRHDR  EQU   128                     If on: member name printed
+$TOTAL   EQU   64                      If on: Total line to be printed
+*
+DDMMYY   DS    0CL49                   Output field from RPFCNVDT
+DAYNBR   DS    CL2                     Daynbr in the week - 01=SUN
+DAYNM#E  DS    CL9                     Dayname in English
+DAYNM#D  DS    CL9                     Dayname in Dutch
+         DS    CL1
+DD       DS    CL2
+         DS    CL1
+MONNBR   DS    CL2                     Monthnbr in year - 01=Jan
+MNAME#E  DS    CL9                     Monthname in English
+MNAME#D  DS    CL9                     Monthname in Dutch
+         DS    C
+CC       DS    CL2                     Century
+YY       DS    CL2                     Year
+*
+YYDDD    DS    PL4                     Julian date (packed)
+*
+SRCHSTR  DS    CL25
+HEADER1  DS    0CL133
+HTXT1    DS    CL24
+HDR1DSN  DS    CL44                    Contains DSN to be searched
+HTXT2    DS    CL15
+HDR1STR  DS    CL25
+HTXT3    DS    CL1
+JULTODAY DS    CL10                    Date of today
+HTXT4    DS    CL7
+HDR1PAGE DS    CL7
+*
+ERR1TXT  DS    CL25
+         DS    0H
+DIRAREA  DS    CL256                   Input buffer RPFWORK2
+GETAREA  DS    CL260                   Member record
+GETAREA2 DS    CL256                   Contains member record in caps
+*
+         DC    C' '                    \_____ MVC LINE _______/
+PRTLINE  DS    CL133                   /      LINE-1          \
+WORKL    EQU   *-WORKAREA
+         TITLE 'Other DSECTS used by RPFSRCH'
+*
+COMMAREA RPFCOMM
+         PRINT NOGEN
+         IHAPDS PDSBLDL=NO                                         @rpb
+         DCBD  DSORG=PO,DEVD=DA
+         IEZDEB
+         IKJCPPL
+         IKJECT
+         IKJDAPL
+         IKJDAP08
+         IKJDAP18
+         CVT   DSECT=YES,LIST=NO
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END
