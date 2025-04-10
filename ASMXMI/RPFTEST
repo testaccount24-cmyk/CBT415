@@ -1,0 +1,913 @@
+RPFTEST  TITLE 'TEST MONITOR FOR RPF INTERNAL USE ONLY'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFTEST                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFMAIN                                       *
+*                                                                     *
+*        Function:      For internal use only and at your own risk    *
+*                       Possibility to change the workspace addresses *
+*                       and reload the pre-loaded RPF modules.        *
+*                       Display the internal return codes             *
+*                       Attach a user written RPFTEMP module.         *
+*                                                                     *
+*        Return codes:  00 - always                                   *
+*                                                                     *
+*        Change log:                                                  *
+*        Nov 21,2019 RPr: Complete redesign                           *
+*        Apr 02,2020 RPr: Remove entry point RPFALLOC and add         *
+*                         entry point RPFC3270                        *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Oct 25,2022 RPr: Leave fullscreen mode if the password is    *
+*                         asked.                                      *
+*        Feb 22,2023 RPr: RPFTEST made re-entrant and re-usable.      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+RPFTEST  CSECT
+RPFTEST  AMODE 31                      *                         @rpa01
+RPFTEST  RMODE 24                      *                         @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFTEST,R12             Provide addressability
+         L     R11,0(,R1)              Load RPFCOMM
+         USING COMMAREA,R11            Provide addressability
+         GETMAIN R,LV=WORKL            Allocate working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(0,R13)             Forward pointer
+         LR    R13,R1                  Chain the save areas
+         USING WORKAREA,R13            Provide address. working strg
+         MVC   RPFTEMP(4),=X'0001000E' 1 entries + length
+         MVC   RPFTEMP+4(8),=CL8'RPFTEMP'  Exit module name
+         B     START
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         LA    R0,SCREENS              Output
+         L     R2,=V(SCREENTX)         Input
+         LA    R1,SCREENL              Length
+         LR    R3,R1                   Length
+         MVCL  R0,R2                   Copy screen contents
+         LA    R9,SCREENS
+         USING SCREENTX,R9             Address the screens
+         ST    R11,PARMCOMM            Save for later use
+         MVC   SCR1UID,COMMUSER        TSO userid into screen
+         MVC   SCR1TXT(1),COMMCMD      Move EW or EWA
+         MVC   SCR4TXT(1),COMMCMD      Move EW or EWA
+         MVC   SCR7TXT(1),COMMCMD      Move EW or EWA
+         MVC   SCR9999(1),COMMCMD      Move EW or EWA
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         LM    R4,R5,COMMSIZE          Pickup lines
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1TXT+3
+         STCM  R0,3,SCR4TXT+3
+         STCM  R0,3,SCR7TXT+3
+*
+         LA    R0,2                    Row 2
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R2C1+1
+         STCM  R0,3,S4R2C1+1
+         STCM  R0,3,S7R2C1+1
+         STCM  R0,3,S8R2C1+1
+*
+         LA    R0,3                    Row 3
+         LA    R1,62                   Column 62
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R3C62+1
+*
+         LA    R0,4                    Row 4
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4R4C1+1
+         STCM  R0,3,S7R4C1+1
+*
+         LA    R0,6                    Row 6
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S7R6C1+1
+*
+         LA    R0,6                    Row 6
+         LA    R1,2                    Column 2
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4R6C2+1
+*
+         LA    R0,8                    Row 8
+         LA    R1,2                    Column 2
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4R8C2+1
+*
+         L     R0,COMMSIZE             Row last
+         LA    R1,2                    Column 2
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC2+1
+*
+         L     R0,COMMSIZE             Row Last
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4LAST+1
+         STCM  R0,3,S7LAST+1
+         STCM  R0,3,S8LAST+1
+*
+         LA    R3,S4R9C2               Pickup row in SCR4
+         LA    R4,9                    First data line is line9
+         LA    R5,14                   Last data line is line22
+SCR01    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,2                    Parameter column (2)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,S4L1(,R3)            Next line in screen
+         BCT   R5,SCR01                And do complete screen
+         LA    R3,R4C4                 Point to data area in screen
+         LA    R4,4                    First data line is line4
+         LA    R5,6                    Last data line is line 9
+SCR03    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,4                    Parameter column (4)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+*
+         LA    R4,2(,R4)               Increase line number + blank lne
+         LA    R3,R4C4L(,R3)           Next line in screen
+         BCT   R5,SCR03                And do complete screen
+*
+         LA    R3,S7R7C1               Point to data area in screen
+         LA    R6,S8R7C1               Point to data area in screen
+         LA    R4,7                    First data line is line7
+         LA    R5,14                   Last  data line is line20
+SCR05    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column (1)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And
+         STCM  R0,3,1(R6)                  Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,S7LEN(,R3)           Next line in screen
+         LA    R6,S8LEN(,R6)           Next line in screen
+         BCT   R5,SCR05                And do complete screen
+*
+*        end of screen setup           ------------------------------*
+*
+AUTH     CLC   COMMPSWD,=CL8' '        No password in RPFCOMM?
+         BE    PUT1
+         CLC   COMMPSWD,=X'0000000000000000'
+         BE    PUT1
+         CLC   COMMUSER,=C'A0611   '   Is it me?
+         BE    PUT1
+         CLC   COMMUSER,=C'Z531415 '   Is it still me?
+         BE    PUT1
+*
+         AIF   (&SVS).SVS1
+         STLINENO LINE=1,MODE=OFF      Set fullscreen mode off
+.SVS1    ANOP
+         LA    R4,5                    Max 5 tries to enter password
+AUTH01   LA    R1,SCR3TXT              Area address
+         LA    R0,SCR3LEN              Length
+         TPUT  (1),(0),R               Ask for password
+         LA    R0,40                   Length
+         LA    R1,BUFFER               Area address
+         ICM   R1,8,=B'10000000'       Indicate TGET
+         TGET  (1),(0),R               Ask for password
+         OC    BUFFER(8),=CL8' '       Xlate to upper
+         CLC   BUFFER(L'COMMPSWD),COMMPSWD Test if password matches
+         BE    PUT0
+         LA    R1,ERR4TXT              Area address
+         LA    R0,L'ERR4TXT            Length
+         TPUT  (1),(0),R               Msg: password not matched
+         BCT   R4,AUTH01
+         BAL   R2,STMODE               Set FULLSCR mode
+         B     RETURN                  Too many wrong passwords
+STMODE   DS    0H
+         AIF   (&SVS).SVS2
+         STFSMODE ON,INITIAL=NO        Re-issue fullscreen mode
+.SVS2    ANOP
+         BR    R2
+*
+PUT0     DS    0H
+         BAL   R2,STMODE               Set FULLSCR mode
+PUT1     DS    0H
+         MVI   BUFFER,C' '             Blank output buffer
+         MVC   BUFFER+1(L'BUFFER-1),BUFFER
+         LA    R1,SCR1TXT              Parm TPUTS (address screen)
+         LA    R0,SCR1LEN              Parm TPUTS (length  screen)
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 RPF test menu on screen
+GET1     BAL   R14,CONV                Read screen and convert data
+         B     GET1A(R15)              Initiate branch list
+GET1A    B     GET1B                   Continue
+         B     RETURN                  PF03/PF15 pressed
+         B     PUT1                    Other key pressed
+GET1B    LTR   R1,R1                   Nothing received?
+         BZ    PUT1                    Yes: re-display TEST menu
+         MVI   MSG1,C'-'               Clear
+         MVC   MSG1+1(L'MSG1-1),MSG1         message
+*
+FUNC1    CLI   BUFFER,C'1'
+         BNE   FUNC2
+         RPFSA24                       Switch to amode 24        @rpa01
+         LA    R1,PARMCOMM             A(RPFCOMM)
+         LINK  EP=RPFSTAT                                        @rpa01
+         RPFSA31                       Restore addressing mode   @rpa01
+         B     PUT1
+FUNC2    CLI   BUFFER,C'2'
+         BE    OPER
+FUNC3    CLI   BUFFER,C'3'
+         BE    ALTER
+FUNC4    CLI   BUFFER,C'4'
+         BNE   FUNC5
+         XC    ECBTEMP,ECBTEMP         Clear ECB
+         BLDL  0,RPFTEMP               Try to find RPFTEMP
+         LTR   R15,R15                 Found?
+         BNZ   ERR2                    No: issue error message
+         XC    ATCHLST(ALSTLEN),ATCHLST Clear Subfield ATTACH
+         LA    R15,ATCHLST             SF field
+         LA    R2,ECBTEMP              ECB address
+         ATTACH EP=RPFTEMP,ECB=(2),PARAM=((11)),                       X
+               SF=(E,(15)),MF=(E,ATCHPRM)
+*                                      Attach RPFTEMP
+         ST    R1,SAVETCB              Save TCB address
+         WAIT  ECB=ECBTEMP             Wait for completion
+         DETACH SAVETCB                DETACH subtask
+         CVD   R15,DBW                 Convert return code and ..
+         MVC   MSG1,MSG1TXT            Msg: RPFTEMP ended, rc=xxxx
+         UNPK  MSG1+21(4),DBW          .. set into message
+         OI    MSG1+24,X'F0'           Clear sign
+         B     PUT1
+FUNC5    CLI   BUFFER,C'5'             Return codes?
+         BNE   FUNCX
+         BAL   R14,RCODES              Display return code screen
+         B     PUT1
+FUNCX    CLI   BUFFER,C'X'             Exit?
+         BE    RETURN                  Yes: end of routine
+         B     PUT1                    Re-display screen
+ERR2     MVC   MSG1,ERR2TXT            Msg: RPFTEMP not found
+         B     PUT1                    Test menu on screen
+*
+OPER     DS    0H
+         LA    R1,SCR9999              Parm TPUTS (address screen)
+         LA    R0,L'SCR9999            Parm TPUTS (length  screen)
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Clear screen
+         RPFSA24                       Switch to amode 24        @rpa01
+         LA    R1,PARMCOMM             A(RPFCOMM)
+         LINK  EP=RPFOPER
+         RPFSA31                       Restore addressing mode   @rpa01
+         B     PUT1
+*
+RETURN   LR    R3,R13                  Area to be freed
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release working storage
+         RETURN (14,12),RC=0
+*
+*---------------------------------------------------------------------*
+*
+*        Process Alter/Display and reload RPF modules
+*        With Alter you can alter some addresses at the left
+*        side of the screen (the Pxx values). With RELOAD 'module name'
+*        you can reload RPF modules
+*        The command RESTORE restores the addresses to the original
+*
+*------------------------------------------ (C)-2025 Skybird systems -*
+ALTER    DS    0H
+         MVC   HEXBIN,COMWSTRT         Start address EDIT workspace
+         BAL   R14,HEXDIS
+         MVC   PTR51(8),DISFLD
+         MVC   HEXBIN,COMWRKLN         Length of EDIT workspace
+         BAL   R14,HEXDIS
+         MVC   PTR52(8),DISFLD
+         MVC   HEXBIN,COMWRKND         End address of EDIT workspace
+         BAL   R14,HEXDIS
+         MVC   PTR53(8),DISFLD
+         MVC   HEXBIN,COMMLAST         Last data record in workspace
+         BAL   R14,HEXDIS
+         MVC   PTR55(8),DISFLD
+         MVC   HEXBIN,COMMFSCR         First data record in screen
+         BAL   R14,HEXDIS
+         MVC   PTR56(8),DISFLD
+         ST    R11,HEXBIN              Address of RPFCOMM area
+         BAL   R14,HEXDIS
+         MVC   PTR58(8),DISFLD
+         MVC   HEXBIN,EPDAIR           EP of RPFDAIR
+         BAL   R14,HEXDIS
+         MVC   EPA51(8),DISFLD
+         MVC   HEXBIN,EPDATAL          EP of RPFDATAL
+         BAL   R14,HEXDIS
+         MVC   EPA52(8),DISFLD
+         MVC   HEXBIN,EPC3270          EP of RPFC3270
+         BAL   R14,HEXDIS
+         MVC   EPA53(8),DISFLD
+         MVC   HEXBIN,EPEDITL          EP of RPFEDITL
+         BAL   R14,HEXDIS
+         MVC   EPA54(8),DISFLD
+         MVC   HEXBIN,EPEDIT           EP of RPFEDIT
+         BAL   R14,HEXDIS
+         MVC   EPA55(8),DISFLD
+         MVC   HEXBIN,EPFILL           EP of RPFFILL
+         BAL   R14,HEXDIS
+         MVC   EPA56(8),DISFLD
+         MVC   HEXBIN,EPFIND           EP of RPFFIND
+         BAL   R14,HEXDIS
+         MVC   EPA57(8),DISFLD
+         MVC   HEXBIN,EPUTIL           EP of RPFUTIL
+         BAL   R14,HEXDIS
+         MVC   EPA58(8),DISFLD
+         MVC   HEXBIN,EPSAVE           EP of RPFSAVE
+         BAL   R14,HEXDIS
+         MVC   EPA59(8),DISFLD
+         MVC   HEXBIN,EPCHNG           EP of RPFCHNG
+         BAL   R14,HEXDIS              Convert to display
+         MVC   EPA60(8),DISFLD
+         MVC   HEXBIN,EPSUB            EP of RPFSUB
+         BAL   R14,HEXDIS              Convert to display
+         MVC   EPA61(8),DISFLD
+         MVC   HEXBIN,EPPFK            EP of RPFPFK
+         BAL   R14,HEXDIS              Convert to display
+         MVC   EPA62(8),DISFLD
+         MVC   HEXBIN,EPCNVDT          EP of RPFCNVDT
+         BAL   R14,HEXDIS              Convert to display
+         MVC   EPA63(8),DISFLD
+         MVC   HEXBIN,EPVTOC1          EP of RPFVTOC1
+         BAL   R14,HEXDIS              Convert to display
+         MVC   EPA64(8),DISFLD
+         LA    R1,SCR4TXT              Parm TPUTS (address screen)
+         LA    R0,SCR4LEN              Parm TPUTS (length  screen)
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 RPF Alter/display menu
+         MVI   MSG4,C'-'               Clear
+         MVC   MSG4+1(L'MSG4-1),MSG4         message
+ALTER00  EQU   *
+         BAL   R14,CONV
+         B     ALTER00A(R15)           Initiate branch list
+ALTER00A B     ALTER00B                Continue
+         B     PUT1                    PF03/PF15 pressed
+         B     ALTER                   Other key pressed
+ALTER00B EQU   *
+         LTR   R1,R1
+         BZ    PUT1
+         CLC   BUFFER(3),=C'END'       End command?
+         BE    PUT1                    Yes: leave screen
+         CLC   BUFFER(7),=C'RESTORE'
+         BE    RESTORE
+         CLC   BUFFER(6),=C'RELOAD'    Reload a module?
+         BE    RELOAD                  Yes: do that
+         CLI   BUFFER,C'P'             'Pn=' entered?
+         BNE   ALTER57                 No: invalid command
+         CLI   BUFFER+2,C'='           'Pn=' given?
+         BNE   ALTER55                 No: invalid pointer
+         CLI   BUFFER+1,C'8'           P8 cannot be altered
+         BNL   ALTER53
+         CLI   BUFFER+1,C'2'           COMWSTRT and COMWRKLN (P1 & P2)
+*                                      cannot be altered
+         BNH   ALTER53
+         LA    R3,8
+         LA    R4,BUFFER+3             Point after 'P '
+ALTER01  LA    R5,DISTAB1              Table 0-9, A-F
+         LA    R6,DISTAB2              Table 0-9, X'FA'-X'FF'
+         LA    R7,16
+ALTER03  CLC   0(1,4),0(5)
+         BE    ALTER05
+         LA    R5,1(,R5)
+         LA    R6,1(,R6)
+         BCT   R7,ALTER03
+         B     ALTER51
+ALTER05  MVC   0(1,R4),0(R6)           Replace character by char
+         LA    R4,1(,R4)               in DISTAB2
+         BCT   R3,ALTER01
+         PACK  DISBIN(5),BUFFER+3(9)
+         CLC   DISBIN,COMWSTRT
+         BL    ALTER51
+         CLC   DISBIN,COMWRKND
+         BH    ALTER51
+         CLC   BUFFER(3),=C'P3='       P3 = COMWRKND (end workspace)
+         BNE   ALTER09
+         MVC   COMWRKND,DISBIN         COMWRKND altered
+         B     ALTER
+ALTER09  CLC   BUFFER(3),=C'P5='       Last record in workspace
+         BNE   ALTER11
+         MVC   COMMLAST,DISBIN         New last record in RPFCOMM
+         B     ALTER
+ALTER11  CLC   BUFFER(3),=C'P6='
+         BNE   ALTER57
+         MVC   COMMFSCR,DISBIN         COMMFSCR altered
+         B     ALTER
+ALTER51  MVC   MSG4,ERR5TXT            Msg: Invalid address
+         B     ALTER
+ALTER53  MVC   MSG4,ERR6TXT            Msg: Address not altered
+         B     ALTER
+ALTER55  MVC   MSG4,ERR7TXT            Msg: Pointer not specified
+         B     ALTER
+ALTER57  MVC   MSG4,ERR8TXT            Msg: Invalid command
+         B     ALTER
+RELOAD   DS    0H
+         LA    R2,EPDAIR               Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFDAIR'  Reload RPFDAIR?
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPDATAL              Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFDATAL' Reload RPFDATAL
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPC3270              Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFC3270' Reload RPFC3270
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPEDITL              Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFEDITL' Reload RPFEDITL
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPEDIT               Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFEDIT'  Reload RPFEDIT
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPCHNG               Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFCHNG'  Reload RPFCHNG
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPFILL               Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFFILL'  Reload RPFFILL
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPFIND               Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFFIND'  Reload RPFFIND
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPUTIL               Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFUTIL'  Reload RPFUTIL?
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPSAVE               Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFSAVE'  Reload RPFSAVE?
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPSUB                Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFSUB'   Reload RPFSUB?
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPPFK                Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFPFK'   Reload RPFPFK?
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPCNVDT              Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFCNVDT' Reload RPFCNVDT?
+         BE    RELOAD5                 Yes: reload
+         LA    R2,EPVTOC1              Entry Point to alter
+         CLC   BUFFER+7(8),=CL8'RPFVTOC1' Reload RPFVTOC1?
+         BE    RELOAD5                 Yes: reload
+         MVC   MSG4,ERR9TXT            Msg: Mod xxxxxxxx unknown
+         MVC   MSG4+9(8),BUFFER+7      Move module name
+         B     ALTER                   Redisplay screen
+RELOAD5  DS    0H
+         DELETE EPLOC=BUFFER+7         Reload ...
+         LOAD  EPLOC=BUFFER+7          ... the module
+         ST    R0,0(R2)                Alter entry point
+         MVC   MSG4,MSG2TXT            Msg: Mod xxxxxxxx reloaded
+         MVC   MSG4+8(8),BUFFER+7      Move module name
+         B     ALTER                   Display new screen
+*
+RESTORE  L     R2,COMWSTRT             Start address workspace
+         L     R1,COMWRKLN             Length of EDIT workspace
+         LA    R2,0(R1,R2)             End of EDIT workspace
+         SL    R2,=A(NEXTENT)          Minus 1 entry
+         ST    R2,COMWRKND             End of workspace
+         XC    COMMFSCR,COMMFSCR       and ..
+         B     ALTER
+*
+HEXDIS   DS    0H
+         UNPK  DISFLD(9),HEXBIN(5)     Convert a HEX
+         MVZ   DISFLD(9),HEXNULL                    field
+         TR    DISFLD(8),HEXTAB                          to EBCDIC
+         MVI   DISFLD+8,C' '
+         BR    R14
+*---------------------------------------------------------------------*
+*                                                                     *
+*        C O N V    Convert the Main menu and Alter/Display screen    *
+*                   Do a TGET ASID to obtain the AID byte to          *
+*                   test if 'ENTER' is used or PF03 or PF15.          *
+*                   After this test remove all de unnecesary SBA's.   *
+*                                                                     *
+*        Returncodes: 00 - Screen converted. Enter key is used        *
+*                          Reg 1 contains the length of the screen    *
+*                     04 - Screen not converted. PF03/PF15 key used.  *
+*                     08 - Screen not converted. Other key is used.   *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+CONV     DS    0H
+         ST    R14,R14CONV             Save register 14
+         LA    R5,BUFFER               Output formatted buffer
+         L     R3,COMMSCR              Load screen address
+         LR    R1,R3                   Duplicate area address
+         LA    R0,802                  Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LR    R4,R1                   Save gotten length
+         CLI   0(R3),X'F3'             PFK3 (End) pressed?
+         BE    CONV051                 Yes: exit
+         CLI   0(R3),X'C3'             PFK15 (End) pressed?
+         BE    CONV051                 Yes: exit
+         CLI   0(R3),X'7D'             Enter key pressed?
+         BNE   CONV053                 No: Invalid key
+         XR    R2,R2                   Init output length
+         SH    R4,=H'3'                Skip AID byte and cursor address
+         BNP   CONV053                 Zero or less: branch
+         LA    R3,3(,R3)
+         LA    R5,BUFFER               Output address
+*
+*        Input screen is pointed to by register 3
+*        Output screen is pointed to by register 5
+*        The next section will remove all the SBA's
+*
+CONV001  CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  MVC   0(1,R5),0(R3)           Move input byte
+         OI    0(R5),X'40'             Xlate to upper
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV055                 Conversion finished
+CONV003  LA    R3,3(,R3)               Skip 3 bytes input
+         SH    R4,=H'2'                Discount with 2
+         BNP   CONV055                 <=0: conversion finished
+         BCT   R4,CONV001              Test next byte
+         B     CONV055
+CONV051  DS    0H                      PFK03/15 pressed
+         LA    R15,4                   Rc = 4
+         B     CONV099
+CONV053  DS    0H                      Unknown key pressed
+         LA    R15,8                   RC=0008
+         B     CONV099
+CONV055  DS    0H                      No errors
+         XR    R15,R15                 Rc = 0
+CONV099  LR    R1,R2                   Output length in register 1
+         L     R14,R14CONV             Restore register 14
+         BR    R14                     Return
+*
+RCODES   DS    0H
+         ST    14,R14RCDS              Save register 14
+RCODES01 DS    0H
+         LA    R1,SCR7TXT              Parm TPUTS (address screen)
+         LA    R0,SCR7LEN              Parm TPUTS (length  screen)
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 RPF return codes screen
+         BAL   R14,CONV
+         B     RCODES0A(R15)           Initiate branch list
+RCODES0A B     RCODES0B                Continue
+         B     RCODES99                PF03/PF15 pressed
+         B     RCODES0B                Other key pressed
+RCODES0B EQU   *
+         CLC   BUFFER(3),=C'END'
+         BE    RCODES99
+         LA    R1,SCR8TXT              Parm TPUTS (address screen)
+         LA    R0,SCR8LEN              Parm TPUTS (length  screen)
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 RPF second return codes screen
+         BAL   R14,CONV
+         B     RCODES0C(R15)           Initiate branch list
+RCODES0C B     RCODES0D                Continue
+         B     RCODES99                PF03/PF15 pressed
+         B     PUT1                    Other key pressed
+RCODES0D EQU   *
+         CLC   BUFFER(4),=C'BACK'
+         BE    RCODES01
+RCODES99 L     R14,R14RCDS             Restore register 14
+         BR    R14                     Return
+*
+         TITLE 'Constants'
+ERR2TXT  DC    CL25'------- RPFTEMP not found'
+ERR4TXT  DC    CL25'---- Password not matched'
+ERR5TXT  DC    CL25'--------- Invalid address'
+ERR6TXT  DC    CL25'----- Address not altered'
+ERR7TXT  DC    CL25'--- Pointer not specified'
+ERR8TXT  DC    CL25'--------- Invalid command'
+ERR9TXT  DC    CL25'- Module xxxxxxxx unknown'  +9
+MSG1TXT  DC    CL25'-- RPFTEMP ended rc= XXXX'
+MSG2TXT  DC    CL25' Module xxxxxxxx reloaded'  +8
+HEXTAB   DC    CL16'0123456789ABCDEF'
+DISTAB1  DC    X'F0F1F2F3F4F5F6F7F8F9C1C2C3C4C5C6'
+DISTAB2  DC    X'F0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF'
+HEXNULL  DC    XL9'000000000000000000'
+         LTORG ,
+         DROP
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+         TITLE 'SCREEN FORMATS'
+SCREENTX CSECT
+SCR3TXT  DC    C'Enter password'
+SCR3LEN  EQU   *-SCR3TXT
+*
+SCR1TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR1TXT  DC    X'00C21100001DF8'       EW or EWA, r1, c1
+SCR1LNE  DC    CL79'------------------------------- RPF Test menu -----C
+               ----------------------------'
+         ORG   SCR1LNE+54
+MSG1     DS    CL25
+         ORG   ,
+SC1R2C1  DC    X'110000',X'1DF8',C'Option  ===>',X'1DC113'         @rp1
+         DC    C'       ',X'1DF0'                                  @rp1
+SC1R3C62 DC    X'110000',AL3(GREEN),C'User ID - ',AL3(TURQ) r03,c62+
+SCR1UID  DS    CL7
+*
+R4C4     DC    X'110000',AL3(WHITE),C'1  '          r04,c04+
+         DC    AL3(TURQ)
+         DC    CL13'STATUS'
+         DC    AL3(GREEN)
+         DC    CL40'Display current RPF status'
+R4C4L    EQU   *-R4C4
+         DC    X'110000',AL3(WHITE),C'2  '
+         DC    AL3(TURQ)
+         DC    CL13'OPERATOR'
+         DC    AL3(GREEN)
+         DC    CL40'Enter operator mode'
+*
+         DC    X'110000',AL3(WHITE),C'3  '
+         DC    AL3(TURQ)
+         DC    CL13'ALTER/DISP.'
+         DC    AL3(GREEN)
+         DC    CL40'Enter Alter / Display mode'
+*
+         DC    X'110000',AL3(WHITE),C'4  '
+         DC    AL3(TURQ)
+         DC    CL13'ATTACH'                                        @rp2
+         DC    AL3(GREEN)
+         DC    CL40'Attach RPFTEMP module to be tested'            @rp2
+*
+         DC    X'110000',AL3(WHITE),C'5  '
+         DC    AL3(TURQ)
+         DC    CL13'RC CODES'
+         DC    AL3(GREEN)
+         DC    CL40'Display RPF internal return codes'
+*
+         DC    X'110000',AL3(WHITE),C'X  '
+         DC    AL3(TURQ)
+         DC    CL13'EXIT'
+         DC    AL3(GREEN)
+         DC    CL34'Return to MAIN menu'
+RLASTC2  DC    X'110000',AL3(TURQ)           r last c2+
+         DC    C'Hit ',AL3(WHITE),C'PF03/15 ',AL3(TURQ)
+         DC    C'to return to the RPF main menu'
+SCR1LEN  EQU   *-SCR1TXT
+SCR1LENF EQU   *-SCR1TXTF
+*
+SCR9999F DC    X'27'                   Escape character TPUT FULLSCR
+SCR9999  DC    X'00C21140401D4013'   Command = EW or EWA
+*
+SCR4TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR4TXT  DC    X'00C21100001DF8'     Command = EW or EWA
+SCR4LNE  DC    CL79'RPF Alter/Display and Reload RPF modules: ---------C
+               ----------------------------'
+         ORG   SCR4LNE+54
+MSG4     DC    CL25'-------------------------'
+         ORG   ,
+S4R2C1   DC    X'110000',X'1DF8',C'Cmd =>',X'1D4013' r2,c1+
+REP4     DC    CL24' ',X'1DF0'
+*
+S4R4C1   DC    X'110000',X'1DF8',AL3(YELLOW) r4,c1+
+         DC    CL78'RPF - Addresses, Alter/Display/Reload mode'
+*
+S4R6C2   DC    X'110000'               r6,c2+
+         DC    AL3(TURQ)
+         DC    CL6'Enter ',AL3(WHITE)
+         DC    CL11'Px=hhhhhhhh',AL3(TURQ)
+         DC    CL13' to Alter or ',AL3(WHITE)
+         DC    CL14'RELOAD module ',AL3(TURQ)
+         DC    CL34'to reload a module.',AL3(YELLOW)
+*
+S4R8C2   DC    X'110000',AL3(USCORE)   r8,c2+
+         DC    CL22'Address: Ref: Pointer:'
+         DC    AL3(HDEFAULT)
+         DC    CL18' ',AL3(USCORE)
+         DC    CL25'Address: Ref: RPF module:'
+         DC    AL3(HDEFAULT)
+         DC    AL3(TURQ)
+*
+S4R9C2   DC    X'110000'               r9,c2+
+PTR51    DC    CL40'00000000 (P1) Start EDIT workspace      '
+EPA51    DC    CL23'00000000 (E1) RPFDAIR'
+S4L1     EQU   *-S4R9C2
+         DC    X'110000'
+PTR52    DC    CL40'00000000 (P2) Length EDIT workspace     '
+EPA52    DC    CL23'00000000 (E2) RPFDATAL'
+         DC    X'110000'
+PTR53    DC    CL40'00000000 (P3) End of EDIT workspace     '
+EPA53    DC    CL23'00000000 (E3) RPFC3270'
+         DC    X'110000'
+PTR55    DC    CL40'00000000 (P5) Last record in workspace  '
+EPA54    DC    CL23'00000000 (E4) RPFEDITL'
+         DC    X'110000'
+PTR56    DC    CL40'00000000 (P6) First data line on screen '
+EPA55    DC    CL23'00000000 (E5) RPFEDIT'
+         DC    X'110000'
+         DC    CL40'                                        '
+EPA56    DC    CL23'00000000 (E6) RPFFILL'
+         DC    X'110000'
+         DC    CL40' '
+EPA57    DC    CL23'00000000 (E7) RPFFIND'
+         DC    X'110000'
+PTR58    DC    CL40'00000000 (P8) Address of RPFCOMM        '
+EPA58    DC    CL23'00000000 (E8) RPFUTIL'
+         DC    X'110000'
+PTR59    DC    CL40'                                        '
+EPA59    DC    CL23'00000000 (E9) RPFSAVE'
+         DC    X'110000'
+PTR60    DC    CL40' '
+EPA60    DC    CL23'00000000 (EA) RPFCHNG'
+         DC    X'110000'
+PTR61    DC    CL40' '
+EPA61    DC    CL23'00000000 (EB) RPFSUB'
+         DC    X'110000'
+PTR62    DC    CL40' '
+EPA62    DC    CL23'00000000 (EC) RPFPFK'
+         DC    X'110000'
+PTR63    DC    CL40' '
+EPA63    DC    CL23'00000000 (ED) RPFCNVDT'
+         DC    X'110000'
+PTR64    DC    CL40' '
+EPA64    DC    CL23'00000000 (EE) RPFVTOC1'
+S4LAST   DC    X'110000'               R last, c1+
+         DC    AL3(WHITE),C'For internal use only, press PFK3 or PFK15 x
+               to exit'
+SCR4LEN  EQU   *-SCR4TXT
+SCR4LENF EQU   *-SCR4TXTF
+*
+SCR7TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR7TXT  DC    X'00C21140401DF8' WRITE ERASE / R01,C00
+         DC    CL54'RPF Return codes ----------------------------------C
+               ---'
+MSG7     DC    CL25'-------------------------'
+S7R2C1   DC    X'11C150',X'1DF8',C'Cmd =>',X'1D4013'
+REP7     DC    CL24' ',X'1DF0'
+S7R4C1   DC    X'11C3F0',X'1DF8'       r4,c1
+         DC    C'R P F - Return codes, internal use only'
+         DC    X'1DF0'
+S7R6C1   DC    X'11C650',AL3(YELLOW)   r6,c1
+         DC    C' '
+         DC    AL3(USCORE)
+         DC    C'Module:',AL3(HDEFAULT)
+         DC    C'  '
+         DC    AL3(USCORE)
+         DC    C'RC:',AL3(HDEFAULT)
+         DC    C'  '
+         DC    AL3(USCORE)
+         DC    C'Description:',AL3(HDEFAULT),AL3(TURQ)
+S7R7C1   DC    X'110000'               r7,c1
+         DC    CL60' RPFEDITL 0000 Load successful'
+S7LEN    EQU   *-S7R7C1
+         DC    X'110000'
+         DC    CL60'          0004 Load terminated, workspace truncatedC
+               '
+         DC    X'110000'
+         DC    CL60'          0008 Nothing loaded, file empty'
+         DC    X'110000'
+         DC    CL60'          0012 I/O error input'
+         DC    X'110000'
+         DC    CL60'          0016 Data set/member in use'
+         DC    X'110000'
+         DC    CL60' '
+         DC    X'110000'
+         DC    CL60' RPFEDIT  0000 EDIT successful'
+         DC    X'110000'
+         DC    CL60'          0004 Load terminated'
+         DC    X'110000'
+         DC    CL60'          0008 Nothing loaded, file empty'
+         DC    X'110000'
+         DC    CL60'          0012 I/O error input'
+         DC    X'110000'
+         DC    CL60'          0016 EDIT canceled, data set/member in usC
+               e'
+         DC    X'110000'
+         DC    CL60'          0020 Save canceled by PF3/PF15 or CANCEL C
+               command'
+         DC    X'110000'
+         DC    CL60' '
+         DC    X'110000'
+         DC    CL60' '
+         DC    X'110000'
+S7LAST   DC    X'115CF0',AL3(WHITE)
+         DC    C' 1 more ...'
+SCR7LEN  EQU   *-SCR7TXT
+SCR7LENF EQU   *-SCR7TXTF
+*
+SCR8TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR8TXT  DC    X'F1C2'
+*
+S8R2C1   DC    X'110000',X'1DF8',C'Cmd =>',X'1D4013'
+REP8     DC    CL24' ',X'1DF0',AL3(TURQ)
+S8R7C1   DC    X'110000'               r7,c1
+         DC    CL60' RPFDATAL 0000 Allocation successful'
+S8LEN    EQU   *-S8R7C1
+         DC    X'110000'
+         DC    CL60'          0004 Allocation failed, data set not in cC
+               atalog'
+         DC    X'110000'
+         DC    CL60'          0008 Allocation failed, data set not on vC
+               olume'
+         DC    X'110000'
+         DC    CL60'          0012 No member supplied, RPFPDS invoked'
+         DC    X'110000'
+         DC    CL60'          0020 LRECL of edited data > 255 or < 40'
+         DC    X'110000'
+         DC    CL60'          0032 Member not found or not supplied'
+         DC    X'110000'
+         DC    CL60'          0036 Access denied'
+         DC    X'110000'
+         DC    CL60'          0040 BLDL RC=8, Permanent I/O error'
+         DC    X'110000'
+         DC    CL60' RPFSAVE  0000 Workspace saved'
+         DC    X'110000'
+         DC    CL60'          0004 Abend x37 detected during SAVE'
+         DC    X'110000'
+         DC    CL60'          0008 Nothing saved PFK3/PFK15 pressed'
+         DC    X'110000'
+         DC    CL60'          0012 LIBRARIAN work data sets failed'
+         DC    X'110000'
+         DC    CL60' '
+         DC    X'110000'
+         DC    CL60' '
+S8LAST   DC    X'115CF0',AL3(WHITE)
+         DC    C' ... Last   '
+SCR8LEN  EQU   *-SCR8TXT
+SCR8LENF EQU   *-SCR8TXTF
+SCREENL  EQU   *-SCREENTX
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Our save area
+DBW      DS    D                       For CVB/CVD instructions
+SBAR0R1  DS    D                       Used in RCTOSBA
+PARMCOMM DS    F                       Address of address of RPFCOMM
+R14CONV  DS    F                       Save register 14 CONV
+R14RCDS  DS    F                       Save register 14 RCODES
+ATCHLST  ATTACH SF=L                   ATTACH SF=(E,ATCHLST)
+ALSTLEN  EQU   *-ATCHLST
+ATCHPRM  DS    XL4                     ATTACH MF=(E,ATCHPRM)
+ECBTEMP  DS    F                       ECB for subtask RPFTEMP
+SAVETCB  DS    F                       Save area TCB subtask
+RPFTEMP  DS    0F                      Align on fullword (BLDL)
+         DC    AL2(1)                  One entry
+         DC    AL2(14)                 Length of data
+         DC    CL8'RPFTEMP'            Name of exit
+TTRKZ    DC    XL6'00'                 TTRKZC
+BUFFER   DS    CL40
+HEXBIN   DS    F                       \_____________________/
+         DS    X                       / + Padding character \
+DISBIN   DS    F
+DISFLD   DS    CL9                     Work field HEXDIS
+SCREENS  DS    CL(SCREENL)             Screens mapped by SCREENTX
+WORKL    EQU   *-WORKAREA              Length working storage
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END

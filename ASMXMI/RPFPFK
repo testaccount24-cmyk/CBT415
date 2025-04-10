@@ -1,0 +1,456 @@
+RPFPFK   TITLE 'ALTER/DISPLAY RPF PFK SETTINGS'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:     RPFPFK                                           *
+*                                                                     *
+*        Attributes: RENT, REUS.                                      *
+*                                                                     *
+*        Function:   Display and/or Alter the Program Function Keys   *
+*                    (PFK) for RPF.                                   *
+*                    RPFPFK will be called by various RPF modules     *
+*                    A maximum of 24 PFK's will be supported.         *
+*                    The command in the PFK will be executed if       *
+*                    pressed on the corresponding Program Function Key*
+*                    If CON=N, the command will be executed           *
+*                    immediately. If CON=Y, the command will be set   *
+*                    in the command area only. With CON=X, you are    *
+*                    able to invalidate the PFK.                      *
+*                                                                     *
+*        Called by:  RPFARCH                                          *
+*                    RPFBRO                                           *
+*                    RPFDEF                                           *
+*                    RPFEDIT                                          *
+*                    RPFLIB                                           *
+*                    RPFMVCPY                                         *
+*                    RPFPDS                                           *
+*                    RPFTEST                                          *
+*                    RPFVTOC1                                         *
+*                                                                     *
+*        Returncodes:                                                 *
+*                    0000 - always                                    *
+*                                                                     *
+*        Registers:  Register 12 is the base register                 *
+*                    Register 13 points to the dynamic working storage*
+*                    Register 11 points to RPFCOMM.                   *
+*                    Register 9  points to the output buffer.         *
+*                                                                     *
+*        Change log:                                                  *
+*        Dec 18,2018 RPr: Module made suitable for amode 31/32/64@rpa01
+*        Feb 01,2019 RPr: 7 color support added                    @rp1
+*        Mar 30,2019 RPr: Support added for all kinds of 3270 screens *
+*                         up to 62 lines x 160 columns (3290)         *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Jun 06,2020 RPr: RPFPFK made reentrant.                      *
+*        Aug 04,2024 RPr: Accept Erase EOF + DEL key.                 *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFPFK   CSECT
+RPFPFK   AMODE 31                      *                         @rpa01
+RPFPFK   RMODE 24                      *                         @rpa01
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFPFK,R12              Provide addressability
+         L     R11,0(,R1)              Pickup parameter (RPFCOMM)
+         GETMAIN R,LV=WORKL            Acquire storage for our workarea
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1
+         B     START
+         DC    CL8'&SYSDATE',CL8'&SYSTIME'
+START    DS    0H
+         USING WORKAREA,R13            Address our workarea
+         USING COMMAREA,R11
+         LA    R0,SCREEN               PFK panel output
+         LA    R1,SCR5LENF             Length of screen
+         L     R2,=V(SCREENTX)         PFK panel input
+         LR    R3,R1                   Has the same length
+         MVCL  R0,R2                   Copy to dynamic area
+         LA    R10,SCREEN              Output PFK panel
+         USING SCREENTX,R10            Provide addressability
+         MVC   SCR5UID+30(8),COMMUSER  TSO userid into screen
+         MVC   SCR5TXT(1),COMMCMD      Move EW/EWA in data stream
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         LM    R4,R5,COMMSIZE          Pickup lines
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5TXT+3
+*
+         LA    R0,1                    Row 1
+         LA    R1,56                   Column 56+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC5R1C56+1
+*
+         LA    R0,2                    Row 2
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC5R2C1+1          And save in screen
+*
+         LA    R3,RCPFK                Point to 1st PFK entry
+         LA    R4,4                    First data line is line4
+         LA    R5,12                   Last data (PFK) line
+SCR01    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+         LR    R0,R4                   Parameter line
+         LA    R1,41                   Parameter column 41+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         LA    R6,RCPFKL1(,R3)         Point to second part PFK line
+         STCM  R0,3,1(R6)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,RCPFKL2(,R3)         Next line in screen
+         BCT   R5,SCR01                And do complete screen
+*
+         L     R4,COMMSIZE             # lines on screen
+*
+         LR    R0,R4                   Row last
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLAST+1            And save in screen
+*
+         BCTR  R4,0                    Point to last line -1
+         LR    R0,R4                   Row last
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R2NDLAST+1         And save in screen
+*
+*        end of screen setup           ------------------------------*
+*
+PUT1     DS    0H
+         LA    R1,12                 2x12 program function keys (PFKs)
+         LA    R14,RCPFK               First PFK line in screen
+         LA    R3,RCPFKL1(,R14)        2nd PFK in same line of screen
+         LA    R15,COMPFK01+1          Point to first PFK in RPFCOMM
+         LA    R2,COMPFK13+1           Point to first PFK in 2nd part
+PUT2     MVC   20(24,R14),1(R15)       Move PFK to screen
+         MVC   58(1,R14),0(R15)        Move CON=Y or CON=N to screen
+         MVC   20(24,R3),1(R2)         Move PFK to screen
+         MVC   58(1,R3),0(R2)          Move CON=Y or CON=N to screen
+         LA    R15,26(,R15)            Next PFK in RPFCOMM
+         LA    R2,26(,R2)              Next PFK in RPFCOMM from PFK13
+         LA    R14,RCPFKL2(,R14)       Next PFK in screen
+         LA    R3,RCPFKL2(,R3)         Next PFK in screen line part 2
+         BCT   R1,PUT2                 Loop until all PFKs in screen
+         LA    R1,SCR5TXT              Point to panel after escape char
+         LA    R0,SCR5LEN              Length
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write PFK menu
+         L     R9,COMMSCR              Output address =
+         LA    R9,1024(,R9)            Address of COMMSCR+1024
+         LR    R0,R9                   Output for MVCL
+         LA    R1,605                  5 bytes option + 24 * 25 bytes
+*                                      PFK+CON
+         LR    R2,R0                   Input is output
+         XR    R3,R3                   Input length = 0
+         ICM   R3,B'1000',=X'40'       Fill is blank
+         MVCL  R0,R2                   Clear output buffer
+         MVI   MSG5,C'-'               Clear
+         MVC   MSG5+1(21),MSG5              message
+         L     R1,COMMSCR              Load screen addr. from RPFCOMM
+         LA    R0,850                  Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         L     R3,COMMSCR              Load screen addr. from RPFCOMM
+         LR    R4,R1                   Save length buffer
+         CLI   0(R3),X'6D'             CLEAR key pressed?
+         BE    PUT1                    Yes: return
+         CLI   0(R3),X'F3'             PFK3 (End) pressed?
+         BE    RETURN                  Yes: return
+         CLI   0(R3),X'C3'             PFK15 (End) pressed?
+         BE    RETURN                  Yes: return
+         SH    R4,=H'6'           Skip AID and cursor address + 1st SBA
+         BNP   PUT1                    <= zero: no input
+         LA    R3,6(,R3)               Point after first SBA
+         LR    R1,R9                   Output area
+*
+*        Input screen is pointed to by register 3
+*        Output screen is pointed to by register 1
+*        The next section (CONV001 through CONV099) will place the
+*        Option + 24*(PFK+CON) in the output buffer.
+*
+CONV001  DS    0H
+         CLI   0(R3),COMMSBA           Set buffer address (SBA)?
+         BE    CONV003                 Yes: skip next 3 bytes input
+         MVC   0(1,R1),0(R3)           Move 1 byte Option
+         LA    R3,1(,R3)               Next byte input
+         LA    R1,1(,R1)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     PUT1
+CONV003  LA    R1,5(,R9)               Point after OPTION in BUFFER
+         LR    R2,R1                   and copy into register 2
+         LA    R3,3(,R3)               Point to PFK in input
+         SH    R4,=H'3'                Subtract L'SBA from BCT register
+         BNP   PUT1                    <= zero: input exhausted
+         LA    R14,24                  24 PFK's to go
+CONV005  CLI   0(R3),COMMSBA           SBA order? (X'11')
+         BE    CONV007                 Yes: skip next 3 bytes input
+         MVC   0(1,R1),0(R3)           Move 1 byte Option
+         LA    R3,1(,R3)               Next byte input
+         LA    R1,1(,R1)               Next byte output
+         BCT   R4,CONV005              Test next byte
+         B     PUT1
+CONV007  LA    R1,24(,R2)              Point after PFK command
+         LR    R2,R1                   and copy into register 2
+         LA    R3,3(,R3)               Point to CON in input
+         SH    R4,=H'3'                Subtract L'SBA from BCT register
+         BNP   CONV099                 < zero: all done
+CONV009  CLI   0(R3),COMMSBA           SBA order?
+         BE    CONV011                 Yes: skip next 3 bytes input
+         MVC   0(1,R1),0(R3)           Move 1 byte CON
+         LA    R3,1(,R3)               Next byte input
+         LA    R1,1(,R1)               Next byte output
+         BCT   R4,CONV009              Test next byte
+         B     CONV099                 All done
+CONV011  LA    R1,1(,R2)               Point after PFK CON
+         LR    R2,R1                   and copy into register 2
+         LA    R3,3(,R3)               Point to next PFK in input
+         SH    R4,=H'3'                Subtract L'SBA from BCT register
+         BNP   PUT1                    <= zero: input exhausted
+         BCT   R14,CONV005             Do this for all 24 PFKs
+         B     PUT1
+CONV099  DS    0H
+         TR    0(256,R9),COMTCAPS      Translate lower case to upper
+         TR    256(256,R9),COMTCAPS
+         TR    512(93,R9),COMTCAPS
+         CLC   0(3,R9),=C'END'
+         BE    RETURN
+         LA    R3,12
+         LA    R4,COMPFK01
+         LA    R6,COMPFK13             2nd part of PFKs in RPFCOMM
+         LA    R5,5(,R9)               Output area after command
+LOOP1    MVC   2(24,R4),0(R5)          Move PFK's into
+         MVC   1(1,R4),24(R5)                         RPFCOMM
+         MVC   2(24,R6),25(R5)
+         MVC   1(1,R6),49(R5)
+         LA    R4,26(,R4)              Loop PFK1-PFK12
+         LA    R6,26(,R6)              Loop PFK13-PFK24
+         LA    R5,50(,R5)
+         BCT   R3,LOOP1
+         MVC   MSG5,MSG1TXT
+         B     PUT1
+RETURN   DS    0H
+         LR    R3,R13                  Our WORKAREA
+         L     R13,4(,R13)             Load caller's save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release WORKAREA
+         RETURN (14,12),RC=0           Return to TSO
+MSG1TXT  DC    CL25'------------- PFK''s reset'
+F0605    DC    F'605'
+         LTORG ,
+         DROP
+         RCTOSBA RENT=YES
+         COPY  TPUTS
+         TITLE 'PFK panel'
+SCREENTX CSECT
+SCR5TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR5TXT  DC    X'00C21100001DF8'       EW or EWA, r1,c1
+SCR5UID  DC    CL78'RPF PFK Definitions: User ID=         -------------C
+               ---------------------------'
+SC5R1C56 DC    X'110000'               r01,c56+
+MSG5     DC    CL25'-------------------------'
+SC5R2C1  DC    X'11C150',X'1DF8',AL3(WHITE),C'Option  ===>',X'1DC113'
+REP5     DC    CL5' ',X'1DF0'
+*
+RCPFK    DC    X'1100001DF0',AL3(WHITE),C'PFK 01=',X'1DC9'
+         DC    AL3(RED)
+PFK01    DC    CL24' ',X'1DF0'         Offset 20
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON01    DC    C' ',X'1DF0'            Offset 58
+RCPFKL1  EQU   *-RCPFK
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 13=',X'1DC9'
+         DC    AL3(RED)
+PFK13    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON13    DC    C' ',X'1DF0'
+RCPFKL2  EQU   *-RCPFK
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 02=',X'1DC9'
+         DC    AL3(BLUE)
+PFK02    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON02    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 14=',X'1DC9'
+         DC    AL3(BLUE)
+PFK14    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON14    DC    C' ',X'1DF0'
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 03=',X'1DC9'
+         DC    AL3(RED)
+PFK03    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON03    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 15=',X'1DC9'
+         DC    AL3(RED)
+PFK15    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON15    DC    C' ',X'1DF0'
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 04=',X'1DC9'
+         DC    AL3(BLUE)
+PFK04    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON04    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 16=',X'1DC9'
+         DC    AL3(BLUE)
+PFK16    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON16    DC    C' ',X'1DF0'
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 05=',X'1DC9'
+         DC    AL3(RED)
+PFK05    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON05    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 17=',X'1DC9'
+         DC    AL3(RED)
+PFK17    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON17    DC    C' ',X'1DF0'
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 06=',X'1DC9'
+         DC    AL3(BLUE)
+PFK06    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON06    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 18=',X'1DC9'
+         DC    AL3(BLUE)
+PFK18    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON18    DC    C' ',X'1DF0'
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 07=',X'1DC9'
+         DC    AL3(RED)
+PFK07    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON07    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 19=',X'1DC9'
+         DC    AL3(RED)
+PFK19    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON19    DC    C' ',X'1DF0'
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 08=',X'1DC9'
+         DC    AL3(BLUE)
+PFK08    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON08    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 20=',X'1DC9'
+         DC    AL3(BLUE)
+PFK20    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON20    DC    C' ',X'1DF0'
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 09=',X'1DC9'
+         DC    AL3(RED)
+PFK09    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON09    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 21=',X'1DC9'
+         DC    AL3(RED)
+PFK21    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON21    DC    C' ',X'1DF0'
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 10=',X'1DC9'
+         DC    AL3(BLUE)
+PFK10    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON10    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 22=',X'1DC9'
+         DC    AL3(BLUE)
+PFK22    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON22    DC    C' ',X'1DF0'
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 11=',X'1DC9'
+         DC    AL3(RED)
+PFK11    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON11    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 23=',X'1DC9'
+         DC    AL3(RED)
+PFK23    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(RED)
+CON23    DC    C' ',X'1DF0'
+*
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 12=',X'1DC9'
+         DC    AL3(BLUE)
+PFK12    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON12    DC    C' ',X'1DF0'
+         DC    X'1100001DF0',AL3(WHITE),C'PFK 24=',X'1DC9'
+         DC    AL3(BLUE)
+PFK24    DC    CL24' ',X'1DF0'
+         DC    AL3(YELLOW),C'Con=',X'1DC9',AL3(BLUE)
+CON24    DC    C' ',X'1DF0'
+*
+R2NDLAST DC    X'1100001DF0',AL3(YELLOW),C'Hit',AL3(WHITE) 2nd last c1+
+         DC    C' Enter ',AL3(YELLOW)
+         DC    C'to make the changes effective'
+RLAST    DC    X'1100001DF0',AL3(YELLOW),C'Press' X'1DF8'  Last lne C1+
+         DC    AL3(WHITE)
+         DC    C' PF03/PF15 ',AL3(YELLOW)
+         DC    C'to cancel the current changes'
+SCR5LEN  EQU   *-SCR5TXT
+SCR5LENF EQU   *-SCR5TXTF
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9                       Address of PFK buffer after TGET
+R10      EQU   10
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12                      Base register
+R13      EQU   13                      Address of working storage
+R14      EQU   14
+R15      EQU   15
+WORKAREA DSECT
+SAVE     DS    18F
+SBAR0R1  DS    D
+DBW      DS    D
+SCREEN   DS    CL(SCR5LENF)            PFK panel in workarea
+WORKL    EQU   *-WORKAREA
+         TITLE 'RPFCOMM Dsect'
+COMMAREA RPFCOMM
+         END

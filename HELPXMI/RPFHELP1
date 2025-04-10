@@ -1,0 +1,93 @@
+                        W E L C O M E   T O   R P F
+                 (Robs's Programming Facility V 2)
+
+
+  RPF is developed by Rob Prins for Skybird Systems and used
+  in the free MVS38J distributions and all MVS successors.
+
+  It operates as a command processor under TSO/VTAM in a MVS38J,
+  MVS/380, MVS/XA, MVS/ESA, OS/390 and z/OS operating system.
+  With the exception of MVS38J addressing mode 31 is available.
+
+  RPF provides an easy way of entering and editing data on a lot
+  of IBM3270 type terminals. The minimum size of the terminal is
+  24 lines x 80 columns. The maximum number of lines = 99 and
+  the maximum number of columns = 200. The product of lines x columns
+  cannot exceed 16,384 bytes.
+
+  RPF provides an EDIT and VIEW function for sequential data sets or
+  PDS(E) members with fixed or variable records and a record length
+  between 40 and 255.
+  EDIT supports numbered or unnumbered data. Numbered data can be:
+  1. Standard, the line numbers are 8 bytes and are in the last
+     8 columns for data with a fixed record format or in bytes 0-7,
+     if the data has a variable record format.
+  2. COBOL, the line numbers are 6 bytes and are in columns 0-5 in
+     the data. COBOL data sets or members always have a record
+     length of 80 bytes.
+  To switch from Standard to COBOL format vice versa, use the EDIT
+  primary command COBOL ON or COBOL OFF.
+
+  With the Browse function, browsing of sequential data sets or
+  PDS(E) members with fixed or variable records with a record
+  length up to 255 is possible.
+  If browsing undefined records, record lengths can be up to 32,768.
+
+  RPF has an interface to ASSEMBLE and LINK-EDIT programs in the
+  foreground.
+
+  The UTILITY functions provide utilities like creation and deletion
+  of data sets, Library functions, LIBRARIAN and ARCHIVER maintenance,
+  VTOC functions, Data set list (DS LIST), Reset or delete ISPF
+  stats, SEARCH strings in data sets, copy and/or move PDS(E)
+  members and an OUTLIST utility.
+
+  The TEST function is implemented only for maintanance by the RPF
+  BUILDERS and should not be used by unauthorized users.
+
+  RPF Operator mode enables you to look at the current system activity.
+  When using RPFOPER, enter 'HELP' to list the available functions.
+
+  In the DEFAULTS menu, you have the possibility to alter:
+  1. Workspace size (maximum number of lines to EDIT, based on a record
+     length of 80 bytes), SYSOUT class for PRINT, the AUTOSAVE function,
+     default prefix for DS LIST, confirm DELETE options, default
+     translate to capitals or not or automatically, and default
+     terminal characteristics.
+  2. Default data set names for EDIT, Browse, PDS, LIBRARIAN and
+     Archiver.
+  3. Default Program Function Keys (PFK) for the EDIT, Browse, PDS,
+     LIBRARIAN, ARCHIVER, Move/Copy and DS LIST screens.
+  4. Default Assembler and Linkage editor libraries, the assembler
+     program name, Assembler and Linkage Editor execute parameters
+     and Linkage Editor control statements.
+
+  All these defaults will be saved in member @RPFPROF in a card image
+  partitioned data set with DDNAME //ISPPROF.
+
+  Notes:
+  1. RPF uses the TSO data set naming conventions. Data set names can
+     be entered as names enclosed in quotes ('). These data set names
+     are treated as fully qualified names.
+     If a data set name is entered without quotes, the data set name
+     will be prefixed with the TSO prefix.
+  2. All the functions of RPF operates in a fullscreen environment,
+     except the Operator- and TSO functions.
+  3. For a description of all primary- and line commands select
+     option 2 in the HELP menu (RPF opt. 7.2).
+  4. In each selection menu, the 'END' PFK is supported (PF03 and PF15).
+  5. LIBRARIAN is a product of Broadcom (former Computer Associates)
+     and is not included in RPF, except the free-to-use
+     LIBRARIAN FAIR routines.
+  6. Archiver is a free program, which can be downloaded from
+     www.cbttape.org, file number 147. Archiver is a great tool
+     to archive data sets or members in one single VSAM cluster.
+     Archiver is written by Rick Fochtman and maintained by me.
+
+  If you have any comments on RPF, please contact me.
+
+  - Rob Prins, loc. Wormer, phone +31 6 46 31 22 99
+    email:          prin0096@gmail.com or robprins2@kpnmail.nl
+    www:            www.prince-webdesign.nl/rpf
+
+  January    2025    Skybird Systems

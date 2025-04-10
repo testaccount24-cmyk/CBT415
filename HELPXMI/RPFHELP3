@@ -1,0 +1,34 @@
+Module:  RC:  Description:
+-------- ---- -----------------------------------------------------------------
+RPFEDIT  0004 Workspace too small
+         0008 Data set or member empty (APPEND or COPY only)
+         0012 I/O error
+         0016 Data set/member in use
+         0020 Save canceled
+         0305 Overflow (msg "Overflow" received)      (Contact RPF builders)
+
+EDIT and Utility entry panel and foreground assembler
+         0004 Dataset not in catalog
+         0008 Dataset not on volume
+         0012 Allocation error
+         0016 Unallocation error
+         0020 RECFM not F, not FB, not V or not VB
+              (for EDIT, Reset, assembler and Search only)
+         0028 DSORG not PS or PO
+         0032 Member not found or not supplied
+         0036 Authorization failed
+
+RPFSAVE  0004 x37 abend detected during SAVE
+         0008 Data not saved, X or PFK3/PFK15 selected
+         0012 Allocation error workdatasets LIBRARIAN save
+
+RPFINIT  0004 Open error RPF profile cluster (ddname RPFPROF missing?)
+         0008 write error on RPF profile (Contact RPF-builders)
+         0012 unable to allocate dataset for RPFPDS Edit function or
+              RPFLIB browse, print and Edit function.
+         0016 Unable to GETMAIN workspace (you change the size in opt 0.1)
+
+RPFDEF   0008 RPF profile could not be opened (Contact RPF-builders)
+         0012 record not found on profile (Contact RPF-builders)
+         0016 write error on profile cluster (Contact RPF-builders)
+         0020 No profile used due to iniitalization error (See RC RPFINIT)

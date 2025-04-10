@@ -1,0 +1,952 @@
+RPFARSVE TITLE 'Write EDIT workspace to ARCHIVER Archive cluster'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFARSVE                                      *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFSAVE - option 4 in RPFSAVE                 *
+*                       RPFPDS  - with 'F' (Archive) line command.    *
+*                                                                     *
+*        Function:      Present a menu for allocation the Archive     *
+*                       VSAM cluster of Rick Fochtman's ARCHIVER.     *
+*                       Once allocated, the EDIT workspace will be    *
+*                       written on a dynamically allocated data set.  *
+*                                     -- OR --                        *
+*                       The data from the DD-name, specified in       *
+*                       bytes 0-7 in COMMPRM will be archived.        *
+*                                                                     *
+*                       The ARCHIVER will be linked to archive the    *
+*                       contents of the EDIT workspace or the data    *
+*                       with the DD-name in COMMPRM. RPFARSVE will    *
+*                       ask an ITEM name (a member name), Group,      *
+*                       Subgroup and Type.                            *
+*                       After archiving the EDIT workspace or the     *
+*                       data set allocated with the ddname in         *
+*                       COMMPRM, the ARCHIVER will be linked to       *
+*                       archive the data.                             *
+*                                                                     *
+*                       After archiving the data set allocated with   *
+*                       SYSPRINT (with alternate DDname = ARCHPRT)    *
+*                       Will be browsed with RPFBRO.                  *
+*                       If an error occurs RPFARSVE redisplayes the   *
+*                       menu, so the user can retry or exit.          *
+*                                                                     *
+*        Note:          Field COMMARDS should be PO if the            *
+*                       original data set to be archived is a PDS(E)  *
+*                       or PS if the original data set is a sequential*
+*                       data set.                                     *
+*                                                                     *
+*        Registers      Register 12 and 10 are the base registers     *
+*                       Register 13 points to the working storage     *
+*                       within the first 72 bytes the save area.      *
+*                       Register 11 points to the RPFCOMM control blk *
+*                       Register 9 points to the input screen area.   *
+*                                                                     *
+*        Parameter      COMMPRM - bytes 0-7 contains a DDNAME if      *
+*                                 invoked from RPFPDS.                *
+*                                 Or binary zeroes if the EDIT        *
+*                                 workspace should be saved.          *
+*                                                                     *
+*        Subroutine:    RPFBRO, the RPF browse processor              *
+*                                                                     *
+*        Return codes set in register 15:                             *
+*                       00 - Completion ok.                           *
+*                       08 - Exit entered by user.                    *
+*                                                                     *
+*        Change log:                                                  *
+*        Jul 04,2020 RPr: Initial version                             *
+*        Jul 20,2020 RPr: Add Archiver item group, subgroup and type. *
+*        Aug 13,2020 RPr: Archive data from a DDname in COMMPRM.      *
+*        Oct 24,2020 RPr: Remove option menu, not needed anymore.     *
+*        Aug 06,2021 RPr: Replace DYNALLOC's with IKJDAIR calls.      *
+*                         and make RPFARSVE re-entrant and re-usable. *
+*        Mar 13,2023 RPr: Add extra comma's in Archiver UNLOAD        *
+*                         statements if GROUP, SUBGROUP and/or TYPE   *
+*                         are omitted.                                *
+*        Dec 07,2024 RPr: Use standard TSO naming conventions for     *
+*                         data set names.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFARSVE CSECT
+RPFARSVE AMODE 31
+RPFARSVE RMODE 24
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFARSVE,R12,R10        Provide addressability
+         LA    R10,2048(,R12)          2nd base
+         LA    R10,2048(,R10)                  register
+         L     R11,0(,R1)              Pick-up RPFCOMM
+         USING COMMAREA,R11            Address this area
+         GETMAIN R,LV=WORKL            Allocate Working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1
+         USING WORKAREA,R13            Make working storage addressable
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE'
+         DC    CL8' '
+         DC    CL8'&SYSTIME'
+START    DS    0H
+         MVC   ARCHDCB,MDLARCH         Copy model DCB
+         MVC   SYSIN,MDLSYS            Copy model DCB
+         LA    R0,JFCB                 Job file control block
+         ST    R0,EXLST                Save JFCB in exit list
+         MVI   EXLST,X'07'             JFCB exit
+         LA    R0,EXLST                Exit list
+         STCM  R0,B'0111',ARCHDCB+DCBEXLSA-IHADCB
+         MVI   RECORD-1,C' '           To clear record
+         MVC   ERR3TXT,ERR3MDL         Move message to working storage
+         MVI   SW,0                    Init switch
+         L     R2,=V(SCR2)             Input screen
+         LA    R1,SCR2LENF             Length of screen
+         LR    R3,R1                   Copy into register 3
+         LA    R0,SCREEN               Output screen
+         MVCL  R0,R2                   Copy
+         LA    R9,SCREEN               Output screen
+         USING SCR2,R9
+         MVI   S2ATT+1,X'C9'           Unprot, MDT on, hilite for Item
+         MVC   S2COLOR,=AL3(RED)       with color Red
+         CLC   COMMPRM(4),=XL4'00'     Invoked by RPFPDS with DD-name?
+         BE    START1                  No: use EDIT workspace
+         MVI   S2ATT+1,X'F1'           Prot, MDT on for Item
+         MVC   S2COLOR,=AL3(TURQ)      with color turquoise
+         OI    SW,$DDN                 Mark DD-name specified
+         MVC   PDSDDN,COMMPRM          Save DD-name
+START1   DS    0H
+         XC    COMMPRM,COMMPRM         Clear COMMPRM
+         MVC   SCR2HDR+37(8),COMMUSER  Userid from RPFCOMM in screen
+         MVC   SCR2ARCH,COMMARCH       Move ARCHIVER cluster RPFCOMM
+         MVC   SCR2ITEM,COMMBR         Move ARCHIVER Item name
+         MVC   SCR2GRP,COMMGRP         Move ARCHIVER Item Group
+         MVC   SCR2SGRP,COMMSGRP       Move ARCHIVER Item Subgroup
+         MVC   SCR2TYPE,COMMTYPE       Move ARCHIVER Item Type
+         LM    R4,R5,COMMSIZE          Pickup lines/columns
+         MVC   SCR2TXT(1),COMMCMD      Move EW or EWA in data stream
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR2TXT+3
+*
+         LA    R0,1                    Row 1
+         LA    R1,56                   Column 56+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R1C56+1
+*
+         LA    R0,5                    Row 5
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R5C2+1
+*
+         LA    R0,7                    Row 7
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R7C1+1
+*
+         LA    R0,7                    Row 7
+         LA    R1,16                   Column 16+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R7C16              Place for IC order
+*
+         LA    R0,8                    Row 8
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R8C1+1
+*
+         LA    R0,9                    Row 9
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R9C1+1
+*
+         LA    R0,10                   Row 10
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R10C1+1
+*
+         LA    R0,11                   Row 11
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R11C1+1
+*
+         LA    R0,11                   Row 11
+         LA    R1,16                   Column 16+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R11C16             Place for IC order
+*
+         L     R0,COMMSIZE             Row Last
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC1+1          Last line
+*
+         MVC   SCR2CUR+1(2),R7C16      Default cursor location
+RESTART  DS    0H
+         LA    R1,SCR2TXT              Screen address
+         LA    R0,SCR2LEN              Length
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write Entry menu
+GET1     DS    0H
+         L     R3,COMMSCR              Screen output from RPFCOMM
+         MVI   BUFFER,C' '             Blank
+         MVC   BUFFER+1(L'BUFFER),BUFFER    output buffer
+         LR    R1,R3                   Duplicate area address
+         LA    R0,300                  Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LR    R4,R1                   Save length
+*
+*        Do a TGET ASIS to obtain the AID byte
+*        After the TGET ASIS remove the SBA'S from the output
+*
+         CLI   0(R3),X'F3'             PFK3 (End) pressed?
+         BE    EXIT                    Yes: return
+         CLI   0(R3),X'C3'             PFK15 (End) pressed
+         BE    EXIT                    Yes: return
+         XR    R6,R6                   Init output length
+         SH    R4,=H'3'                Skip AID byte and cursor address
+         BNP   CONV099                 No data anymore: end of routine
+         LA    R3,3(,R3)
+         LA    R5,BUFFER               Output address
+*
+*        Input screen is pointed to by register 3
+*        Output screen is pointed to by register 5
+*        Length of output screen is in register 6
+*        The next section will remove all the SBA's
+*
+CONV001  CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  MVC   0(1,R5),0(R3)           Move input byte to buffer
+         LA    R3,1(,R3)               Next byte input
+         LA    R6,1(,R6)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV099                 Finished
+CONV003  DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes input (SBA)
+         SH    R4,=H'2'                Discount with 2
+         BNP   CONV099                 < 0, conversion finished
+         BCT   R4,CONV001              Process next byte
+CONV099  DS    0H
+         LTR   R6,R6                   No input received?
+         BZ    RESTART                 Yes: re-display menu
+         MVI   MSG2,C'-'               Clear
+         MVC   MSG2+1(21),MSG2              message
+SCAN01   DS    0H
+         MVI   ARCHIVE,C' '            Blank
+         MVC   ARCHIVE+1(L'ARCHIVE),ARCHIVE   DSName in screen
+         MVC   ITEM,ARCHIVE            Clear Item (member) name
+         MVC   GROUP,ITEM              Clear Group of item
+         MVC   SUBGROUP,ITEM           Clear Subgroup of item
+         MVC   TYPE,ITEM               Clear Type of item
+         LA    R5,BUFFER               Point to start of BUFFER
+SCAN03   DS    0H
+         CLC   S2ITEM,0(R5)            Search for ITEM name
+         BE    SCAN05                  Found: process ITEM
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN03               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN05   LA    R5,L'S2ITEM(,R5)        Point after 'ITEM        ='
+         SH    R6,=AL2(L'S2ITEM)       Decrease BCT register
+         LA    R4,ITEM                 Point to Item field
+SCAN07   DS    0H
+         CLC   S2GRP,0(R5)             Search for ITEM Group
+         BE    SCAN09                  Found: process Group
+         MVC   0(1,R4),0(R5)           Move 1 byte Item name
+         TR    0(1,R4),COMTCAPS        Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN07               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN09   LA    R5,L'S2GRP(,R5)         Point after 'Group       ='
+         SH    R6,=AL2(L'S2GRP)        Decrease BCT register
+         LA    R4,GROUP                Point to Item Group field
+SCAN11   DS    0H
+         CLC   S2SGRP,0(R5)            Search for ITEM Subgroup
+         BE    SCAN13                  Found: process Subgroup
+         MVC   0(1,R4),0(R5)           Move 1 byte Item Group
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN11               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN13   LA    R5,L'S2SGRP(,R5)        Point after 'Subgroup    ='
+         SH    R6,=AL2(L'S2SGRP)       Decrease BCT register
+         LA    R4,SUBGROUP             Point to Item Subgroup field
+SCAN15   DS    0H
+         CLC   S2TYPE,0(R5)            Search for ITEM Type
+         BE    SCAN17                  Found: process Type
+         MVC   0(1,R4),0(R5)           Move 1 byte Item Subgroup
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN15               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN17   LA    R5,L'S2TYPE(,R5)        Point after 'Type        ='
+         SH    R6,=AL2(L'S2TYPE)       Decrease BCT register
+         LA    R4,TYPE                 Point to Item Type field
+SCAN19   DS    0H
+         CLC   S2ARCH,0(R5)            Search for Archive DSName
+         BE    SCAN21                  Found: process Archive DSN
+         MVC   0(1,R4),0(R5)           Move 1 byte Item Type
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN19               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN21   LA    R5,L'S2ARCH(,R5)        Point after 'Archive     ='
+         SH    R6,=AL2(L'S2ARCH)       Decrease BCT register
+         BNP   SCAN25                  No more bytes left
+         LA    R4,BUFARCH              Point Archive DSN field
+SCAN23   DS    0H
+         MVC   0(1,R4),0(R5)           Move 1 byte Archive DSN
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN23               Examine next bytes
+SCAN25   DS    0H
+         ST    R11,PARMFLD             Parameter for DSNPARS
+         LA    R1,BUFARCH              2nd parameter, unparsed Archive
+         ST    R1,PARMFLD+4
+         LA    R1,ARCHIVE              3rd parameter, parsed Archive
+         ST    R1,PARMFLD+8
+         L     R15,EPDSNPA             Routine address
+         LA    R1,PARMFLD              Parameter
+         BALR  R14,R15                 Execute
+         MVC   SCR2ARCH,BUFARCH        Archive cluster DSN in menu
+         MVC   SCR2ITEM,ITEM           and Item name ...
+         MVC   SCR2GRP,GROUP           and Group name ...
+         MVC   SCR2SGRP,SUBGROUP       and Subgroup name ...
+         MVC   SCR2TYPE,TYPE           and Type
+         CLI   ARCHIVE,C' '            No archive specified?
+         BNE   ALLOC00                 No: good
+         MVC   MSG2,ERR4TXT            Msg: Specify Archive
+         B     RESTART                 Write the screen
+ALLOC00  DS    0H
+*
+         CLI   ITEM,C' '               No Item specified?
+         BNE   ALLOC01                 Branch
+         MVC   MSG2,ERR6TXT            Msg: Item name is required
+         MVC   SCR2CUR+1(2),R11C16     Set cursor on DSN in error
+         B     RESTART                 Write the screen
+ALLOC01  DS    0H
+         XC    CAMLST(16),CAMLST       Clear CAMLST
+         MVC   CAMLST(2),=X'4400'      CAMLST NAME
+         LA    R1,ARCHIVE              Data set to find
+         ST    R1,CAMLST+4             Set in CAMLST NAME
+         LA    R1,LOCAREA              Area to receive info
+         ST    R1,CAMLST+12            Set in CAMLST NAME
+         LOCATE CAMLST                 Locate the data set         @rp2
+         LTR   R15,R15                 Found?
+         BZ    ALLOC03                 No: error
+         MVC   MSG2,ERR1TXT            Msg: Data set not in catalog
+         MVC   SCR2CUR+1(2),R11C16     Set cursor on DSN in error
+         B     RESTART                 Re-write the screen
+ALLOC03  EQU   *
+         XC    RPFD08,RPFD08           Clear allocation parm block
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVI   DA08UNIT,C' '           Provide no ...
+         MVC   DA08UNIT+1(7),DA08UNIT             unit name
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVI   DA08DSP1,DA08SHR        DISP=SHR
+         MVC   DA08DDN,=CL8'ARCH'      DD-name
+         LA    R1,ARCHIVE+44           Calculate ...
+         TRT   ARCHIVE,COMSKPNS        Register -> first blank
+         LA    R0,ARCHIVE              Point to beginning of dsn
+         SLR   R1,R0                   ... length
+         STCM  R1,3,ARCHIVEL           And save real length
+         LA    R1,RPFD08               Reload allocation parm block
+         LA    R0,ARCHIVEL             Length + DSN
+         ST    R0,DA08PDSN             Store in allocation parm block
+         L     R15,=V(CALLTS)          Allocate ARCHIVER cluster
+         CALL  (15)
+         LTR   R15,R15
+         BZ    ALLOCOK
+         LA    R1,RPFD08               Reload allocation parm block
+         UNPK  DBW(5),DA08DARC(3)      Expand each byte
+         NC    DBW(4),=X'0F0F0F0F'     Clear hi order nibbles
+         TR    DBW(4),=C'0123456789ABCDEF'
+         MVC   ERR3CODE(4),DBW         Move to user field
+         MVC   MSG2,ERR3TXT
+         MVC   SCR2CUR+1(2),R11C16     Set cursor on DSN in error
+         B     RESTART                 Review menu screen
+ALLOCOK  DS    0H
+         LA    R1,RPFD08               Reload allocation parm block
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08PQTY+3,X'01'        1 tracks primary
+         MVI   DA08SQTY+3,X'00'        No secondary space
+         MVI   DA08CTL,DA08TRKS        Track allocation
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name
+         MVC   DA08DDN,=CL8'ARCHIN'    DD-name
+         LA    R0,ARCHINL              Length + DSN
+         ST    R0,DA08PDSN             Store in allocation parm block
+         L     R15,=V(CALLTS)          Allocate ARCHIN
+         CALL  (15)
+         LTR   R15,R15                 Ok?
+         BNZ   ERROR99                 No: error
+         LA    R1,RPFD08               Reload allocation parm block
+         MVC   DA08DDN,=CL8'ARCHPRT'   DD-name
+         MVI   DA08PQTY+3,X'01'        1 cylinder primary
+         MVI   DA08SQTY+3,X'01'        1 cylinder secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         LA    R0,PRTDSNL              Length + DSN
+         ST    R0,DA08PDSN             Store in allocation parm block
+         L     R15,=V(CALLTS)          Allocate ARCHIN
+         CALL  (15)
+         LTR   R15,R15                 Ok?
+         BNZ   ERROR99                 No: error
+         DROP  R1                      RPFD08
+         TM    SW,$DDN                 Do we have a DDNAME in the
+*                                      COMMPRM field in RPFCOMM
+         BNZ   ARCHW01                 Yes: do not use EDIT workspace
+*
+*        If the ddname is specified, RPFARSVE is called by RPFPDS
+*        due a the 'F' line command. the DDNAME will be used to
+*        Archive the member and the data set ARCHDSN will not be
+*        allocated.
+*        If no ddname is specified, the EDIT workspace will be saved
+*        into the ARCHIVE (called by RPFSAVE).
+*
+         L     R1,COMMRECL             Pickup LRECL
+         STCM  R1,3,ALRECL             Save
+         L     R15,=A(6320)            A blksize
+         STCM  R15,3,ABLK              And save
+         TM    COMMFLG4,$COMVB         Variable records?
+         BNO   ALLOC05                 No: carry
+         LA    R1,4(,R1)               Add RDW
+         STCM  R1,3,ALRECL             Save
+         B     ALLOC07
+ALLOC05  DS    0H
+         XR    R14,R14                 Clear Even register
+         DR    R14,R1                  Divide BLKSIZE/LRECL
+         XR    R14,R14                 Clear remainder
+         MR    R14,R1                 Now = BLKSIZE a multiple of LRECL
+         STCM  R15,3,ABLK              And save
+ALLOC07  DS    0H
+*
+*        Allocate a data set to receive the contents of the EDIT
+*        workspace. The data set name is 'userid.ARCH.Ddate.Ttime.DATA'
+*
+         MVI   ARCHDSN,C' '            Blank DSNAME ...
+         MVC   ARCHDSN+1(L'ARCHDSN-1),ARCHDSN          first
+         MVC   ARCHDSN(8),COMMUSER     Move user id as HLQ
+         LA    R4,ARCHDSN              Point to data set name
+         LA    R1,8                    User id = max 7 bytes
+         XR    R5,R5                   Count non blank bytes
+ALLOC08  DS    0H
+         CLI   0(R4),C' '              Blank found?
+         BE    ALLOC09                 Yes: end of test
+         LA    R4,1(,R4)               Next character of userid
+         LA    R5,1(,R5)               Count the bytes
+         BCT   R1,ALLOC08              Loop until length calc.
+ALLOC09  DS    0H
+         MVC   0(7,R4),=C'.ARCH.D'     2nd qualifier of temp. ds
+         LA    R4,7(,R4)               Adjust pointer
+         TIME  DEC                     Get current time
+         SRL   R0,4                    Shift out fractions
+         ST    R0,TIMEWORK             Store time
+         ST    R1,DATEWORK               and date
+         UNPK  0(5,R4),DATEWORK        Set date (YYDDD) in DSNAME
+         OI    4(R4),X'F0'             Remove signe
+         MVC   5(2,R4),=C'.T'          Next qualifier with time
+         OI    TIMEWORK+3,X'0F'        Insert sign in time
+         UNPK  TIMEDISP(7),TIMEWORK    Unpack the time
+         MVC   7(6,R4),TIMEDISP+1      Time in data set name
+         MVC   13(5,R4),=C'.DATA'      Low level qualifier
+         LA    R5,25(,R5)              Real length subdsn calcul.
+         STCM  R5,3,ARCHDSNL           Save for DAIR allocation
+         LA    R1,RPFD08               Reload allocation parm block
+         USING DAPB08,R1
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08PQTY+3,X'05'        5 cylinders primary
+         MVI   DA08SQTY+3,X'0F'        15 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name
+         MVC   DA08DDN,=CL8'ARCHDS'    DD-name
+         LA    R0,ARCHDSNL             Length + DSN
+         ST    R0,DA08PDSN             Store in allocation parm block
+         CLC   COMMARDS,=C'PS'         Do we have a sequential data set
+*                                      as input?
+         BE    ALLOC11                 Yes: allocate
+         MVI   DA08DQTY+3,X'01'        1 directory block is enough
+ALLOC11  DS    0H
+         L     R15,=V(CALLTS)          Allocate ARCHPRT
+         CALL  (15)
+         LTR   R15,R15                 Ok?
+         BNZ   ERROR99                 No: error
+*
+ARCHW01  DS    0H
+         MVI   COMOPN,128              This is the only and last DCB
+         OPEN  (SYSIN,(OUTPUT)),MF=(E,COMOPN) Open file for ARCH cstmnt
+         MVC   RECORD,RECORD-1         Blank record
+         MVC   RECORD(17),=CL17' SET VSAM1DD=ARCH'
+         RPFSA24
+         PUT   SYSIN,RECORD            Write SYSIN record (ARCHIN)
+         RPFSA31                       Restore addressing mode
+         TM    SW,$DDN                 Do we have a DDNAME?
+         BNZ   ARCHW03                 Yes: write a UNLOAD DDN=
+         LA    R3,RECORD               Point to start of record
+         MVC   RECORD(12),=CL12' UNLOAD DSN='
+         MVC   RECORD+12(44),ARCHDSN   Move DSN of temporary data set
+         LH    R1,ARCHDSNL
+         LA    R3,12(R1,R3)            Point after temp. ddname
+         MVI   0(R3),C','              Move comma
+         B     ARCHW11
+ARCHW03  DS    0H
+         MVC   RECORD(12),=CL12' UNLOAD DDN='
+         MVC   RECORD+12(8),PDSDDN     Move DD-name
+         LA    R1,RECORD+19            Point to last pos DDNAME
+         LA    R14,7                   Scan max. 7 characters
+ARCHW05  DS    0H
+         CLI   0(R1),C' '              Trailing blank found?
+         BNE   ARCHW07                 No: finisched
+         BCTR  R1,0                    Previous position
+         BCT   R14,ARCHW05             Loop until all blanks scanned
+ARCHW07  DS    0H
+         MVI   1(R1),C','              Move comma after DDname
+ARCHW11  DS    0H
+         RPFSA24
+         PUT   SYSIN,RECORD            Write SYSIN record (ARCHIN)
+         RPFSA31                       Restore addressing mode
+         MVC   RECORD,RECORD-1         Blank record
+         MVC   RECORD+15(6),=C'ITEM=(' Move 'ITEM' keyword
+*
+         LA    R1,RECORD+21            Point to pos of ITEM/GROUP etc.
+         LR    R14,R1                  Save into R14 for TRT
+         MVC   0(8,R14),ITEM           Move Item name
+         LA    R1,8(,R14)              Point after ITEM
+         TRT   0(8,R14),COMSKPNS       Find trailing blanks (if < 8)
+         MVI   0(R1),C','              Add a comma after ITEM
+         LA    R1,1(,R1)               Position after comma
+         LR    R14,R1                  Save into R14 for TRT
+         MVC   0(8,R14),GROUP          Move ITEM group
+         LA    R1,8(,R14)              Point after Group
+         TRT   0(8,R14),COMSKPNS       Stop at first blank
+         MVI   0(R1),C','              Move comma after GROUP
+         LA    R1,1(,R1)               Position after comma
+         LR    R14,R1                  Save into R14 for TRT
+         MVC   0(8,R14),SUBGROUP       Move SUBGROUP
+         LA    R1,8(,R14)              Point after SUBGROUP
+         TRT   0(8,R14),COMSKPNS       Stop at first blank
+         MVI   0(R1),C','              Move comma after SUBGROUP
+         LA    R1,1(,R1)               Position after comma
+         LR    R14,R1                  Save into R14 for TRT
+         MVC   0(8,R14),TYPE           Move ITEM Type
+         LA    R1,8(,R14)              Point after Type
+         TRT   0(8,R14),COMSKPNS       Stop at first blank
+         MVI   0(R1),C')'              End parenthese
+*
+ARCHWR   DS    0H
+         RPFSA24
+         PUT   SYSIN,RECORD            Write SYSIN record (ARCHIN)
+         RPFSA31                       Restore addressing mode
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE SYSIN,MF=(E,COMCLS)     Close
+         FREEPOOL SYSIN                and get rid of the buffers
+         TM    SW,$DDN                 Do we have a DDNAME?
+         BNZ   ARCHW25                 Yes: do not write EDIT workspc.
+         LA    R1,ARCHDCB              DCB address temp. data set
+         USING IHADCB,R1
+         MVC   DCBBLKSI,ABLK           Move calculated blksize
+         MVC   DCBLRECL,ALRECL         Move LRECL of workspace
+         MVI   DCBRECFM,X'90'          RECFM=FB
+         TM    COMMFLG4,$COMVB         Do we have Variable records?
+         BNO   *+8                     No: FB is good
+         MVI   DCBRECFM,X'50'          Record format = VB
+         MVI   COMOPN,128              This is the only and last DCB
+         CLC   COMMARDS,=C'PS'        Do we have a sequential data set?
+         BNE   ARCHW15                 No: Do an OPENJ
+         OPEN  (ARCHDCB,(OUTPUT)),MF=(E,COMOPN) open temporary data set
+         B     ARCHW17
+         DROP  R1                      ARCHDCB (DCBD)
+ARCHW15  DS    0H
+         MVI   COMOPN,128              This is the only and last DCB
+         RDJFCB ARCHDCB,MF=(E,COMOPN)  Obtain Job File Control Block
+         MVC   JFCB+44(8),ITEM         Member name in JFCB
+         OI    JFCB+86,X'01'           Mark PDS open for as sequential
+         OPEN  (ARCHDCB,(OUTPUT)),TYPE=J,MF=(E,COMOPN)
+*
+*        Write the EDIT workspace in ARCHDSN
+*
+ARCHW17  DS    0H
+         L     R3,COMWSTRT             1st record in workspace
+         L     R5,COMMLAST             Last record in workspace
+         LA    R5,1(,R5)               Adjust offset
+         L     R4,COMMRECL             Record length + length prefix
+         LA    R4,8(,R4)               makes length workspace entry
+         USING WORKSPCE,R3             Address workspace record
+ARCHW21  DS    0H
+         TM    WORKFLGS,$INSERTD       Inserted line with no data?
+         BO    ARCHW23                 Yes: skip that line
+         BAL   R14,ARCHPUT             Write workspace line
+ARCHW23  DS    0H
+         DROP  R3
+         BXLE  R3,R4,ARCHW21           Write the complete workspace
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE ARCHDCB,MF=(E,COMCLS)   Close temp. data set
+         FREEPOOL ARCHDCB
+*
+ARCHW25  DS    0H
+         RPFSA24                       Switch to amode 24
+         LA    R1,ARPRM                Parameter list
+         ST    R1,PARMLST              Save its address
+         LA    R1,PARMLST
+         XC    LNKLST(L#LNK),LNKLST    Clear LINK parameters
+         LINK  EP=ARCHIVER,SF=(E,LNKLST) Link to Rick's ARCHIVER
+         RPFSA31                       Restore addressing mode
+ARCHW27  DS    0H
+         MVC   COMMBR,ITEM             Archiver ITEM into RPFCOMM
+         MVC   COMMGRP,GROUP           Archiver ITEM Group into RPFCOMM
+         MVC   COMMSGRP,SUBGROUP       Archiver ITEM Subgr into RPFCOMM
+         MVC   COMMTYPE,TYPE           Archiver ITEM Type into RPFCOMM
+         MVC   COMMARCH,BUFARCH        Archive VSAM cluster to RPFCOMM
+         MVC   COMMPRM(8),=CL8'ARCHPRT' DDname of ARCHIVER print
+         RPFSA24                       Switch to amode 24
+         ST    R11,PARMLST             For calls to RPF modules
+         LA    R1,PARMLST              A(RPFCOMM)
+         XC    LNKLST(L#LNK),LNKLST    Clear LINK parameters
+         LINK  EP=RPFBRO,SF=(E,LNKLST) Link to the browser
+         RPFSA31                       Restore addressing mode
+         XR    R3,R3                   Return code 0, good
+         B     RETURN
+ERROR99  DS    0H
+         BAL   R14,UNALLOC             Unallocate (for sure)
+         MVC   MSG2,ERR5TXT            Msg: Alloc error work DS
+         MVC   SCR2CUR+1(2),R7C16      Set cursor on default location
+         B     RESTART
+EXIT     EQU   *
+         LA    R3,8                    Rc=8, Exit entered by user
+RETURN   DS    0H
+         BAL   R14,UNALLOC             Free all data sets
+         LR    R2,R13                  Address of working storage
+         L     R13,4(,R13)             Load caller's save area
+         FREEMAIN R,LV=WORKL,A=(2)     Release working storage
+         LR    R15,R3                  Return code
+         RETURN (14,12),RC=(15)        Return
+         TITLE 'Unallocate SYSPRINT, SYSIN, Archive and temp data set'
+UNALLOC  DS    0H
+         ST    R14,R14UNAL             Save register 14
+         XC    RPFD18,RPFD18           Clear unallocation parm block
+         LA    R1,RPFD18               Point to unallocation parm blk
+         USING DAPB18,R1               Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'ARCHIN'    DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm blk
+         MVC   DA18DDN,=CL8'ARCHPRT'   DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm blk
+         MVC   DA18DDN,=CL8'ARCH'      DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         TM    SW,$DDN                 DDname provided?
+         BNZ   UNALL01                 Yes: unalloc ARCHDSN not needed
+         LA    R1,RPFD18               Point to unallocation parm blk
+         LA    R0,ARCHDSNL             Length + DSN
+         ST    R0,DA18PDSN             Store in allocation parm block
+         MVC   DA18DDN,=CL8' '         Unallocate on DSNAME
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+UNALL01  DS    0H
+         DROP  R1                      RPFD18
+         L     R14,R14UNAL             Restore register 14
+         BR    R14
+         TITLE 'Write a EDIT workspace record'
+*---------------------------------------------------------------------*
+*
+*        Routine: ARCHPUT
+*
+*        Write a workspace record on the allocated data set
+*        If the data set has variable records, remove the not
+*        significant blanks at the end and recalculate the
+*        record length.
+*
+*        Register 3 points to the current workspace record
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE
+ARCHPUT  DS    0H
+         ST    R14,R14ARPU             Save register 14
+         STM   R3,R7,SAVE37PU          Save work registers
+         USING WORKSPCE,R3             Temp address. of workspace line
+         LA    R3,WORKDATA             Point to data portion of line
+         DROP  R3
+         MVI   RECAR,C' '              Blank
+         MVC   RECAR+1(254),RECAR           record
+         L     R1,COMMRECL             Current record length
+         BCTR  R1,0
+         EX    R1,PUTMVE               Move record
+         LA    R7,RECAR                Point to record
+         TM    COMMFLG4,$COMVB         Record format V(B)?
+         BNO   PUTIT9                  No: write record
+         LA    R3,RECAR                Point to record
+         L     R1,COMMRECL             Record length
+         LA    R3,0(R1,R3)             Point after record
+         BCTR  R3,0                    Point to last byte
+         XR    R4,R4                   Count not significant bytes
+         L     R6,COMMRECL             Record length
+         S     R6,=F'4'                Minus 4 (min record length VB)
+PUTIT3   DS    0H
+         CLI   0(R3),X'00'             Not significant byte?
+         BE    PUTIT5                  Yes skip
+         CLI   0(R3),X'40'             Not significant byte?
+         BE    PUTIT5                  Yes skip
+PUTIT4   DS    0H
+         L     R5,COMMRECL             Pick record length
+         SR    R5,R4                   Minus not significant bytes
+         LA    R5,4(,R5)               Count RDW
+         STH   R5,RECAR-4              Save RDW
+         XC    RECAR-2(2),RECAR-2
+         S     R7,=F'4'                Point to RDW
+         B     PUTIT9                  Write record
+PUTIT5   DS    0H
+         LA    R4,1(,R4)               Count them
+         BCTR  R3,0                    Previous position in record
+         BCT   R6,PUTIT3               Loop until all unsignificant
+         B     PUTIT4                  bytes counted
+PUTIT9   DS    0H                      Entered in AMODE 24
+         RPFSA24                       Enter amode 24
+         PUT   ARCHDCB,(7)             Write record
+         RPFSA31                       Restore addressing mode
+         LM    R3,R7,SAVE37PU          Restore work registers
+         L     R14,R14ARPU             Restore register 14
+         BR    R14                     Return
+PUTMVE   MVC   RECAR(0),0(R3)          << executed >>
+*
+ERR1TXT  DC    CL25'- Data set not in catalog'
+ERR3MDL  DC    CL25'--- Allocation error XXXX'
+ERR4TXT  DC    CL25'--------- Specify archive'
+ERR5TXT  DC    CL25'-- Alloc. error work data'
+ERR6TXT  DC    CL25'--- Item name is required'
+*                                      screen if DSN is not right
+ARPRM    DS    0H
+PARMLEN  DC    AL2(PARMEND-PARM)
+PARM     DC    C'SYSPRINT=ARCHPRT,SYSIN=ARCHIN'   PARM for Archiver
+PARMEND  EQU   *
+*
+         DS    0H
+PRTDSNL  DC    AL2(8)                  \________ length + ____________/
+PRTDSN   DC    CL44'&&ARCHPRT'         / Temporary SYSPRINT Archiver  \
+*
+ARCHINL  DC    AL2(7)                  \________ length + ____________/
+ARCHIN   DC    CL44'&&ARCHIN'          /   Temporary SYSIN Archiver   \
+*
+         PRINT NOGEN
+MDLARCH  DCB   MACRF=PM,DDNAME=ARCHDS,EXLST=*-*,DSORG=PS
+MDLARCHL EQU   *-MDLARCH
+MDLSYS   DCB   DDNAME=ARCHIN,DSORG=PS,MACRF=PM,                        *
+               RECFM=F,LRECL=80,BLKSIZE=80
+MDLSYSL  EQU   *-MDLSYS
+         PRINT GEN
+         DROP ,
+         LTORG ,
+*
+         COPY  CALLTS
+*
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+*
+         COPY  TPUTS
+*
+         TITLE 'Archiver save screen'
+SCR2     CSECT
+SCR2TXTF DC    X'27'                 Escape character for TPUT FULLSCR
+SCR2TXT  DC    X'00C21100001DF8'     EW or EWA - r1,c1
+SCR2HDR  DC    CL54'RPF ARCHIVER archive menu, User ID = 12345678------X
+               ---'
+R1C56    DC    X'110000'               r01,c56+
+MSG2     DC    CL25'-------------------------' Message area init(-)
+*
+SCR2CUR  DC    X'110000',X'13'         Insert cursor
+R5C2     DC    X'110000',AL3(YELLOW)                  r5,c2+
+         DC    C'Specify Archive VSAM cluster below:'
+*
+R7C1     DC    X'1100001DF5',AL3(TURQ)                r7,c1+
+S2ITEM   DC    C'Item        ='
+S2ATT    DC    X'1DC9',AL3(USCORE)
+S2COLOR  DC    AL3(RED)                Color
+SCR2ITEM DC    CL8' ',X'1DF0',AL3(HDEFAULT)
+*
+R8C1     DC    X'1100001DF5',AL3(TURQ)                r8,c1+
+S2GRP    DC    C'Group       ='
+         DC    X'1DC9',AL3(USCORE)
+         DC    AL3(RED)
+SCR2GRP  DC    CL8' ',X'1DF0',AL3(HDEFAULT)
+         DC    AL3(TURQ)
+         DC    C'      - or blank'
+*
+R9C1     DC    X'1100001DF5'                          r9,c1+
+S2SGRP   DC    C'Subgroup    ='
+         DC    X'1DC9',AL3(USCORE)
+         DC    AL3(RED)
+SCR2SGRP DC    CL8' ',X'1DF0',AL3(HDEFAULT)
+         DC    AL3(TURQ)
+         DC    C'      - or blank'
+*
+R10C1    DC    X'1100001DF5'                          r10,c1+
+S2TYPE   DC    C'Type        ='
+         DC    X'1DC9',AL3(USCORE)
+         DC    AL3(RED)
+SCR2TYPE DC    CL8' ',X'1DF0',AL3(HDEFAULT)
+         DC    AL3(TURQ)
+         DC    C'      - or blank'
+*
+R11C1    DC    X'1100001DF5'                          r11,c1+
+S2ARCH   DC    C'Archive     ='
+         DC    X'1DC9'
+         DC    AL3(RED),AL3(USCORE)
+SCR2ARCH DC    CL46' ',X'1DF0',AL3(HDEFAULT) DSN or archive cluster
+*
+RLASTC1  DC    X'110000',AL3(TURQ)
+         DC    C' Hit',AL3(WHITE),C' PF03/PF15',AL3(TURQ)
+         DC    C' to return.'
+SCR2LEN  EQU   *-SCR2TXT               Length of screen
+SCR2LENF EQU   *-SCR2TXTF              Length of screen TPUT FULLSCR
+*
+         TITLE 'REGISTER EQUATES AND SCREEN FORMATS'
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9                       Address of screen
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Our save area
+DBW      DS    D                       For CVB/CVD instructions
+SBAR0R1  DS    D                       Used in RCTOSBA
+PARMLST  DS    F                       To contain A(RPFCOMM)
+PARMFLD  DS    3F                      3 parameters for DSNPARS
+LNKLST   LINK  EP=*-*,SF=L
+L#LNK    EQU   *-LNKLST
+RPFDAPL  DS    5F                      DAIR parameter list
+ECB      DS    F                       An Event control block
+RPFD08   DS    CL84                    IKJDAIR entry 08, allocation
+RPFD18   DS    CL40                    IKJDAIR entry 18, unallocation
+R12TS    DS    F                       Save register 12 CALLTS
+R14ARPU  DS    F                       Save register 14 ARCHPUT
+R14TS    DS    F                       Save register 14 CALLTS
+R14UNAL  DS    F                       Save register 14 UNALLOC
+SAVE37PU DS    5F                      Save registers 3-7
+*
+R7C16    DS    AL2                     Place for IC in retry screen
+R11C16   DS    AL2                     Place for IC order in retry
+*                                      screen if DSN is not right
+ERR3TXT  DS    CL25                    To contain ERR3MDL
+ERR3CODE EQU   ERR3TXT+21
+*
+BUFARCH  DS    CL46
+*
+TIMEWORK DS    F
+DATEWORK DS    F
+TIMEDISP DS    CL7                     0hhmmss in EBCDIC
+SW       DS    X                       Switch
+$DDN     EQU   128                     Invoked by RPFPDS
+PDSDDN   DS    CL8                     DD-name from RPFPDS
+ALRECL   DS    H
+ABLK     DS    H
+RECRDW   DS    F
+RECAR    DS    CL255
+CAMLST   CAMLST NAME,ARCHIVE,,LOCAREA
+         DS    0D                      LOCAREA is on dbw boundary
+LOCAREA  DS    CL6
+LOCVOL   DS    CL6
+         DS    CL253
+BUFFER   DS    CL144                   Buffer, input area
+ITEM     DS    CL8                     Contains Archiver item
+GROUP    DS    CL8                   \ Contains Archiver Item Group  /
+SUBGROUP DS    CL8                   | Contains Archiver Item Subgrp |
+TYPE     DS    CL8                   / Contains Archiver Item Type   \
+*
+ARCHDSNL DS    H                       \________ length + ____________/
+ARCHDSN  DS    CL44                    /data set to receive workspace \
+*
+ARCHIVEL DS    H                       Real length DSN Archive clust.
+ARCHIVE  DS    CL44                    Contains Archiver VSAM cluster
+         DS    0F
+SYSIN    DS    CL(MDLSYSL)
+ARCHDCB  DS    CL(MDLARCHL)
+EXLST    DS    0F
+         DC    X'87',AL3(JFCB)
+JFCB     DS    CL176
+*
+         DC    C' '                    \______MVC RECORD,RECORD-1_____/
+RECORD   DS    CL80                    /                              \
+SCREEN   DS    CL(SCR2LENF)
+WORKL    EQU   *-WORKAREA
+         PRINT NOGEN
+         TITLE 'DSECT''s'
+         CVT   DSECT=YES,LIST=NO
+         IKJCPPL
+         IKJDAPL
+         IKJDAP08                      IKJDAIR allocation parm block
+         IKJDAP18                      IKJDAIR unallocation parm block
+         PRINT NOGEN
+         DCBD  DSORG=PS,DEVD=DA
+         PRINT GEN
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+         END

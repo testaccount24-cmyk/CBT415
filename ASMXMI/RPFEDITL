@@ -1,0 +1,324 @@
+RPFEDITL TITLE 'RPFEDIT loader, load data into EDIT workspace'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFEDITL                                      *
+*                                                                     *
+*        Called by:     RPFEDIT                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Function:  Load source data into RPF workspace to allow      *
+*                   editing. RPFEDITL is called by RPFEDIT.           *
+*                   Only F(B) or V(B) data sets or members with       *
+*                   a LRECL from 40 to 255 can be edited.             *
+*                   An ENQ will be executed to get the data set or    *
+*                   member exclusively.                               *
+*                                                                     *
+*                   If the flag $COMINPT is set (member does not      *
+*                   exist) or the data set/member is empty, the       *
+*                   number of screen lines - 3 of empty lines         *
+*                   will be inserted in the EDIT workspace and        *
+*                   RFEDITL will exit with RC=0.                      *
+*                                                                     *
+*                   If EDIT current workspace ($COMCURR=ON), do not   *
+*                   load and return immediately with RC=0.            *
+*                                                                     *
+*                   Upon exit, register 1 is loaded with the number   *
+*                   of loaded records.                                *
+*                                                                     *
+*        Return codes (dec): 0000 - No error                          *
+*                            0004 - Workspace too small               *
+*                            0008 - Input is empty (APPEND only)      *
+*                            0012 - IO error RPFWORK                  *
+*                            0016 - Enqueue failed (resource in use)  *
+*                                                                     *
+*        All return codes are set in Register 5 and are copied to     *
+*        register 15 upon exit (label RETURN).                        *
+*                                                                     *
+*        Change log:                                                  *
+*        Apr 12,2019 RPr: support RECFM=V(B) and support LRECL        *
+*                         up to 255                                   *
+*        Sep 30,2019 RPr: Do not append data if flag $COMAPND is set  *
+*                         and workspace is too small.                 *
+*        Jan 14,2019 RPr: Add SYNAD exit to intercept S001 abends     *
+*                         and give a suitable message.                *
+*        Feb 09,2020 RPr: APPEND attribute replace by APPEND command  *
+*        Apr 19,2021 RPr: Removed unneeded return codes.              *
+*        Mar 06,2022 RPr: Bypass ENQ of data set if RPFEDIT is in     *
+*                         VIEW mode.                                  *
+*        Dec 01,2024 RPr: Test on EDIT current workspace (COMCURR=ON) *
+*                         exit with RC=0 if so and test on empty input*
+*        Dec 07,2024 RPr: Use standard TSO naming conventions for     *
+*                         data set names.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFEDITL CSECT
+RPFEDITL AMODE 31
+RPFEDITL RMODE 24
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFEDITL,R12            Provide addressability
+         L     R11,0(,R1)              Obtain RPFCOMM
+         GETMAIN R,LV=WORKL            Obtain some workspace
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1
+         USING WORKAREA,R13
+         B     START
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         USING COMMAREA,R11
+         MVI   SW,0
+         XC    GETCNT,GETCNT           Init record counter
+         MVC   RPFWORK,MODELDCB        Copy model DCB
+         ICM   R3,B'1111',COMMLAST     Workspace empty?
+         BZ    NOAPPEND                Skip APPEND if workspace empty
+         TM    COMMFLG3,$COMAPND       EDIT primary command APPEND?
+         BNO   NOAPPEND                No: try normal LOAD
+         ST    R3,SAVELAST             Save this pointer
+*
+*        SAVELAST will be restored in COMMLASTif the appended data
+*        does not fit in the workspace.
+*
+         L     R1,COMMRECL             Record length
+         LA    R1,8(,R1)               Add linenumber and flags, that
+*                                      makes the entry in the workspace
+         LA    R3,0(R1,R3)             Point after last record
+         B     LOAD                    Start loading source data
+NOAPPEND DS    0H
+         L     R3,COMWSTRT             Start of workspace
+         XR    R5,R5                   Set return code to 0
+         TM    COMMFLG1,$COMCURR       Edit current workspace?
+         BO    RETURN                  Yes: do not load, exit
+         TM    COMMFLG1,$COMINPT       Are we in input mode?
+         BNO   LOAD                    No: load from data set/member
+         BAL   R14,CREATE              Create an empty workspace
+         XR    R5,R5                   Return code 0
+         B     RETURN                  Exit
+LOAD     DS    0H                      ENQ and open the file
+*
+*        Before we open the data set, we ENQ on the ISPF QNAME
+*        and RNAME, to avoid editing the same data set/member in
+*        ISPF or another RPF.
+*        THE QNAME is always 'SPFEDIT' and the RNAME is the
+*        data set name followed with the membername if present.
+*
+         TM    COMMFLG4,$COMVIEW       RPFEDIT set in VIEW mode?
+         BO    LOAD09                  Yes: bypass ENQ
+         TM    COMMFLG2,$COMENQD       Any ENQ outstanding?
+         BNO   LOAD05                  No: skip DEQ and ENQ only
+         TM    COMMFLG3,$COMAPND       APPEND command of RPFEDIT?
+         BO    LOAD09                  Yes: No re-ENQ
+         LA    R7,COMMQN               QNAME addres from RPFCOMM
+         LA    R8,COMMRN               RNAME address from RPFCOMM
+         XC    ENQLST,ENQLST           Clear parameter area
+         MVI   ENQLST,X'C0'            Use original parameter list
+         DEQ   ((7),(8),52,SYSTEMS),MF=(E,ENQLST),RET=HAVE
+         NI    COMMFLG2,255-$COMENQD   Reset ENQ flag
+LOAD05   DS    0H
+         MVC   COMMQN(8),=CL8'SPFEDIT'
+*
+         ST    R11,PARMFLD             Parameter for DSNPARS
+         LA    R1,COMMDSN              Data set quoted or w/o prefix
+         ST    R1,PARMFLD+4
+         LA    R1,COMMRN               Data set name fully qualified
+         ST    R1,PARMFLD+8
+         L     R15,EPDSNPA             Routine address
+         LA    R1,PARMFLD              Parameter
+         BALR  R14,R15                 Execute
+         MVC   COMMRN+44(8),COMMBR     Only if PDS, else blanks
+         LA    R7,COMMQN               QNAME addres from RPFCOMM
+         LA    R8,COMMRN               RNAME address from RPFCOMM
+         XC    ENQLST,ENQLST           Clear parameter area
+         MVI   ENQLST,X'C0'            Use original parameter list
+         ENQ   ((7),(8),E,52,SYSTEMS),MF=(E,ENQLST),RET=USE
+         LTR   15,15
+         BZ    LOAD09
+         LA    R5,16                   Rc = 16 ENQ failed
+         B     RETURN                  And exit
+*
+* now we have the resource exclusively (or not). So, we can open.
+*
+LOAD09   DS    0H                      ENQ done, open
+         OI    COMMFLG2,$COMENQD       Mark ENQ set
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (RPFWORK),MF=(E,COMOPN)  Open input data set
+         LA    R9,RPFWORK              DCB address
+         USING IHADCB,R9               Address DCBD
+         DROP  R9
+LOAD11   DS    0H
+         L     R5,COMMRECL             Take record length in RPFCOMM
+         BCTR  R5,0                    Minus 1 for execute
+LOAD13   DS    0H
+         MVI   AREA,X'40'              Clear record area
+         MVC   AREA+1(254),AREA        Clear record area
+         RPFSA24                       Go to Amode 24 (GET)      @rpa01
+         GET   RPFWORK,AREA            Read record
+         RPFSA31                       Restore addressing mode   @rpa01
+         TM    SW,$IOE                 I/O error detected?
+         BZ    LOAD14                  No: continue
+         LA    R5,12                   Set RC=12, I/O error
+         B     LOAD23                  Close data set
+LOAD14   DS    0H
+         LA    R1,AREA                 Pickup read record
+         L     R14,GETCNT              Record counter
+         LA    R14,1(,R14)             Increase
+         ST    R14,GETCNT              and save
+         C     R3,COMWRKND             End of workspace?
+         BNH   LOAD15                  No: move record to workspace
+         TM    COMMFLG3,$COMAPND       Append?
+         BNO   *+10                    No: branch
+         MVC   COMMLAST,SAVELAST       Yes: restore COMMLASTto original
+         LA    R5,4                    RC = 4, workspace truncated
+         B     LOAD23                  Workspace too small
+LOAD15   DS    0H
+         TM    COMMFLG4,$COMVB         Variable records?
+         BNO   LOAD17                  No: branch
+         LA    R1,4(,R1)               Skip RDW
+LOAD17   DS    0H
+         EX    R5,MOVEREC              Move record to workspace
+         XC    0(8,R3),0(R3)           Clear first 8 bytes in workspc
+         ST    R3,COMMLAST             Save last record address
+         L     R2,COMMRECL             Record length
+         LA    R2,8(,R2)               + line number and flags
+         LA    R3,0(R2,R3)             Point to next workspace entry
+         B     LOAD13                  Get a new record
+MOVEREC  MVC   8(0,R3),0(R1)           << executed >>
+LOADEOD  DS    0H                      Eodad RPFWORK
+         RPFSA31                       Restore addressing mode   @rpa01
+         TM    SW,$IOE                 I/O error detected?
+         BZ    LOAD20                  No: continue
+         LA    R5,12                   Set RC=12, I/O error
+         B     LOAD23                  Close data set
+LOAD20   DS    0H                      Eodad RPFWORK
+         ICM   R14,15,GETCNT           Record counter
+         BNZ   LOAD22                  >0: load complete
+         TM    COMMFLG3,$COMAPND       EDIT primary command APPEND?
+         BNO   LOAD21                  No: make an empty EDIT workspace
+         LA    R5,8                    Rc=08, input is empty
+         B     LOAD23                  Close input
+LOAD21   OI    COMMFLG1,$COMINPT       We are in input mode
+         BAL   R14,CREATE              Create an empty EDIT workspace
+         XR    R5,R5                   Return code 0
+         B     LOAD23                  Save pointers
+*
+LOAD22   DS    0H
+         SR    R3,R2                   Reset address, because
+*                                      already on next entry in workspc
+         ST    R3,COMMLAST             Save last record address
+         XR    R5,R5                   Rc = 0, no errors
+LOAD23   DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFWORK,MF=(E,COMCLS)   Close input
+         FREEPOOL RPFWORK              Free the buffers
+RETURN   DS    0H
+         L     R2,GETCNT               Number of loaded records
+         LR    R3,R13                  Workarea
+         L     R13,4(,R3)              Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Get rid of the workarea
+         LR    R15,R5                  Return code
+         LR    R1,R2                   Number of records
+         L     R14,12(,R13)            Retore register 14
+         LM    R2,R12,28(R13)          Restore registers 2-12
+         BR    R14                     Return to caller
+         TITLE 'Create an empty EDIT workspace'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  CREATE                                             *
+*        Function: Make an empty workspace with number of screen      *
+*                  lines minus 3 (the headers in RPFEDIT).            *
+*                  This routine will be called if the member does     *
+*                  not exist or the data set or member is empty.      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+CREATE   DS    0H
+         ST    R14,R14CREA             Save register 14
+         L     R2,COMMSIZE             Number of lines on screen
+         SL    R2,=F'3'                Minus 3.
+         USING WORKSPCE,R3             Address workspace record
+CREATE2  DS    0H
+*---------------------------------------------------------------------*
+*                                                                     *
+*        The workspace record contains the following info:            *
+*        1.    The line number on the screen (Not in data): 6 bytes   *
+*        2.    2 flagbytes                                            *
+*              Flag 1: (X'8000') If on: Line is inserted but contains *
+*                                       no data, after data is        *
+*                                       entered, the flag will be     *
+*                                       reset.                        *
+*              Flag 2: (X'4000') If on: Line is blocked for editing,  *
+*                                       because line contains         *
+*                                       unprintable characters.       *
+*              Flag 3: (X'2000') If on: A string in this line is      *
+*                                       changed with a 'C' command    *
+*        3.    The data with a maximum length of 255 bytes            *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         L     R1,COMMRECL             LRECL of input
+         BCTR  R1,0                    -1 for EX
+         BCTR  R1,0                    -2 because first pos. moved
+         MVI   WORKDATA,C' '           Blank data
+         EX    R1,CREATEX                         portion workspace
+         XC    WORKFLGS,WORKFLGS       Clear flags
+         OI    WORKFLGS,$INSERTD       Mark inserted line with no data
+         L     R1,COMWRKEN             L'Workspace entry
+         LA    R3,0(R1,R3)             Increase
+         BCT   R2,CREATE2              Loop until #LINES data created
+         SL    R3,COMWRKEN             Minus 1 entry
+         ST    R3,COMMLAST             New last record pointer
+         L     R14,R14CREA             Retore register 14
+         BR    R14
+CREATEX  MVC   WORKDATA+1(0),WORKDATA  << executed >>
+         DROP  R3
+MODELDCB DCB   DDNAME=RPFWORK,DSORG=PS,MACRF=GM,SYNAD=SYNAD,           C
+               EODAD=LOADEOD,EROPT=ACC
+LMODEL   EQU   *                       Length of DCB
+         LTORG ,                       Literal pool
+*
+SYNAD    DS    0H                      IO-error RPFWORK
+         DROP  R13
+         USING WORKAREA,R3             Regain addressability
+         LR    R3,R13                  Save base before SYNADAF
+         SYNADAF ACSMETH=QSAM          Build SYNAD environment
+         OI    SW,$IOE                 Mark I/O error
+         MVC   SYNADMSG,50(R1)         Obtain message
+         SYNADRLS                      Kill enviroment
+         LA    R1,SYNADMSG             Message
+         LA    R0,78                   Length
+         TPUT  (1),(0),R               Write error message
+         BR    R14                     Return to CP
+         DROP
+WORKAREA DSECT
+SAVEAREA DC    18F'-1'
+SAVELAST DS    F                       Save COMMLAST if $COMAPND is on
+R14CREA  DS    F                       Save register 14 CREATE
+GETCNT   DS    F                       Record counter
+PARMFLD  DS    3F                      3 parameters for DSNPARS
+ENQLST   DS    XL16                    Four words for ENQ/DEQ
+SW       DS    X
+$IOE     EQU   128
+SYNADMSG DS    CL78                    Contains msg concerning IO-error
+AREA     DS    CL255                   Record to read
+         DS    0F
+RPFWORK  DS    CL(LMODEL-MODELDCB)     Copy of MODELDCB
+WORKL    EQU   *-WORKAREA
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM ,                     Common area
+         DCBD  DSORG=PS,DEVD=DA
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3                       Address entry in EDIT workspace
+R4       EQU   4
+R5       EQU   5                       Placeholder return code
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12                      Base register
+R13      EQU   13                      Address of working storage
+R14      EQU   14
+R15      EQU   15
+         END   ,

@@ -1,0 +1,20 @@
+//LOADRPF  JOB 01,'RPF LOAD',REGION=2048K,MSGCLASS=X,CLASS=A
+//*
+//* Last update: 2024/09/06 13:42
+//* Desc: Sample RECV370 job to load the RPF xmi files
+//*
+//RECV370 EXEC PGM=RECV370
+//XMITPRT  DD  SYSOUT=*
+//RECVLOG  DD  SYSOUT=*
+//*
+//XMITIN   DD  DISP=SHR,DSN=uploaded-XMI-file
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  DUMMY
+//SYSUT1   DD  DSN=&&SYSUT1,
+//             UNIT=SYSALLDA,
+//             SPACE=(CYL,(8,4),RLSE),
+//             DISP=(,DELETE)
+//SYSUT2   DD  DSN=RPF-library,
+//             UNIT=SYSALLDA,VOL=SER=vvvvvv,
+//             SPACE=(CYL,(8,4,25),RLSE),
+//             DISP=(,CATLG)

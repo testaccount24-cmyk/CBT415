@@ -1,0 +1,1403 @@
+RPFDATAL TITLE 'Data entry screen for EDIT, Browse, PDS, SCAN, Reset'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFDATAL.                                     *
+*                                                                     *
+*        Called by:     RPFMAIN  (option 1 and option 2)              *
+*                       RPFUTIL  (option 3.0, option 3.1, option 3.8) *
+*                       RPFEDIT  (Primary command APPEND)             *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Function:      Present a data entry screen for:              *
+*                       The RPF browser             (opt 1  );        *
+*                       The RPF editor              (opt 2  );        *
+*                       Reset ISPF/RPF stats        (opt 3.0);        *
+*                       The member selection list   (opt 3.1);        *
+*                       Search string in data sets  (opt 3.8).        *
+*                                                                     *
+*                       This menu has the following options:          *
+*                       1. Select New UserID (Opt 3.0, RESET stats)   *
+*                       2. Select ISPF version (Opt 3.0 RESET stats)  *
+*                       3. Select ISPF mod level (Opt 3.0 RESET stats)*
+*                       4. Select Search string, Skip numbers and     *
+*                          Ignore case in SEARCH (Opt. 3.8).          *
+*                       5. Select the membername or blank (Opt 1, 2)  *
+*                       6. Select the data set or blank (all opts)    *
+*                       7. Select the volume if not cataloged (all opt*
+*                       8. Select '/' or <blank> for 'Confirm member  *
+*                          delete' in Library (option 3.1)            *
+*                       9. Select 1 of the data sets in the selection *
+*                          list, which contains max 8 data sets       *
+*                          If a data set is selected control will be  *
+*                          passed to RPFDAIR to allocate the data set.*
+*                          If the data set cannot be allocated, a     *
+*                          retry menu will be presented to the user   *
+*                          If the data set field is blanked out,      *
+*                          the current workspace will be edited.      *
+*                                                                     *
+*                       RPFDATAL is controlled by 4 flags:            *
+*                       1. $COMBR, invoked by Browse (RPF option 1)   *
+*                       2. $COMEDIT, invoked by EDIT (RPF option 2)   *
+*                       In (1) and (2) the member name is visible     *
+*                                                                     *
+*                       3. $COMISPF, invoked by RESET (RPF option 3.0)*
+*                       The fields New UserID, New version and New    *
+*                       mod.lvl are visible.                          *
+*                                                                     *
+*                       4. $COMSRCH,invoked by SEARCH (RPF option 3.8)*
+*                       The fields Search string, Skip numbers and    *
+*                       Ignore case are visible.                      *
+*                                                                     *
+*                       If all of the above flags are off, RPFDATAL   *
+*                       is invoked for Library (RPF option 3.1).      *
+*                       The field Confirm member delete is visible.   *
+*                                                                     *
+*                       If COMMPRM is filled in on entry, the contents*
+*                       of this field will be set in the message field*
+*                       of the entry screen.                          *
+*                                                                     *
+*        Registers:     Registers 12 and 9 are the base registers.    *
+*                       Register 13 contains the address of the       *
+*                                   dynamic workarea.                 *
+*                       Register 10 is the base of the screen area.   *
+*                       Register 11 points to the RPFCOMM control blk.*
+*                                                                     *
+*        Return codes set in register 15                              *
+*                       00 No errors                                  *
+*                       04 No member supplied, Invoke RPFPDS          *
+*                       08 EXIT or =n.n entered in Member or DSN field*
+*                                                                     *
+*        Change log:                                                  *
+*        Dec 15,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Mar 06,2019 RPr: Resolve a incidentally screen error      @rp1
+*        Mar 23,2019 RPr: Support added for all kinds of 3270 screens *
+*                         up to 62 lines x 160 columns (3290)         *
+*        Apr 16,2019 RPr: Test on LRECL of the to be edited data set  *
+*                         or member. The value should be between      *
+*                         40 and 255.                                 *
+*        Aug 13,2019 RPr: Hide options Line                           *
+*                         numbers if invoked by Library (flag $COMEDIT*
+*                         is OFF)                                     *
+*        Aug 14,2019 RPr: Add options New UserID, New Version and     *
+*                         New modification level for reset ISPF/RPF   *
+*                         stats. This is only visible in RPF 3.0      *
+*        Aug 16,2019 RPr: Set cursor on right position if an error    *
+*                         occurs.                                     *
+*        Oct 20,2019 RPr: A little redesign and hide member name if   *
+*                         used for Reset (opt 3.0) and PDS (opt 3.1)  *
+*        Nov 01,2019 RPr: Add option Search String for the SEARCH     *
+*                         function (opt. 3.8)                         *
+*        Dec 24,2019 RPr: Check record length of V(B) data sets in    *
+*                         the correct way.                            *
+*        Jan 13,2020 RPr: Extend search string and add description    *
+*        Jan 29,2020 RPr: Test on member <all spaces> instead of      *
+*                         TEMPNAME for all members.                   *
+*        Feb 02,2020 RPr: Allow browsing RECFM=U data sets            *
+*        Feb 09,2020 RPr: APPEND attribute deleted                    *
+*        Feb 23,2020 RPr: Allocation RC=32 upd. to Member not found   *
+*        Mar 09,2020 RPr: Give msg 'Data set name missing' if DSN     *
+*                         is blank in opt 1, 3.0, 3.1 and 3.8         *
+*        Apr 02,2020 RPr: Do not translate SRCH string to upper case. *
+*        Apr 04,2020 RPr: Some textual changes in screen.             *
+*        Apr 21,2020 RPr: Remove test on .TEXT data sets for setting  *
+*                         ASIS mode (automatically detected)          *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Jun 08,2020 RPr: Change msg Alloc failed, rc= 0004 into      *
+*                         Data set not in catalog                     *
+*                         Change msg Alloc failed, rc= 0008 into      *
+*                         Data set not on volume                      *
+*        Sep 27,2020 RPr: Avoid member names with blanks in between   *
+*        Sep 28,2020 RPr: Remove option Upper Case                    *
+*        Nov 08,2020 RPr: Test if data set is partitioned if invoked  *
+*                         for Library (opt. 3.1) or Reset (opt 3.0)   *
+*        Nov 30,2020 RPr: Remove option line numbers                  *
+*        Feb 01,2021 RPr: Remove option 2, LIBRARIAN edit.            *
+*        May 16,2021 RPr: Remove DDname in panel.                     *
+*        Jun 06,2021 RPr: Module made reentrant.                      *
+*        Jun 21,2021 RPr: Intercept RPFDAIR return code 40            *
+*        Jul 29,2021 RPr: SEARCH string retrieved from RPFCOMM        *
+*        Mar 11,2022 RPr: 'Skip numbers' added in menu in option 3.8, *
+*                         Search strings of data.                     *
+*        Aug 11,2022 RPr: 'Ignore case' added in menu in option 3.8,  *
+*                         Search strings of data.                     *
+*        Sep 20,2022 RPr: Data sets in selection list can be selected *
+*                         by pressing ENTER in the line of the        *
+*                         selected data set.                          *
+*        May 12,2023 RPr: Remove AUTOSKIP after volume field (SCR3VOL)*
+*        Jan 01,2024 RPr: Add 'Confirm member delete' <blank> or '/'  *
+*                         in entry screen to automatically            *
+*                         delete confirmation or not in Library       *
+*                         (opt 3.1)                                   *
+*        Jun 01,2024 RPr: Fix test of 1st character of member name.   *
+*        Aug 12,2024 RPr: Option P (Panvalet) removed.                *
+*        Aug 21,2024 RPr: Option menu deleted.                        *
+*        Sep 02,2024 RPr: =n.n (fast jump) supported in MEMBER or     *
+*                         Data set name field.                        *
+*        Dec 07,2024 RPr: Use standard TSO naming conventions for     *
+*                         data set names.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFDATAL CSECT                         Data set entry menu RPF
+RPFDATAL AMODE 31                                                @rpa01
+RPFDATAL RMODE 24                                                @rpa01
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFDATAL,R12,R9         Make module addressable
+         LA    R9,4095(,R12)           Setup 2nd ...
+         LA    R9,1(,R9)                         base register
+         L     R11,0(,R1)              Pickup A(RPFCOMM)
+         GETMAIN R,LV=WORKL            Acquire storage for our workarea
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1
+         B     START
+         DC    CL8'&SYSDATE',CL8'&SYSTIME'
+START    DS    0H
+         USING WORKAREA,R13            Address our workarea
+         USING COMMAREA,R11
+         ST    R11,PRMCOMM             Save A(RPFCOMM)
+         MVI   SW,0                    Clear flags
+         LA    R0,SCREEN               Output Data Entry panel
+         LA    R1,SCR3LENF             Length of screen
+         L     R2,=V(SCREENTX)         Input Data Entry panel
+         LR    R3,R1                   Has the same length
+         MVCL  R0,R2                   Copy to dynamic area
+         LA    R10,SCREEN              Output Data Entry panel
+         USING SCREENTX,R10            Provide addressability
+         MVC   SAVERECL,COMMRECL       Save current record length
+         MVC   SCR3TXT(1),COMMCMD      Move EW or EWA
+         MVC   SCR3UID+29(8),COMMUSER  TSO UserID into screen      @rp1
+         MVC   SCR3CONF,CCONFIRM       Delete confirmation '/' or
+*                                      <blank>
+         LM    R4,R5,COMMSIZE          Pickup lines/columns
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR3TXT+3
+*
+         LA    R0,1                    Row 1
+         LA    R1,56                   Column 56
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R1C56+1
+*
+         LA    R0,3                    Row 3 (RESET data)
+         LA    R1,1                    Column 01+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R3C1+1
+*
+         LA    R0,3                    Row 3 (RESET data)
+         LA    R1,13                   Column 13+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R3C13+1
+         MVI   R3C13,COMMSBA           Move SBA order
+*
+         LA    R0,3                    Row 3 (RESET data)
+         LA    R1,34                   Column 34+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R3C34+1
+         MVI   R3C34,COMMSBA           Move SBA order
+*
+         LA    R0,3                    Row 3 (RESET data)
+         LA    R1,50                   Column 50+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R3C50+1
+         MVI   R3C50,COMMSBA           Move SBA order
+*
+         LA    R0,4                    Row 4 (Search)
+         LA    R1,16                   Column 16+ (Search string)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R4C16+1
+         MVI   R4C16,COMMSBA           Move SBA order
+*
+         LA    R0,4                    Row 4 (Search)
+         LA    R1,56                   Column 56+ (Skip numbers)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R4C56+1
+         MVI   R4C56,COMMSBA           Move SBA order
+*
+         LA    R0,4                    Row 4 (Search)
+         LA    R1,1                    Column 01+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R4C1+1
+*
+         LA    R0,5                    Row 5 (Ignore Case)
+         LA    R1,41                   Column 41+ Ignore case line
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R5C41+1
+*
+         LA    R0,5                    Row 5
+         LA    R1,56                   Column 56+ Ignore case value
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R5C56+1
+         MVI   R5C56,COMMSBA           Move SBA order
+*
+         LA    R0,7                    Row 7 (Data set information)
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R7C2+1
+*
+         LA    R0,7                    Row 7 (Blank DSName to ...)
+         LA    R1,28                   Column 28+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S3R7C28+1
+*
+         LA    R0,8                    Row 8 (Member name =)
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R8C1+1
+*
+         LA    R0,8                    Row 8 (Member)
+         LA    R1,18                   Column 18+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R8C18+1
+         MVI   R8C18,COMMSBA           Move SBA order
+*
+         LA    R0,8                    Row 8 (or blank for a member..)
+         LA    R1,37                   Column 37+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S3R8C37+1
+*
+         LA    R0,9                    Row 9 (Data set name =)
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R9C1+1
+*
+         LA    R0,9                    Row 9 (Data set)
+         LA    R1,18                   Column 18+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R9C18+1
+         MVI   R9C18,COMMSBA           Move SBA order
+*
+         LA    R0,10                   Row 11 (Volume serial =)
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R10C1+1
+*
+         LA    R0,10                   Row 10 (if not cataloged)
+         LA    R1,37                   Column 37+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S3R10C37+1
+*
+         LA    R0,12                   Row 12 (Confirm member delete)
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC3R12C1+1
+*
+         LA    R0,12                   Row 12 (/ or ' ')
+         LA    R1,24                   Column 24+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R12C24+1
+         MVI   R12C24,COMMSBA          Move SBA order
+*
+         LA    R0,15                   Row 15
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R15C2+1
+*
+         L     R0,COMMSIZE             Row last
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC2+1
+*
+         LA    R3,SCR3DSL              Point to data set selection list
+         LA    R4,16                   First data line is line 16
+         LA    R5,8                    Last data line is line 23
+SCR03    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column (1)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,DSLISTL(,R3)         Next line in screen
+         BCT   R5,SCR03                And do complete screen
+*
+*        end of screen setup           ------------------------------*
+*
+*        First: hide all the optional fields
+START9   DS    0H
+         MVI   OPTUID1+1,X'FD'         Hide/prot/MDT New UserID
+         MVI   OPTUID2+1,X'FD'         Hide/prot/MDT New UserID
+         MVI   OPTNVV1+1,X'FD'         Hide/prot/MDT New Version
+         MVI   OPTNVV2+1,X'FD'         Hide/prot/MDT New Version
+         MVI   OPTNMM1+1,X'FD'         Hide/prot/MDT New Mod. lvl
+         MVI   OPTNMM2+1,X'FD'         Hide/prot/MDT New Mod. lvl
+         MVI   OPTNMM3+1,X'FC'         Hide/prot/no-MDT New Mod. lvl
+         MVI   OPTSTR1+1,X'FD'         Hide/prot/MDT Search str keyw.
+         MVI   OPTSTR2+1,X'FD'         Hide/prot/MDT Search str
+         MVI   OPTSTR3+1,X'FD'         Hide/prot/MDT Skip numbered text
+         MVI   OPTSTR4+1,X'FD'         Hide/prot/MDT Numbered
+         MVI   OPTSTR5+1,X'FC'         Hide/prot/no-MDT explain text
+         MVI   OPTSTR6+1,X'FD'         Hide/prot/MDT Ignore case text
+         MVI   OPTSTR7+1,X'FD'         Hide/prot/MDT Ignore case value
+         MVI   OPTSTR8+1,X'FC'         Hide/prot/no-MDT explain text
+         MVI   OPTCURR+1,X'FC'         Hide/prot/no-MDT info
+*                                      about Edit current workspace
+         MVI   OPTMEM1+1,X'FD'         Hide/prot/MDT member keyword
+         MVI   OPTMEM2+1,X'FD'         Hide/prot/MDT member name
+         MVI   OPTMEM3+1,X'FC'         Hide/unprot/no-MDT member desc.
+         MVI   OPTCONF1+1,X'FD'        Hide/prot/MDT delete confirm
+         MVI   OPTCONF2+1,X'FD'        Hide/prot/MDT delete confirm
+         MVI   OPTCONF3+1,X'FC'        Hide/prot/no-MDT delete confirm
+         MVI   S3AUT1+1,X'E0'          No autoskip last field
+*
+*        Show member name if RPFDATAL is invoked for EDIT or Browse
+*
+         TM    COMMFLG3,$COMEDIT+$COMBR  RPFDATAL in EDIT/Browse mode?
+         BZ    START10                 No: test $COMISPF flag
+         MVC   SCR3UID+4(7),=CL7'Browse ' RPFDATAL invoked by Browse
+         MVI   OPTMEM1+1,X'F5'         Show/prot/MDT member keyword
+         MVI   OPTMEM2+1,X'C9'         Show/unprot/MDT member name
+         MVI   OPTMEM3+1,X'F0'         Show/prot/no-MDT member desc.
+         MVC   DFTCUR,R8C18            Cursor on member name
+         TM    COMMFLG3,$COMBR         RPFDATAL in Browse mode?
+         BO    RESTART                 Yes: screen is ready
+*
+*        Show  info about EDIT current workspace if RPFDATAL is
+*        invoked for EDIT.
+*
+         MVI   OPTCURR+1,X'F0'         Show/prot/no-MDT info
+*                                      about Edit current workspace
+         MVC   SCR3UID+4(7),=CL8'EDIT' Invoked by EDIT (option 2)
+         B     RESTART                 Screen is ready
+START10  DS    0H
+*
+*        Show fields New UserID, New Version and New Mod. level
+*        if RPFDATAL is invoked for ISPF reset stats.
+*
+         TM    COMMFLG3,$COMISPF       Reset ISPF/RPF statistics?
+         BNO   START11                 No: leave new UserID, new
+*                                      version and mod. lvl invisible
+         MVI   OPTUID1+1,X'F5'         Show/prot/MDT New Userid
+         MVI   OPTUID2+1,X'C9'         Show/unprot/MDT New Userid
+         MVI   OPTNVV1+1,X'F5'         Show/prot/MDT New Version
+         MVI   OPTNVV2+1,X'D9'         Show/unprot/num/MDT New vers.
+         MVI   OPTNMM1+1,X'F5'         Show/prot/MDT New Mod. lvl
+         MVI   OPTNMM2+1,X'D9'         Show/unprot/num/MDT Mod.lvl
+         MVI   OPTNMM3+1,X'F0'         Show/prot/no-MDT New Mod. lvl
+         MVC   SCR3UID+4(7),=CL7'RESET  ' Invoked by Reset stats
+         MVC   DFTCUR,R9C18            Cursor on Data set name
+         B     RESTART                 Screen is ready
+START11  DS    0H
+*
+*        Show fields Search string, Skip Numbers and Ignore Case if
+*        RPFDATAL is invoked for Search Strings in data sets (opt. 3.8)
+*
+         TM    COMMFLG3,$COMSRCH       Search string in PDS(E)?
+         BNO   START12                 No: leave string, skip, ignore
+*                                      invisible
+         MVI   OPTSTR1+1,X'F5'         Show/prot/MDT Search str keyw.
+         MVI   OPTSTR2+1,X'C9'         Show/unprot/MDT Search str
+         MVI   OPTSTR3+1,X'F5'         Show/prot/MDT Skip numb. text
+         MVI   OPTSTR4+1,X'C9'         Show/unprot/MDT 'Y/N/C'
+         MVI   OPTSTR5+1,X'F0'         Show/prot/no-MDT explain text
+         MVI   OPTSTR6+1,X'F5'         Show/prot/MDT Ignore case text
+         MVI   OPTSTR7+1,X'C9'         Show/unprot/MDT 'Y/N' value
+         MVI   OPTSTR8+1,X'F0'         Show/prot/no-MDT explain text
+         MVC   SCR3UID+4(7),=CL7'Search ' Invoked by Search processor
+         MVC   DFTCUR,R4C16            Cursor on Search string
+         B     RESTART                 Screen is ready
+*
+*        Show field Confirm member delete if RPFDATAL is invoked for
+*        Library management (opt. 3.1)
+*
+START12  DS    0H
+         MVC   SCR3UID+4(7),=CL7'Library' Invoked by Library Functions
+         MVI   OPTCONF1+1,X'F5'        Show/prot/MDT delete confirm
+         MVI   OPTCONF2+1,X'C9'        Show/unprot/MDT delete confirm
+         MVI   OPTCONF3+1,X'E0'        Show/prot/no-MDT noskip confirm
+         MVI   S3AUT1+1,X'F0'          It's not the last field now
+         MVC   DFTCUR,R9C18            Cursor on Data set name
+*
+RESTART  DS    0H
+         MVI   MSG3,C'-'               Clear
+         MVC   MSG3+1(L'MSG3-1),MSG3         message field
+RESTART2 DS    0H
+         MVC   SCR3CURS,DFTCUR         Default cursor position
+         MVC   SCR3NUID,COMMNUID       New user from RPFCOMM
+         MVC   SCR3NVV,COMMNVV         Default version from RPFCOMM
+         MVC   SCR3NMM,COMMNMM         Default mod. lvl from RPFCOMM
+         MVI   NEWUID,C' '             Blank
+         MVC   NEWUID+1(7),NEWUID           receiving new UserID
+         XC    NEWVV,NEWVV             Init new version
+         XC    NEWMM,NEWMM             Init new mod. level
+         CLC   COMMPRM(4),=XL4'00'     No message supplied ?
+         BE    TPUT1                   No: display
+         MVC   MSG3,COMMPRM            Move message
+TPUT1    DS    0H
+         XC    COMMPRM,COMMPRM         Clear COMMPRM
+         MVC   SCR3VOL(6),COMMVOL      Volume into screen
+         MVC   SCR3DSN,COMMDSN         DSNAME into screen
+         MVC   SCR3MEM,COMMBR          Member into screen
+         MVC   SCR3NUMB,COMMSRNB       Skip numbers Y/N/C in screen
+         MVC   SCR3CASE,COMMCASE       Ignore case Y/N in screen
+         MVC   SCR3STR,COMMSRCH        Search string from RPFCOMM
+         LA    R4,SCR3DSL              Point to first DSLIST line
+         LA    R5,COMMEDS1             Point to 1st data set in RPFCOMM
+         LA    R1,8                    8 data sets/volumes in DSLIST
+TPUT2    DS    0H
+         MVC   SCR3DSN1(46,R4),0(R5)   Data set in screen
+         MVC   SCR3VOL1(6,R4),46(R5)   Volume  in screen
+         LA    R4,DSLISTL(,R4)         Next DSLIST line in screen
+         LA    R5,52(,R5)              Next DSLIST line in RPFCOMM
+         BCT   R1,TPUT2                Loop until all done
+TPUT3    DS    0H
+         LA    R1,SCR3TXT              Screen without ESC character
+         LA    R0,SCR3LEN              Length without ESC character
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write data entry screen
+         L     R3,COMMSCR              Screen address
+         L     R5,COMMSCR              Output formatted buffer
+         LA    R5,1200(,R5)            Use second part
+         LR    R1,R3                   Buffer address
+         LA    R0,960                  Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LR    R4,R1                   Save length
+         MVC   SBARET,1(R3)            Save return SBA
+*
+*        Do a TGET ASIS to obtain the AID byte
+*        After the TGET ASIS, remove the SBA's from the output
+*
+         CLI   0(R3),X'F3'             PFK3 (END) pressed?
+         BE    EXIT                    Yes: exit
+         CLI   0(R3),X'C3'             PFK15 (END) pressed
+         BE    EXIT                    Yes: exit
+         XR    R2,R2                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   CONV099                 Branch if <= 0
+         LA    R3,3(,R3)
+*
+*        Input screen is pointed to by register 3
+*        Output screen is pointed to by register 5
+*        The next section will remove all the SBA's
+*
+CONV001  CLI   0(R3),COMMSBA           SBA found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV099                 All done, end of routine
+CONV003  DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes input (the SBA)
+         SH    R4,=H'2'                Minus 2 BCT
+         BNP   CONV099                 <=0: End of conversion
+         BCT   R4,CONV001              Test next byte
+CONV099  DS    0H
+         L     R5,COMMSCR              Output address
+         LA    R5,1200(,R5)            Use second part
+SCAN001  DS    0H
+         LTR   R2,R2                   No input received?
+         BZ    RESTART2                Yes: refresh but leave message
+         LR    R6,R2                   Length of buffer
+         MVI   BUFDSN,C' '             Clear data
+         MVC   BUFDSN+1(L'BUFDSN-1),BUFDSN        set name
+         MVC   BUFVOL,BUFDSN           Clear VOLUME
+         MVC   BUFMEM,BUFDSN           Clear member name
+         MVC   BUFSRCH,BUFDSN          Clear Search string
+         MVI   BUFNUMB,C' '            Clear Skip numbers Y/C/N
+         MVI   BUFCASE,C' '            Clear Ignore case Y/N
+         MVI   BUFCONF,C' '            Clear 'Confirm member delete'
+*                                      '/' or <blank>
+         MVI   COMMEDS1,C' '           Clear ...
+         MVC   COMMEDS1+1(249),COMMEDS1      the ...
+         MVC   COMMEDS1+250(166),COMMEDS1        selections
+SCAN015  DS    0H
+         CLC   S3NUID,0(R5)            Search for New UserID
+         BE    SCAN017                 Found: process New UserID
+         LA    R5,1(,R5)               Next character input
+         BCT   R6,SCAN015              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN017  DS    0H
+         LA    R5,L'S3NUID(,R5)        Point after 'New UserID'
+         LA    R4,NEWUID               Point to New UserID
+SCAN019  DS    0H
+         CLC   S3NVV,0(R5)             Search for New version
+         BE    SCAN021                 Found: process New Version
+         MVC   0(1,R4),0(R5)           Move 1 character New UserID
+         OI    0(R4),C' '              Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN019              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN021  DS    0H
+         LA    R5,L'S3NVV(,R5)         Point after 'New Version'
+         LA    R4,NEWVV                Point to New Version
+SCAN025  DS    0H
+         CLC   S3NMM,0(R5)             Search for New mod. level
+         BE    SCAN027                 Found: process New mod lvl
+         MVC   0(1,R4),0(R5)           Move 1 character New Version
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN025              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN027  DS    0H
+         LA    R5,L'S3NMM(,R5)         Point after 'New Mod. lvl'
+         LA    R4,NEWMM                Point to New Mod. lvl
+SCAN029  DS    0H
+         CLC   S3SRCH,0(R5)            Search for Search string
+         BE    SCAN031                 Found: process Skip numbers
+         MVC   0(1,R4),0(R5)           Move 1 character ISPF mod. lvl
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN029              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN031  DS    0H
+         LA    R5,L'S3SRCH(,R5)        Point after 'Search string'
+         LA    R4,BUFSRCH              Point to Search string
+SCAN032  DS    0H
+         CLC   S3NUMB,0(R5)            Search for 'Skip numbers?'
+         BE    SCAN033                 Found: process Skip Numbers
+         MVC   0(1,R4),0(R5)           Move 1 character Search string
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN032              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN033  DS    0H
+         LA    R5,L'S3NUMB(,R5)        Point after 'Skip numbers?'
+         LA    R4,BUFNUMB              Point to Skip numbers value
+SCAN034  DS    0H
+         CLC   S3CASE,0(R5)            Search for 'Ignore case? '
+         BE    SCAN035                 Found: process Ignore case
+         MVC   0(1,R4),0(R5)           Move 1 character Skip numbers
+         OI    0(R4),C' '              Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN034              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN035  DS    0H
+         LA    R5,L'S3CASE(,R5)        Point after 'Ignore case? '
+         LA    R4,BUFCASE              Point to Ignore case value
+SCAN036  DS    0H
+         CLC   S3MBR,0(R5)             Search for MEMBER
+         BE    SCAN037                 Found: process MEMBER
+         MVC   0(1,R4),0(R5)           Move 1 character Ignore case
+         OI    0(R4),C' '              Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN036              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN037  DS    0H
+         LA    R5,L'S3MBR(,R5)         Point after 'MEMBER='
+         LA    R4,BUFMEM               Point to Member
+SCAN039  DS    0H
+         CLC   S3DSN,0(R5)             Search for DSNAME
+         BE    SCAN041                 Found: process DSNAME
+         MVC   0(1,R4),0(R5)           Move 1 character Member
+         TR    0(1,R4),COMTCAPS        Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN039              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN041  DS    0H
+         LA    R5,L'S3DSN(,R5)         Point after 'Dsname='
+         LA    R4,BUFDSN               Point to DSName
+SCAN043  DS    0H
+         CLC   S3VOL,0(R5)             Search for Volume
+         BE    SCAN045                 Found: process Volume
+         MVC   0(1,R4),0(R5)           Move 1 character DSName
+         OI    0(R4),C' '              Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN043              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN045  DS    0H
+         LA    R5,L'S3VOL(,R5)         Point after 'Volume='
+         LA    R4,BUFVOL               Point to Volume
+SCAN047  DS    0H
+         CLC   S3CONFI,0(R5)           Search for Confirm delete
+         BE    SCAN049                 Found: process Confirm
+         MVC   0(1,R4),0(R5)           Move 1 character VOLume
+         OI    0(R4),C' '              Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN047              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN049  DS    0H
+         LA    R5,L'S3CONFI(,R5)       Point after 'Confirm delete'
+         LA    R4,BUFCONF              Point to Confirm in RPFCOMM
+         LA    R1,COMMEDS1             Point to data set in DSLIST
+         LA    R14,8                   Search 8 data sets in DSLIST
+SCAN051  DS    0H                      -> process 8 DSLIST lines
+         CLC   0(2,R5),S3S             Search for selection DSLIST
+         BE    SCAN053                 Found: =>
+         MVC   0(1,R4),0(R5)           Move 1 character Volume
+         OI    0(R4),C' '              Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN051              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN053  DS    0H
+         LA    R5,L'S3S(,R5)           Point after '=>'
+         LR    R4,R1                   Point to data set in DSLIST
+SCAN055  DS    0H
+         CLC   S3V,0(R5)               Search for volume in DSLIST
+         BE    SCAN057                 Found: Volume
+         MVC   0(1,R4),0(R5)           Move 1 character Data set name
+         OI    0(R4),C' '              Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN055              Examine next bytes
+         B     RESTART                 CLEAR key pressed
+SCAN057  DS    0H
+         LA    R5,L'S3V(,R5)           Point after Volume in DSLIST
+         LA    R4,46(,R1)              Point to Volume
+         LA    R1,52(,R1)              Point to next entry (DSN + VOL)
+         BCT   R14,SCAN051             Loop until DSLIST all done
+         LA    R6,6                    Scan no more than 6 bytes
+SCAN059  DS    0H
+         MVC   0(1,R4),0(R5)           Move 1 character last volume
+         OI    0(R4),C' '              Xlate to upper
+         LA    R5,1(,R5)               Next character input
+         LA    R4,1(,R4)               Next character output
+         BCT   R6,SCAN059              Process next character volume
+*
+*        Test the fields after reading the screen.
+*
+STEST    DS    0H
+         LA    R1,BUFMEM               For fast jump
+         CLI   BUFMEM,C'='             Fast jump (=n.n)?
+         BE    STEST01                 Yes: exit
+         LA    R1,BUFDSN               For fast jump
+         CLI   BUFDSN,C'='             Fast jump (=n.n)?
+         BNE   STEST02                 Yes: exit
+STEST01  OI    COMMFLG2,$COMRTRN       Set return flag
+         MVC   CMAINOPT,1(R1)          Move options after '='
+         B     EXIT                    And exit immediately
+*
+STEST02  DS    0H                      Opt. 1 (Browse) or opt 2 (EDIT)
+         TM    COMMFLG3,$COMEDIT+$COMBR  Invoked by Browse or EDIT?
+         BZ    STEST07                 No: do not test member name
+         LA    R1,8                    Max. length of membername
+         LA    R14,TMPMBR              Point to member name output
+         LA    R15,BUFMEM              Point to member name input
+         MVI   TMPMBR,C' '             Blank ...
+         MVC   TMPMBR+1(L'TMPMBR-1),TMPMBR   ... member name
+STEST03  DS    0H
+         CLI   0(R15),C' '             Blank found?
+         BE    STEST04                 Yes: finished
+         MVC   0(1,R14),0(R15)         Move character of member
+         LA    R15,1(,R15)             Next byte input
+         LA    R14,1(,R14)             Next byte output
+         BCT   R1,STEST03              Loop until done
+STEST04  DS    0H
+         MVC   BUFMEM,TMPMBR           Move good membername
+         CLI   BUFMEM,C' '             Member name supplied?
+         BE    STEST99                 No: test member name done
+         TRT   BUFMEM(1),TRTMEM2       Check first character of member
+         BNZ   STEST05                 No: invalid member name
+         TRT   BUFMEM,TRTMEM           Check member name
+         BZ    STEST99                 Yes: OK, all done
+STEST05  MVC   MSG3,ERR8TXT            Msg: invalid member name
+         MVC   SCR3CURS,DFTCUR         Default cursor position
+         B     ERROR                   Go to error and retry
+*
+STEST07  TM    COMMFLG3,$COMISPF       Opt. 3.0 (Reset ISPF stats)
+         BNO   STEST21                 .. if the flag is set.
+         CLI   NEWUID,C' '             New ID specified?
+         BNE   STEST09                 Branch if yes
+         MVC   MSG3,ERR1TXT            Msg: Invalid new UserID
+         MVC   SCR3CURS,R3C13          Set cursor on new name in error
+         B     ERROR                   Branch to error routine
+STEST09  DS    0H
+         MVC   COMMNUID,NEWUID         Move good New UserID in RPFCOMM
+         CLI   NEWVV,C'0'              Numeric test
+         BL    STEST11                 < 0 = error
+         CLI   NEWVV,C'9'              Numeric test
+         BH    STEST11                 > 9 = error
+         CLI   NEWVV+1,C'0'            Numeric test
+         BL    STEST11                 < 0 = error
+         CLI   NEWVV+1,C'9'            Numeric test
+         BH    STEST11                 > 9 = error
+         CLC   NEWVV,=C'01'            At least version 01?
+         BNL   STEST13                 Low: error
+STEST11  DS    0H
+         MVC   MSG3,ERR4TXT            Msg: Invalid ISPF version
+         MVC   SCR3CURS,R3C34          Set cursor on ISPF vv in error
+         B     ERROR                   Branch to error routine
+STEST13  DS    0H
+         MVC   COMMNVV,NEWVV           Move good version to RPFCOMM
+         CLI   NEWMM,C'0'              Numeric test
+         BL    STEST15                 < 0 = error
+         CLI   NEWMM,C'9'              Numeric test
+         BH    STEST15                 > 9 = error
+         CLI   NEWMM+1,C'0'            Numeric test
+         BL    STEST15                 < 0 = error
+         CLI   NEWMM+1,C'9'            Numeric test
+         BNH   STEST17                 > 9 = error
+STEST15  DS    0H
+         MVC   MSG3,ERR6TXT            Msg: Invalid ISPF mod level
+         MVC   SCR3CURS,R3C50          Set cursor ISPF mm in error
+         B     ERROR                   Retry
+STEST17  DS    0H
+         MVC   COMMNMM,NEWMM           Move good Mod lvl to RPFCOMM
+         B     STEST99                 Done
+*
+STEST21  DS    0H                      Option 3.8 (Search)
+         TM    COMMFLG3,$COMSRCH       Test the search string fld only
+         BNO   STEST41                 .. if the flag is set.
+         CLC   BUFSRCH,=CL25' '        No search string specified?
+         BE    STEST23                 Specified: continue
+         CLC   BUFSRCH(2),=X'7D7D'     Only quotes specified?
+         BNE   STEST25                 Specified: continue
+STEST23  DS    0H
+         MVC   MSG3,ERR7TXT            Msg: Invalid search string
+         MVC   SCR3CURS,R4C16          Set cursor on field in error
+         B     ERROR                   Display retry screen
+STEST25  DS    0H
+         CLI   BUFNUMB,C'Y'            Skip numbers = Y?
+         BE    STEST27                 Yes: good
+         CLI   BUFNUMB,C'N'            Skip numbers = N?
+         BE    STEST27                 Yes: also good
+         CLI   BUFNUMB,C'C'            Skip numbers = C? (Cobol)
+         BE    STEST27                 Yes: also good
+         MVC   SCR3CURS,R4C56          Set cursor on field in error
+         MVC   MSG3,ERRHTXT            Msg: Skip numbers not Y/C/N
+         B     ERROR                   Display retry screen
+STEST27  DS    0H
+         CLI   BUFCASE,C'Y'            Ignore case  = Y?
+         BE    STEST99                 Yes: good
+         CLI   BUFCASE,C'N'            Ignore case  = N?
+         BE    STEST99                 Yes: also good
+         MVC   SCR3CURS,R5C56          Set cursor on field in error
+         MVC   MSG3,ERRJTXT            Msg: Ignore case not Y or N
+         B     ERROR                   Display retry screen
+*
+STEST41  DS    0H                      Option 3.1 (Library management)
+         CLI   BUFCONF,C'/'            Confirm member delete ON?
+         BE    STEST99                 Yes: good
+         CLI   BUFCONF,C' '            Confirm member delete OFF?
+         BE    STEST99                 Yes: also good
+         MVC   MSG3,ERRKTXT            Msg: Confirm not ' ' OR '/'
+         MVC   SCR3CURS,R12C24         Set cursor on field in error
+         B     ERROR                   Display retry screen
+*
+STEST99  LA    R1,SBARET               Return SBA without SBA order
+         CALL  CSR                     Try to find line where CSR is
+         LTR   R15,R15                 Valid row number found?
+         BNZ   SEL03                   No: continue normally
+*
+*        If the row number in the return SBA is between 16 and 23,
+*        a data set from the data set list is selected.
+*
+         L     R2,0(,R1)               Pickup the row number
+         C     R2,=F'16'               Between 16
+         BL    SEL03                   Low: nothing selected from list
+         C     R2,=F'23'               and 23
+         BH    SEL03                   Hi: nothing selected from list
+         SH    R2,=H'16'               Minus line number (1st sel.)
+         MH    R2,=H'52'               * entry length (DSN + volume)
+         LA    R5,COMMEDS1             1st data set in selection list
+         LA    R5,0(R2,R5)             Point to selected data set
+         CLI   0(R5),C' '              No data set specified?
+         BE    SEL03                   Do not move data set/volume
+         MVI   BUFMEM,C' '             Blank ...
+         MVC   BUFMEM+1(L'BUFMEM-1),BUFMEM   ... member
+         MVC   BUFDSN,0(R5)            Move data set from selection
+         MVC   BUFVOL,46(R5)           Move volume from selection
+         B     SEL07
+SEL03    DS    0H
+         OI    SW,$NOSEL               Flag nothing selected
+SEL07    DS    0H
+         CLI   BUFDSN,C' '             Data set name not specified?
+         BNE   DAIR00                  Go to RPFDAIR if not
+         TM    COMMFLG3,$COMEDIT       Invoked for EDIT
+         BO    SEL09                   Yes: missing data set is good
+         MVC   MSG3,ERRATXT            Msg: data set name missing
+         MVC   SCR3CURS,R9C18          Set cursor on data set name
+         B     ERROR                   Display retry screen
+SEL09    DS    0H
+*
+*        The data set is not specified (blanked out in the screen)
+*        and the $COMEDIT flag is on, set the $COMCURR flag to
+*        prevent loading data in the loader RPFEDITL. This is the EDIT
+*        current workspace option to continue with EDIT. This is a
+*        rescue opportunity if something happened in the EDIT session.
+*
+         ICM   R1,B'1111',COMMLAST     Is there a current workspace?
+         BNZ   SEL11                   Yes: good, process
+         MVC   MSG3,ERRDTXT            Msg: Workspace empty
+         B     ERROR                   Retry
+SEL11    DS    0H
+         OI    COMMFLG1,$COMCURR       Do not load data set
+         SR    R15,R15                 Rc=0
+         B     RETURN99                Return at once
+         TITLE 'Allocate the data set with RPFDAIR'
+DAIR00   DS    0H
+*
+*        Allocate the data set using module RPFDAIR
+*        if no member supplied, set rc=4 to invoke the PDS
+*        processor RPFPDS.
+*
+         MVC   COMMBR,BUFMEM           Move MEMBER into RPFCOMM
+         MVC   COMMVOL,BUFVOL          Move Volume into RPFCOMM
+         MVC   COMMDSN,BUFDSN          Move data set name into RPFCOMM
+         MVC   COMMSRCH,BUFSRCH        Move search string into RPFCOMM
+         MVC   COMMSRNB,BUFNUMB        Move Y/C/N of Skip numbers
+         MVC   COMMCASE,BUFCASE        Move Y/N of Ignore case
+         MVC   CCONFIRM,BUFCONF        Move ' ' or '/' of member del.
+         OI    COMMFLG1,$COMMALC       Tell RPFDAIR to allocate
+         L     R15,EPDAIR              Entry point RPFDAIR
+         LA    R1,PRMCOMM              Address of RPFCOMM
+         BALR  R14,R15                 Invoke RPFDAIR
+         TITLE 'PROCESS DAIR RETURN CODES'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Test the returcodes of RPFDAIR (set in register 15)          *
+*        If rc = 0, always OK                                         *
+*        If rc = 20 (RECFM not F(B) or V(B) is only allowed if flag   *
+*                   $COMBR is set or none of the flags are set.       *
+*        If rc = 32 (member not found) and member is not supplied,    *
+*                   invoke member selection list (RPFPDS).            *
+*                   If a member is supplied and $COMEDIT is set,      *
+*                   RPFEDIT will be invoked in input mode and         *
+*                   flag $COMINPT will be set unless flag $COMAPND    *
+*                   is set, then display the retry screen.            *
+*                                                                     *
+*        In other cases the retry screen will be displayed and the    *
+*        user will be notified of the error.                          *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         LTR   R15,R15                 Rc = 0?
+         BZ    DAIR13                  Yes: test record length ..
+*                                      .. if $COMEDIT is set
+         C     R15,=F'32'              Rc = 32, member not found?
+         BE    DAIR03                  No: error
+         C     R15,=F'20'              Rc = 20, RECFM not V(B) or F(B)?
+         BNE   DAIR11                  No: process error
+         TM    COMMFLG3,$COMEDIT+$COMSRCH+$COMISPF
+         BNZ   DAIR11                  Error for EDIT, SEARCH and RESET
+DAIR03   DS    0H
+         TM    COMMFLG3,$COMEDIT       Invoked by EDIT?
+         BO    DAIR07                  Yes: EDIT processing
+         CLC   COMMBR,=CL8' '          Is member name supplied?
+         BE    DAIR05                  No: member selection list
+         TM    COMMFLG3,$COMBR         Only rc = 0 (Browse) allowed?
+         BO    DAIR11                  Yes: error (rc=0 must)
+DAIR05   DS    0H
+         LA    R15,4                   Set Rc=4, Invoke RPFPDS
+         B     RETURN                  Update data set selection list
+*                                      .. and return
+DAIR07   DS    0H                      EDIT input or member selection
+         TM    COMMFLG3,$COMAPND       EDIT primary command APPEND?
+         BO    DAIR11                  Yes: member not found: error
+         LA    R15,4                   Set RC = 4, invoke RPFPDS ...
+         CLC   COMMBR,=CL8' '          ... if member is not supplied
+         BE    DAIR13                  Not supplied, good, test LRECL
+         SR    R15,R15                 Set RC initially to 0
+         OI    COMMFLG1,$COMINPT       Indicate input mode
+         B     DAIR13                  Test RECFM and LRECL
+DAIR11   DS    0H
+         CVD   R15,DBW                 RC of RPFDAIR to decimal
+         MVC   MSG3,ERR5TXT            Msg: allocation failed rc=  @rp1
+         UNPK  MSG3+21(4),DBW          Unpack into message
+         OI    MSG3+24,X'F0'           Clear sign
+         C     R15,=F'4'               Return code = 4 (not cataloged)
+         BNE   *+10                    No: leave message unchanged
+         MVC   MSG3,ERRBTXT            Else  "data set not cataloged"
+         C     R15,=F'8'               Return code = 8 (not on volume)
+         BNE   *+10                    No: leave message unchanged
+         MVC   MSG3,ERRCTXT            Else  "data set not on volume"
+         C     R15,=F'32'              Return code = 32 (membr not fnd)
+         BNE   *+10                    No: leave message unchanged
+         MVC   MSG3,ERR9TXT            Else msg: "member not found"
+         C     R15,=F'36'              Return code = 36 (913 abend)
+         BNE   *+10                    No: leave message unchanged
+         MVC   MSG3,ERRFTXT            Else msg: "Access denied"
+         C     R15,=F'40'              Return code = 40 (BLDL RC=8)
+         BNE   *+10                    No: leave message unchanged
+         MVC   MSG3,ERRGTXT            Else msg: "I/O error"
+         MVC   SCR3CURS,R9C18          Default cursor position
+         NI    SW,255-$NOSEL           Clear flag
+         B     ERROR                   Go to error and retry
+DAIR13   DS    0H
+*
+*        Check record format of data set.
+*
+*        Check the record length if RPFDATAL is invoked to EDIT
+*        data ($COMEDIT is on). The record length should be at least
+*        40 and no more than 255.
+*        If data is appended (Ex. RPFEDIT APPEND command), restore the
+*        record length of the original data set.
+*
+*        Register 15 (return code) is already set.
+*
+         TM    COMMFLG3,$COMEDIT+$COMSRCH invoked by EDIT or SEARCH?
+         BZ    TESTBR                  No: test if invoked by Browse
+         L     R1,COMMRECL             Pickup 'Net' LRECL
+         TM    COMMFLG4,$COMVB         Variable records?
+         BNO   LRECL01                 No: good
+         LA    R1,4(,R1)               Add L'RDW to record length
+LRECL01  DS    0H
+         CLC   COMMRECL,=F'40'         LRECL at least 40?
+         BL    LRECL03                 No: error
+         CH    R1,=H'255'              LRECL > 255?
+         BH    LRECL03                 Yes: error
+         TM    COMMFLG3,$COMAPND       EDIT primary command APPEND?
+         BNO   RETURN                  No: skip
+         MVC   COMMRECL,SAVERECL       Restore LRECL in RPFCOMM
+         B     RETURN                  Return
+LRECL03  DS    0H
+         MVC   MSG3,ERR3TXT            Msg: Invalid record length
+         B     ERROR                   Branch to error routine
+TESTBR   DS    0H
+         TM    COMMFLG3,$COMBR+$COMSRCH Invoke by Browse or SEARCH?
+         BNZ   RETURN                  Yes: good, return
+*
+*        At this point RPFDATAL is invoked for Library Functions
+*        (option 3.1) or reset ISPF stats (option 3.0). In both cases
+*        the data set should be partitioned (PDS or PDSE)
+*
+         TM    COMMFLG1,$COMMSEQ       RPFWORK is a sequential data set
+         BNO   RETURN                  No: good, we have a PDS(E)
+         MVC   MSG3,ERRETXT            Msg: Data set not partitioned
+         MVC   SCR3CURS,DFTCUR         Default cursor position
+         NI    SW,255-$NOSEL           Clear flag
+         B     ERROR                   Go to error and retry
+EXIT     DS    0H
+         LA    R15,8                   Rc=0008, PF3/PF15 pressed
+*                                      or '=n(.n)' entered
+         TM    COMMFLG3,$COMAPND       EDIT primary command APPEND?
+         BNO   RETURN99                No: return
+         MVC   COMMRECL,SAVERECL       Restore record length
+*                                      Because APPEND is canceled with
+*                                      the option x or PFK3/15
+         B     RETURN99                Return
+RETURN   DS    0H
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Update data set list before leaving RPFDATAL.                *
+*        At next invocation of Browse, EDIT, RESET, Search or         *
+*        Library, the updated data set list will be displayed.        *
+*        The list will be updated if a data set (and volume serial)   *
+*        is entered from the 'Data set name' (and 'Voume serial')     *
+*        field and NOT any data set from the list is selected.        *
+*        The new data set will be made the first entry in the list    *
+*        The data set list will be written in the RPF profile         *
+*        cluster in module RPFEND.                                    *
+*                                                                     *
+*        Register 15 (return code) is already set.                    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+         TM    SW,$NOSEL               Selected from selection list?
+         BZ    RETURN99                Yes: no update
+         LA    R3,COMMEDS1             Point to 1st dsn in sel-list
+         LA    R7,8                    Max. 8 data sets in list
+RETURN1  DS    0H
+         CLC   0(46,R3),COMMDSN        Does data set name match?
+         BNE   RETURN2                 Yes: use it
+         CLC   46(6,R3),COMMVOL        Does volume match too?
+         BE    RETURN11                Yes: both match so no update
+RETURN2  DS    0H
+         LA    R3,52(,R3)              Next entry
+         BCT   R7,RETURN1              And loop
+         LA    R3,COMMEDS1             Point to 1st dsn in sel-list
+         LA    R7,8                    Max. 8 data sets in list
+RETURN3  DS    0H                      ---> try to find a blank entry
+         CLI   0(R3),C' '              Blank entry found?
+         BE    RETURN4                 Yes: use it.
+         LA    R3,52(,R3)              Next entry
+         BCT   R7,RETURN3              And loop
+         B     RETURN5                 Branch if no blank entry
+RETURN4  DS    0H                      Blank entry found
+         MVC   0(46,R3),COMMDSN        Move dsname from RPFCOMM
+         MVC   46(6,R3),COMMVOL        Move volume from RPFCOMM
+         B     RETURN11                Make this data set the 1st entr
+RETURN5  DS    0H
+         MVC   COMMEDS8(52),COMMEDS7   Wrap around
+         MVC   COMMEDS7(52),COMMEDS6   Wrap around
+         MVC   COMMEDS6(52),COMMEDS5   Wrap around
+         MVC   COMMEDS5(52),COMMEDS4   Wrap around
+         MVC   COMMEDS4(52),COMMEDS3   Wrap around
+         MVC   COMMEDS3(52),COMMEDS2   Wrap around
+         MVC   COMMEDS2(52),COMMEDS1   Wrap around
+         MVC   COMMEDS1,COMMDSN        Move 'new' dsname
+         MVC   COMMEVO1,COMMVOL        Move 'new' volume
+         B     RETURN99                Return
+RETURN11 DS    0H                      Data set name already in list
+         LA    R4,COMMEDS1             Point to first entry
+         LA    R3,0(,R3)               Clear hi-order byte curr. ent
+         CR    R3,R4                   Already the first ent?
+         BE    RETURN99                No swap if already first ent.
+         XC    COMMEDS1(52),0(R3)      Make this dsn
+         XC    0(52,R3),COMMEDS1             the first
+         XC    COMMEDS1(52),0(R3)                   entry in list
+         LA    R5,COMMEDS1+52          Point to second entry
+RETURN13 DS    0H
+         S     R3,=F'52'               Point to entry before
+         CR    R3,R5                   Already swapped with 2nd ent
+         BL    RETURN99                Yes: finished
+         XC    52(52,R3),0(R3)          swap
+         XC    0(52,R3),52(R3)              the
+         XC    52(52,R3),0(R3)                 entries
+         B     RETURN13
+RETURN99 DS    0H
+         NI    SW,255-$NOSEL           Set flag off
+         LR    R3,R13                  Our WORKAREA
+         LR    R2,R15                  Save return code
+         L     R13,4(,R13)             Pickup callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Free our workarea
+         LR    R15,R2                  Restore return code
+         RETURN (14,12),RC=(15)        Return to RPFMAIN
+         TITLE 'Issue error message and retry'
+ERROR    DS    0H
+         MVC   SCR3VOL,BUFVOL          Move Volume into screen
+         MVC   SCR3DSN,BUFDSN          Move DSName into screen
+         MVC   SCR3MEM,BUFMEM          Move Member name into screen
+         MVC   SCR3STR,BUFSRCH         Move Search string into screen
+         MVC   SCR3NUMB,BUFNUMB        Move Skip numbers Y/C/N
+         MVC   SCR3CASE,BUFCASE        Move Ignore case Y/N
+         MVC   SCR3CONF,BUFCONF        Move Confirm member delete
+         MVC   SCR3NUID,NEWUID         Move New UserID into screen
+         MVC   SCR3NVV,NEWVV           Move New Version into screen
+         MVC   SCR3NMM,NEWMM           Move New Mod. lvl into screen
+         TM    COMMFLG3,$COMSUBS       Browse substituted from EDIT?
+         BNO   TPUT3                   Write screen
+         NI    COMMFLG3,255-$COMBR-$COMSUBS set both Browse flags off
+         OI    COMMFLG3,$COMEDIT       And set EDIT flag back on
+         NI    SW,255-$NOSEL           Set flag off
+         B     TPUT3                   Write screen and get reply  @rp1
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9                       Second base register
+R10      EQU   10                      Address of screen area
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12                      First base register
+R13      EQU   13                      Address of working storage
+R14      EQU   14
+R15      EQU   15
+ERR1TXT  DC    CL25'----- Invalid new User ID'
+ERR3TXT  DC    CL25'--- Invalid record length'
+ERR4TXT  DC    CL25'---- Invalid ISPF version'
+ERR5TXT  DC    CL25'Allocation failed rc=XXXX'
+ERR6TXT  DC    CL25'-- Invalid ISPF mod level'
+ERR7TXT  DC    CL25'--- Invalid search string'
+ERR8TXT  DC    CL25'----- Invalid member name'
+ERR9TXT  DC    CL25'-------- Member not found'
+ERRATXT  DC    CL25'--- Data set name missing'
+ERRBTXT  DC    CL25'- Data set not in catalog'
+ERRCTXT  DC    CL25'-- Data set not on volume'
+ERRDTXT  DC    CL25'--------- Workspace empty'
+ERRETXT  DC    CL25' Data set not partitioned'
+ERRFTXT  DC    CL25'----------- Access denied'
+ERRGTXT  DC    CL25'--------------- I/O error'
+ERRHTXT  DC    CL25'-- Skip numbers not Y/C/N'
+ERRJTXT  DC    CL25'-- Ignore case not Y or N'
+ERRKTXT  DC    CL25'---  Confirm not '' '' or /'
+*
+TRTMEM   DC    256AL1(255)             Test table validity membername
+         ORG   TRTMEM+C' '             Blank is ...
+         DC    X'00'                   ... valid (except first char.)
+         ORG   TRTMEM+C'$'             Dollar is ...
+         DC    X'00'                   ... valid
+         ORG   TRTMEM+C'#'             Hash and 'at' sign are ...
+         DC    X'0000'                 ... valid
+         ORG   TRTMEM+C'A'             A - I are ...
+         DC    9X'00'                  ... valid
+         ORG   TRTMEM+C'J'             J - R are ...
+         DC    9X'00'                  ... valid
+         ORG   TRTMEM+C'S'             S - Z are ...
+         DC    8X'00'                  ... valid
+         ORG   TRTMEM+C'0'             0 - 9 are ...
+         DC    10X'00'                 ... valid (except first char)
+         ORG   ,
+TRTMEM2  DC    256AL1(255)             Translate table to check ...
+         ORG   TRTMEM2+C'$'            ... first character of member
+         DC    X'00'
+         ORG   TRTMEM2+C'#'            Hash and at
+         DC    X'0000'
+         ORG   TRTMEM2+C'A'
+         DC    9X'00'
+         ORG   TRTMEM2+C'J'
+         DC    9X'00'
+         ORG   TRTMEM2+C'S'
+         DC    8X'00'
+         ORG
+         LTORG ,
+         DROP  ,
+         CSR   MF=E                    Convert SBA into row/column
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+         TITLE 'SCREEN FORMATS'
+SCREENTX CSECT
+SCR3TXTF DC    X'27'
+SCR3TXT  DC    X'00C21100001DF8'       Write erase
+SCR3UID  DC    CL79'RPF EDIT    entry: User ID = xxxxxxxx--------------C
+               ----------------------------'
+SC3R1C56 DC    X'110000'               r01,c56+
+MSG3     DS    CL25                    Message area
+*
+SC3R3C1  DC    X'110000'               r03,c01+
+OPTUID1  DC    X'1DF5',AL3(TURQ)       New UserID, New version and
+S3NUID   DC    C'New UserID'           New mod. lvl visible in
+OPTUID2  DC    X'1DC9',AL3(RED)        RESET (opt. 3.0)
+SCR3NUID DC    CL8' '
+*
+OPTNVV1  DC    X'1DF5',AL3(TURQ)
+S3NVV    DC    C'New version'
+OPTNVV2  DC    X'1DD9',AL3(RED)        Attr. unprot, num, MDT on
+SCR3NVV  DC    CL2' '
+*
+OPTNMM1  DC    X'1DF5',AL3(TURQ)
+S3NMM    DC    C'New mod. lvl'
+OPTNMM2  DC    X'1DD9',AL3(RED)        Attr. unprot, num, MDT on
+SCR3NMM  DC    CL2' '
+OPTNMM3  DC    X'1DF0',AL3(TURQ),C'(Reset ISPF/RPF stats)'
+         DC    X'1DF0'
+*
+SC3R4C1  DC    X'110000'               r4,c01+
+OPTSTR1  DC    X'1DF5',AL3(TURQ)
+S3SRCH   DC    C'Search string'
+OPTSTR2  DC    X'1DC9',AL3(RED),AL3(USCORE)
+SCR3STR  DC    CL25' ',AL3(HDEFAULT)   Search string and Skip numbers
+OPTSTR3  DC    X'1DF5',AL3(TURQ)       visible in SEARCH (opt 3.8)
+S3NUMB   DC    C'Skip numbers?'
+OPTSTR4  DC    X'1DC9',AL3(RED)
+SCR3NUMB DC    C'N'                    Default not numbered
+OPTSTR5  DC    X'1DF0',AL3(TURQ),C' Y(es)/C(obol)/N(o)'
+         DC    X'1DF0'
+SC3R5C41 DC    X'110000'               r5,c41+
+OPTSTR6  DC    X'1DF5',AL3(TURQ)
+S3CASE   DC    C'Ignore case? '
+OPTSTR7  DC    X'1DC9',AL3(RED)        Ignore case visible in opt. 3.8
+SCR3CASE DC    C'Y'                    Default Ignore Case
+OPTSTR8  DC    X'1DF0',AL3(TURQ),C' Y(es)/N(o)'
+         DC    X'1DF0'
+*
+SC3R7C2  DC    X'110000'               r7,c02+
+         DC    AL3(YELLOW),C'Data set information ',AL3(TURQ)
+OPTCURR  DC    X'1DF0'                 Text below visible in opt. 2
+S3R7C28  DC    X'110000',C'blank ',AL3(WHITE),C'Data set name '
+         DC    AL3(TURQ),C'to edit current workspace'
+*
+SC3R8C1  DC    X'110000'               r8,c01+
+OPTMEM1  DC    X'1DF5'
+S3MBR    DC    CL15'Member name   ='
+OPTMEM2  DC    X'1DC9',AL3(RED)        Member visible in opt 1 and 2.
+         DC    AL3(USCORE)
+SCR3MEM  DC    CL8' '
+         DC    AL3(HDEFAULT)
+OPTMEM3  DC    X'1DF0',AL3(TURQ)
+S3R8C37  DC    X'110000',C'or blank for a member selection list'
+*
+SC3R9C1  DC    X'110000'               r09,c01+
+         DC    X'1DF5',AL3(TURQ)
+S3DSN    DC    CL15'Data set name =',X'1DC9',AL3(RED)
+         DC    AL3(USCORE)
+SCR3DSN  DC    CL46' ',X'1DF0'         DSName
+         DC    AL3(HDEFAULT)
+*
+SC3R10C1 DC    X'110000'               r10,c01+
+         DC    X'1DF5',AL3(TURQ)
+S3VOL    DC    CL15'Volume serial =',X'1DC9',AL3(RED)
+         DC    AL3(USCORE)
+SCR3VOL  DC    CL6' '
+S3AUT1   DC    X'1DE0'                 Do not autoskip to next field
+         DC    AL3(HDEFAULT)
+*
+S3R10C37 DC    X'110000'               r10,c37+
+         DC    AL3(TURQ)
+         DC    C'if not cataloged',X'1DF0'
+SC3R12C1 DC    X'110000'               r12,c1+
+OPTCONF1 DC    X'1DF5'                 Only visible in option 3.1
+S3CONFI  DC    C'Confirm member delete'
+OPTCONF2 DC    X'1DC9',AL3(RED)
+         DC    AL3(USCORE)
+SCR3CONF DC    C' ',X'1DE0'            Do not autoskip to next field
+         DC    AL3(HDEFAULT)
+OPTCONF3 DC    X'1DF0',AL3(TURQ)
+         DC    C' (Select / for confirmation)'
+         DC    X'1DF0'
+*
+R15C2    DC    X'110000',AL3(YELLOW)   r15,c02+
+         DC    C'Or select 1 of the data sets below (place cursor in th*
+               e line and press ENTER)'
+SCR3DSL  DC    X'110000',AL3(RED)      r16,c01+ => 8 DSLIST lines
+         DC    X'1DF9',AL3(WHITE)
+S3S      DC    C'=>',X'1DC9',AL3(RED)
+SCR3DSN1 EQU   *-SCR3DSL
+         DC    CL46' ',X'1DF5',AL3(TURQ)
+S3V      DC    CL8',Volume=',X'1DC9',AL3(RED)
+SCR3VOL1 EQU   *-SCR3DSL
+         DC    CL6' ',X'1DF0'
+DSLISTL  EQU   *-SCR3DSL
+*
+         DC    X'110000',AL3(RED)      r17,c01+ => 2nd DSLIST line
+         DC    X'1DF9',AL3(WHITE)
+         DC    C'=>',X'1DC9',AL3(RED)
+         DC    CL46' ',X'1DF5',AL3(TURQ)
+         DC    CL8',Volume=',X'1DC9',AL3(RED)
+         DC    CL6' ',X'1DF0'
+*
+         DC    X'110000',AL3(RED)      r18,c01+
+         DC    X'1DF9',AL3(WHITE)
+         DC    C'=>',X'1DC9',AL3(RED)
+         DC    CL46' ',X'1DF5',AL3(TURQ)
+         DC    CL8',Volume=',X'1DC9',AL3(RED)
+         DC    CL6' ',X'1DF0'
+*
+         DC    X'110000',AL3(RED)      r19,c01+
+         DC    X'1DF9',AL3(WHITE)
+         DC    C'=>',X'1DC9',AL3(RED)
+         DC    CL46' ',X'1DF5',AL3(TURQ)
+         DC    CL8',Volume=',X'1DC9',AL3(RED)
+         DC    CL6' ',X'1DF0'
+*
+         DC    X'110000',AL3(RED)      r20,c01+
+         DC    X'1DF9',AL3(WHITE)
+         DC    C'=>',X'1DC9',AL3(RED)
+         DC    CL46' ',X'1DF5',AL3(TURQ)
+         DC    CL8',Volume=',X'1DC9',AL3(RED)
+         DC    CL6' ',X'1DF0'
+*
+         DC    X'110000',AL3(RED)      r21,c01+
+         DC    X'1DF9',AL3(WHITE)
+         DC    C'=>',X'1DC9',AL3(RED)
+         DC    CL46' ',X'1DF5',AL3(TURQ)
+         DC    CL8',Volume=',X'1DC9',AL3(RED)
+         DC    CL6' ',X'1DF0'
+*
+         DC    X'110000',AL3(RED)      r22,c01+
+         DC    X'1DF9',AL3(WHITE)
+         DC    C'=>',X'1DC9',AL3(RED)
+         DC    CL46' ',X'1DF5',AL3(TURQ)
+         DC    CL8',Volume=',X'1DC9',AL3(RED)
+         DC    CL6' ',X'1DF0'
+*
+         DC    X'110000',AL3(RED)      r23,c01+
+         DC    X'1DF9',AL3(WHITE)
+         DC    C'=>',X'1DC9',AL3(RED)
+         DC    CL46' ',X'1DF5',AL3(TURQ)
+         DC    CL8',Volume=',X'1DC9',AL3(RED)
+         DC    CL6' ',X'1DF0'
+*
+RLASTC2  DC    X'110000'               Row last, c2+
+         DC    AL3(TURQ),C'Hit ',AL3(WHITE),C'PF03/15 ',AL3(TURQ)
+         DC    C'to return'
+*
+SCR3CURS DC    XL3'000000'
+         DC    X'13'
+SCR3LEN  EQU   *-SCR3TXT               Length screen
+SCR3LENF EQU   *-SCR3TXTF              Length screen of TPUT FULLSCR
+*
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F
+DBW      DS    D
+SBAR0R1  DS    D
+SAVERECL DS    F                       Save LRECL to test if APPEND=YES
+PRMCOMM  DS    F                       A(RPFCOMM)
+SCREEN   DS    CL(SCR3LENF)            Data entry panel.
+BUFDSN   DS    CL46
+BUFVOL   DS    CL6
+BUFMEM   DS    CL8
+TMPMBR   DS    CL8                     Temp. field to store member name
+SBARET   DS    H                       Return SBA from TGET ASIS
+BUFSRCH  DS    CL25                    Search string
+BUFNUMB  DS    C                       Skip numbers Y/C/N
+BUFCASE  DS    C                       Ignore case Y/N
+BUFCONF  DS    C                       Confirm member delete
+NEWUID   DS    CL8
+NEWVV    DS    CL2
+NEWMM    DS    CL2
+R8C18    DC    X'110000'               Point to member r8,c18+
+R9C18    DC    X'110000'               Point to DSName r9,C18+
+R3C13    DC    X'110000'               Point to New UserID r3,c13+
+R3C34    DC    X'110000'               Point to Version r3,c34+
+R3C50    DC    X'110000'               Point to Mod. level r3,c50+
+R4C16    DC    X'110000'               Point to Search string r4,c16+
+R4C56    DC    X'110000'               Point to Skip numbers r4,c56+
+R5C56    DC    X'110000'               Point to Ignore case  r5,c56+
+R12C24   DC    X'110000'               Point to Confirm     r12,c24+
+DFTCUR   DC    X'110000'               contains r9,c10 or r10,c10+
+         CSR   MF=L
+SW       DS    X
+$NOSEL   EQU   128                     Nothing selected from sel.list
+WORKL    EQU   *-WORKAREA              Length of dynamic workarea
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM ,                     RPFCOMM area
+         END   ,                       END

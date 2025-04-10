@@ -1,0 +1,541 @@
+RPFDAIR  TITLE 'Dynamic allocation routine for RPF'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFDAIR.                                      *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Function:      Allocate the data sets to EDIT, SRCH, SAVE,   *
+*                       Browse, Library functions, Reset stats,       *
+*                       Search and VTOC functions.                    *
+*                       The data set will be allocated under DDname   *
+*                       RPFWORK and RPFWORK2.                         *
+*                       Allocation will be done with IKJDAIR.         *
+*                       Register 1 contains the address of a fullword *
+*                       with the address of RPFCOMM.                  *
+*                       Depending of switch $COMMALC an allocation,   *
+*                       or an unallocation will be executed.          *
+*                                                                     *
+*        Parameter:     Switch $COMMALC in RPFCOMM:                   *
+*                       If the switch is ON, an unallocation and      *
+*                       allocation will be executed.                  *
+*                       If the switch = OFF, only the unallocation    *
+*                       will be executed.                             *
+*                                                                     *
+*        Called by:     RPFALLOC                                      *
+*                       RPFASM                                        *
+*                       RPFDATAL                                      *
+*                       RPFPDS                                        *
+*                       RPFSAVE                                       *
+*                       RPFVTOC1                                      *
+*                                                                     *
+*        Registers:     Register 12 is the base register              *
+*                       Register 13 points to the dynamic workarea    *
+*                       within the first 72 bytes, the save area.     *
+*                       Register 11 points to the RPFCOMM control blk *
+*                                                                     *
+*        Return codes:  Set in register 15.                           *
+*                       00 - Allocation successful.                   *
+*                       04 - Data set not in catalog.                 *
+*                       08 - Data set not on volume.                  *
+*                       12 - DYNALLOC error (refer DYNALLOC error cde)*
+*                       20 - RECFM not fixed or variable (blocked)    *
+*                            Only for EDIT, Reset Stats and Search    *
+*                       28 - DSORG is not PS or is not PO             *
+*                       32 - Member not found or not supplied         *
+*                       36 - Access denied                            *
+*                       40 - I/O error (BLDL RC=8)                    *
+*                                                                     *
+*        Notes: 1. The SYS1.(A)MODGEN library should be a part of the *
+*                  SYSLIB concatenation of the assembly               *
+*               2. Set variables &OS390 and &SMS in member SYSVARS    *
+*                  to get the advantages of allocating a              *
+*                  PDSE in OS/390 or OS/390 or z/OS.                  *
+*                  Set &OS390 to 0 if using MVS or MVS/XA.            *
+*                                                                     *
+*        Change log:                                                  *
+*        Aug 21,2002 RPr: Support RECFM=VB and add ESTAE routine      *
+*        Dec 15,2018 RPr: Make RPF suitable for mvs/380 and up   @rpa01
+*        Apr 14,2019 RPr: RPFEDIT supports V(B) data sets and         *
+*                         supports records up to 255 bytes in length  *
+*        Jun 14,2019 RPr: Support PDSE if assembled with &SMS = 1.    *
+*        Nov 23,2019 RPr: Module optimized                            *
+*        Jan 29,2020 RPr: If no member supplied in a PDS(E) supply    *
+*                         <blank> instead of 'TEMPNAME'               *
+*        Feb 02,2020 RPr: Allow RECFM=U for Browse and PDS (opt 3.1)  *
+*        Jun 15,2020 RPr: Ignore member name if DSORG of data set is  *
+*                         PS and delete return code 24                *
+*        May 16,2021 RPr: Do not populate COMMVOL if data set is      *
+*                         cataloged.                                  *
+*        May 17,2021 RPr: Replace DYNALLOC calls with IKJDAIR calls   *
+*                         to allocate and unallocate.                 *
+*        Jun 03,2021 RPr: Fix check abend913 if data set is sequential*
+*        Jun 21,2021 RPr: Give RC=40 if BLDL fails with RC=8          *
+*        Jun 27,2021 RPr: Remove ESTAE and add DCB abend exit.        *
+*                         RPFDAIR made reentrant and reusable.        *
+*        Dec 07,2024 RPr: Use standard TSO naming conventions for     *
+*                         data set names.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFDAIR  CSECT
+RPFDAIR  AMODE 31                                                @rpa01
+RPFDAIR  RMODE 24                                                @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers of caller
+         LR    R12,R15                 Setup base register
+         USING RPFDAIR,R12             Make RPFDAIR addressable
+         L     R11,0(,R1)
+         USING COMMAREA,R11
+         GETMAIN R,LV=WORKL            Aquire dynamic area
+         ST    R1,8(,R13)              Forward pointer
+         ST    R13,4(,R1)              Backward pointer
+         LR    R13,R1                  Our workaea
+         USING WORKAREA,R13            Make our workarea addressable
+         B     START                   Branch over constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         LA    R0,JFCB                 Job file control block
+         ST    R0,EXLST                Save JFCB in exit list
+         LA    R0,DCBABEND             DCB abend exit
+         ST    R0,EXLST+4              Save JFCB in exit list
+         MVI   EXLST,X'07'             JFCB exit
+         MVI   EXLST+4,X'91'           DCB abend exit is last entry
+         MVC   PDSDCB,MDLPDS           Copy model ....
+         MVC   SEQDCB,MDLSEQ                DCB's
+         LA    R0,EXLST                Exit list (JFCB + DCB abend)
+         STCM  R0,B'0111',SEQDCB+DCBEXLSA-IHADCB
+         LA    R0,EXLST2               Exit list (DCB abend)
+         STCM  R0,B'0111',PDSDCB+DCBEXLSA-IHADCB
+         MVI   SW,0                    Clear flags
+         XC    COMMVM,COMMVM           Clear ISPF/RPF vv:mm field
+*
+         ST    R11,PARMFLD             Parameter for DSNPARS
+         LA    R1,COMMDSN              2nd parameter (unparsed DSN)
+         ST    R1,PARMFLD+4
+         LA    R1,DADSN                3rd parameter (parsed DSN)
+         ST    R1,PARMFLD+8
+         L     R15,EPDSNPA             Routine address
+         LA    R1,PARMFLD              Parameter
+         BALR  R14,R15                 Execute
+         BAL   R14,UNALLOC             Unallocate first
+         TM    COMMFLG1,$COMMALC       Unallocation only?
+         BO    START3                  No: unallocation + allocation
+         SR    R15,R15                 Return code 0
+         B     RPFRTN                  Return to caller
+START3   DS    0H
+*
+         CLI   COMMVOL,C' '            No volume specified?
+         BNE   RPF001                  Specified: bypass LOCATE
+         XC    CAMLST,CAMLST           Clear LOCATE parameter list
+         MVI   CAMLST,X'44'            CAMLST NAME
+         LA    R0,DADSN
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,LOCAREA
+         ST    R0,CAMLST+12            Option 4
+         LOCATE CAMLST                 Search data set om catalog
+         LTR   R15,R15                 Locate OK?
+         BZ    RPF001                  Yes: good
+         LA    R15,4                   Rc = 4, data set not in catalog
+         B     RPFRTN                  Return to caller
+*
+RPF001   DS    0H
+         BAL   R14,RPFALLOC            Allocate the data set
+         LTR   R15,R15                 Allocation ok?
+         BZ    RPF012                  Yes: good
+         LR    R6,R15                  Save return code
+         BAL   R14,UNALLOC             Unallocate old data set
+         LR    R15,R6                  Restore return code
+         B     RPFRTN                  Return
+RPF012   XC    CAMLST,CAMLST           Clear LOCATE parameter list
+         MVI   CAMLST,X'C1'            CAMLST SEARCH
+         LA    R0,DADSN
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,OBTVOL
+         ST    R0,CAMLST+8             Option 3
+         LA    R0,DSCB1                Format 1 DSCB
+         ST    R0,CAMLST+12            Option 4
+         OBTAIN CAMLST                 Test if data set is on volume
+         LTR   R15,R15                 Is the data set there
+         BZ    RPF013                  Yes: good
+         BAL   R14,UNALLOC             Unallocate
+         LA    R15,8                   Rc = 8, data set not in VTOC
+         B     RPFRTN                  Return
+*
+*        Test Record format of the data set
+*
+RPF013   DS    0H
+         TM    DSCB1+40,X'C0'          X'C0' = RECFM=U?
+         BO    RPF017                  RECFM=U only option 3.1
+         TM    DSCB1+40,X'40'          RECFM=V(B)
+         BNO   RPF014                  No: test if RECFM=F
+         OI    COMMFLG4,$COMVB         Mark variable records
+         B     RPF016                  and branch
+RPF014   DS    0H
+         TM    DSCB1+40,X'80'          RECFM=F(B)?
+         BNO   RPF017                  No: RECFM = undefined
+         OI    COMMFLG4,$COMFB         Set flag fixed records
+RPF016   DS    0H
+         LH    R1,DSCB1+44             Pickup LRECL
+         TM    COMMFLG4,$COMVB         Variable records?
+         BNO   *+8                     No: do not change COMMRECL
+         SH    R1,=H'4'                Skip RDW
+         ST    R1,COMMRECL             and save in RPFCOMM
+         B     RPF018                  Branch
+RPF017   DS    0H
+         TM    COMMFLG3,$COMBR         Invoked for BROWSE?
+         BO    RPF018                  Yes: accept RECFM=U
+         TM    COMMFLG3,$COMEDIT+$COMISPF+$COMSRCH EDIT, search, reset?
+         BZ    RPF018                  No: accept RECFM=U
+*
+*        RECFM=U will be accepted in Browse (option 1) and
+*                Library Functions (option 3.1)
+*
+         TM    COMMFLG3,$COMEDIT       EDIT selected?
+         BZ    RPF017A                 No: always return code 20
+         NI    COMMFLG3,255-$COMEDIT   Reset EDIT flag
+         OI    COMMFLG3,$COMBR+$COMSUBS Substitute Browse
+         B     RPF018                  and accept RECFM=U
+RPF017A  DS    0H
+         LA    R15,20                  Rc = 20, RECFM not F(B) or V(B)
+         B     RPFRTN                  Return
+RPF018   DS    0H
+         MVC   COMMARDS,=C'PO'         Mark input Archive is PO
+         TM    DSCB1+38,X'40'          Is DSORG PS?
+         BNO   RPF019                  No: test if PO
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  SEQDCB,MF=(E,COMOPN)    Open the data set to check
+         TM    SW,$913                 Abend 913 detected?
+         BNO   RPF018A                 No: open is OK
+         LA    R15,36                  Rc = 36, Access denied
+         B     RPFRTN                  Retry successful
+RPF018A  MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE SEQDCB,MF=(E,COMCLS)    Close ...
+         FREEPOOL SEQDCB                        and free the buffers
+         OI    COMMFLG1,$COMMSEQ       Set sequential flag
+         MVC   COMMARDS,=C'PS'         Mark input Archive is sequential
+         XR    R15,R15                 Rc = 0
+         CLI   COMMBR,X'40'            Is there a member name?
+         BE    RPFRTN                  No: good
+         MVI   COMMBR,C' '             Blank member name
+         MVC   COMMBR+1(7),COMMBR      because DSORG=PS
+         B     RPFRTN                  Return
+RPF019   DS    0H
+         TM    DSCB1+38,X'02'          DSORG data set is partitioned?
+         BO    RPF021                  Yes: good
+         BAL   R14,UNALLOC             No: error, datas set not PS/PO
+         LA    R15,28                  Rc 28 *DS not PS or not PO*
+         B     RPFRTN                  Return to caller
+RPF021   DS    0H
+         CLI   COMMBR,X'40'            Member name present?
+         BNE   RPF023                  Yes: good
+         MVI   COMMBR,C' '             Blank member name
+         MVC   COMMBR+1(7),COMMBR
+RPF023   DS    0H
+         LH    R1,DSCB1+44             Pickup LRECL
+         TM    COMMFLG4,$COMVB         Variable records?
+         BNO   *+8                     No: do not change COMMRECL
+         SH    R1,=H'4'                Skip RDW
+         ST    R1,COMMRECL             and save in RPFCOMM
+         LR    R2,R15                  Save return code
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  PDSDCB,MF=(E,COMOPN)    Open the PDS (DDN=RPFWORK2)
+         TM    SW,$913                 Abend 913 detected?
+         BNO   RPF023A                 No: open is OK
+         LA    R15,36                  Rc = 36, Access denied
+         B     RPFRTN                  Notify to user
+RPF023A  DS    0H
+         AIF   (NOT &OS390).NOSMS1
+         AIF   (NOT &SMS).NOSMS1
+         MVI   SMS_M+20,0              Concatenation number
+         MVI   SMS_M+21,B'00010000'    ISIFLG1 flags
+         XC    SMS_M+22(6),SMS_M+22    Output field
+         ISITMGD DCB=PDSDCB,MF=(E,SMS_M) Test if SMS managed
+         TM    ISMOFLG2,ISMPDSE        a PDSE?
+         BNO   *+8                     No: branch
+         OI    COMMFLG3,$COMPDSE       Turn on PDSE flag
+.NOSMS1  ANOP
+         CLI   COMMBR,C' '             All members?
+         BE    RPF023B                 Yes: bypass BLDL
+         MVC   BLDLLIST(4),=X'0001004C' One entry of 76 bytes
+         MVC   BLDLNAME,COMMBR         Member name into BLDLLIST
+         BLDL  PDSDCB,BLDLLIST         Test if member present
+         LTR   R15,R15                 Member is there?
+         BZ    RPF025                  Yes: Go to RDJFCB and OPENJ
+         CH    R15,=H'4'               Return code 4 (mbr not found)?
+         BNE   RPF023C                 No: should be an I/O error
+RPF023B  DS    0H
+         LA    R2,32                   Rc = 32, member not found
+         B     RPF024                  Carry on
+RPF023C  DS    0H
+         LA    R2,40                   Rc = 40, I/O error
+RPF024   DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE PDSDCB,MF=(E,COMCLS)    Close PDS(E)
+         LR    R15,R2                  Return code 0, 32 or 40
+         B     RPFRTN                  Return
+RPF025   DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE PDSDCB,MF=(E,COMCLS)    Close PDS(E)
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         RDJFCB SEQDCB,MF=(E,COMOPN)   JFCB of sequential ds (RPFWORK)
+         MVC   JFCB+44(8),COMMBR       Member name in JFCB
+         OI    JFCB+86,X'01'           Mark PDS open for as sequential
+*                                      to catch x13 abends
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  SEQDCB,TYPE=J,MF=(E,COMOPN) opn  DCB and write JFCB back
+         TM    SW,$913                 Abend 913 detected?
+         BNO   RPF025A                 No: open is OK
+         LA    R15,36                  Rc = 36, Access denied
+         B     RPFRTN                  Retry successful
+RPF025A  MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE SEQDCB,MF=(E,COMCLS)    Close PDS(E)
+         FREEPOOL SEQDCB               Release the buffers
+*
+*        Test if ISPF stats are present. If so, save VV and MM in
+*        RPFCOMM
+*
+         LR    R15,R2                  Restore return code
+         LA    R3,BLDLC                Point to C byte in directory
+         USING SPFDATA,R3              Get addressability Userdata
+         NI    SPFC,B'00011111'        Clear bits 0-2 of C byte
+         CLI   SPFC,X'0F'              Is userdata in dir 15 halfwords?
+         BE    RPF031                  Yes: probably ISPF stats
+         CLI   SPFC,X'14'              Is userdata in dir 20 halfwords?
+         BNE   RPFRTN                  No ISPF extended stats
+RPF031   DS    0H
+         TM    SPFDATEI+3,X'0C'        Does date create contain a sign?
+         BNO   RPFRTN                  No: definitely no ISPF stats
+         MVC   COMMVM,SPFVERS          Move ISPF/RPF vv:mm to RPFCOMM
+         DROP  R3
+RPFRTN   DS    0H                      Return to caller
+         LR    R2,R15                  Save return code
+         LR    R3,R13                  Save address workarea
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Free this work area
+         LR    R15,R2                  Restore return code
+         RETURN (14,12),RC=(15)        Return to caller
+         TITLE 'DCB abend exit, ignore abend 913'
+DCBABEND DS    0H
+         TM    3(R1),B'00001110'       Processing allowed?
+         BZR   R14                     No: continue with abend
+         TM    3(R1),4                 Ignore bit on?
+         MVI   3(R1),0                 Prepare for NO
+         BZR   R14
+         MVC   DCBCOMP,0(R1)           Move completion code
+         NC    DCBCOMP,=X'FFF0'        Clear last nibble
+         CLC   DCBCOMP,=X'9130'        Do we have an RACF/ACF2 abend?
+         BNER  R14                     No: continue with abend
+         MVI   3(R1),4                 Yes: ignore abend
+         OI    SW,$913                 Indicate 913 abend
+         BR    R14                     Return to Access Method
+         EJECT
+*        GENERAL EQUATES.
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12                      Base register
+R13      EQU   13                      Save area + working storage
+R14      EQU   14
+R15      EQU   15
+*
+         TITLE 'Dynamic allocation routine'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        This routine dynamically allocates data sets through         *
+*        the IKJDAIR calls. To arrange this, it needs the DSNAME      *
+*        of the data set, that will be allocated with                 *
+*        ddname RPFWORK and RPFWORK2.     A returncode will be        *
+*        available in reg. 15 and an errorcode in 'DA08DARC'.         *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFALLOC DS    0H
+         ST    R14,ALLOCR14            Save register 14
+ALLOC001 DS    0H
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R3,RPFD08               Point to allocation parm block
+         USING DAPB08,R3               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFWORK'   DDNAME to allocate
+         MVI   DA08DSP1,DA08SHR        DISP=SHR
+         MVI   DA08DPS2,DA08KEEP
+         MVI   DA08DPS3,DA08KEP
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVI   DA08UNIT,X'40'          No UNIT name provided
+         MVC   DA08UNIT+1(7),DA08UNIT                   provided
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVC   OBTVOL,DA08SER          And blank volume in CAMLST
+         LA    R1,DADSN+44             Calculate ...
+         TRT   DADSN,COMSKPNS          Register -> first blank
+         LA    R0,DADSN                Point to beginning of dsn
+         SLR   R1,R0                   ... length
+         STCM  R1,3,DADSNL             And save real length
+         LA    R1,DADSNL               Data set name + length
+         ST    R1,DA08PDSN             Save in parameter block
+         CLI   COMMVOL,C' '            Is it a cataloged data set?
+         BE    ALLOC003                No: allocate with vol=ser
+         MVC   OBTVOL,COMMVOL          Move volume from RPFCOMM
+         MVC   DA08UNIT,COMMUNIT       Move unit name (SYSALLDA)
+         MVC   DA08SER,COMMVOL         Move volume serial
+ALLOC003 DS    0H
+         LA    R1,RPFD08               Point to allocation parm block
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Is allocation OK?
+         BNZ   ALLOCERR                No: error
+         MVC   DA08DDN,=CL8'RPFWORK2'  Same data set with other DDNAME
+         LA    R1,RPFD08               Point to allocation parm block
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Is allocation OK?
+         BNZ   ALLOCERR                No: error
+         CLI   COMMVOL,C' '            Is it a cataloged data set?
+         BNE   ALLOC009                No: volume already known
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         RDJFCB SEQDCB,MF=(E,COMOPN)   Obtain data set information
+         LA    R4,JFCB                 A(JFCB) in register 4
+         USING JFCBSECT,R4             Address JFCB
+         MVC   OBTVOL,JFCBVOLS         Move volume serial in CAMLST
+         DROP  R4                      Kill addressability of JFCB
+ALLOC009 DS    0H
+         XR    R2,R2                   Rc = 0
+         B     ALLOC999                Return
+ALLOCERR DS    0H
+         LA    R2,12                   Rc = 12, DYNALLOC error
+         CLC   DA08DARC,=X'6708'       Error code 'not on volume'
+         BNE   ALLOC999                No: leave RC to 12
+         LA    R2,8                    Rc = 8, data set not on volume
+ALLOC999 DS    0H
+         DROP  R3                      DAPB08
+         LR    R15,R2                  Load return code
+         L     R14,ALLOCR14            Restore register 14
+         BR    R14                     Return
+         TITLE 'DYNAMIC UNALLOCATION ROUTINE'
+UNALLOC  DS    0H
+         ST    R14,UNALLR14            Save register 14
+         XC    RPFD18,RPFD18           Clear parameter block
+         LA    R3,RPFD18               Point to unallocation parm blk
+         USING DAPB18,R3               Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'RPFWORK'   DDNAME to allocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         LR    R1,R3                   DAPB18
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         MVC   DA18DDN,=CL8'RPFWORK2'  DDNAME to allocate
+         LR    R1,R3                   DAPB18
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         NI    COMMFLG1,255-$COMMSEQ   Turn of sequential data set flag
+         NI    COMMFLG3,255-$COMPDSE   Turn off flags
+         NI    COMMFLG4,255-$COMFB-$COMVB Turn off RECFM flags
+UNALL999 DS    0H                      RETURN
+         DROP  R3                      DAPB18
+         L     R14,UNALLR14            Restore register 14
+         BR    R14                     Return
+         PRINT NOGEN
+MDLPDS   DCB   DSORG=PO,BLKSIZE=256,MACRF=R,DDNAME=RPFWORK2,           X
+               EXLST=*-*
+PDSL     EQU   *-MDLPDS
+*
+MDLSEQ   DCB   DSORG=PS,MACRF=GM,DDNAME=RPFWORK,EXLST=*-*
+SEQL     EQU   *-MDLSEQ
+         LTORG ,
+         DROP
+         PRINT GEN
+*
+         COPY  CALLTS
+*
+         TITLE 'Working storage'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Dynamic area                                                 *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+WORKAREA DSECT
+SAVE     DS    18F                     Save area
+R12TS    DS    F                       Save register 12 CALLTS
+R14TS    DS    F                       Save register 14 CALLTS
+PARMFLD  DS    3F                      3 parameters for DSNPARS
+DADSNL   DC    AL2(0)
+DADSN    DC    CL44' '                 Data set name to allocate
+ECB      DS    F                       ECB for IKJDAIR
+RPFDAPL  DS    5F                      IKJDAIR parameter list
+RPFD08   DS    CL84                    Dair parm block 08 (allocation)
+RPFD18   DS    CL40                    Dair parm block 18 (unalloc.)
+ALLOCR14 DS    F                       Save register 14
+*
+WORK     DS    D                       For CVD instructions
+UNALLR14 DS    F
+PDSDCB   DS    CL(PDSL)
+SEQDCB   DS    CL(SEQL)
+         SPACE 3
+CAMLST   DS    XL16                    For LOCATE and OBTAIN data set
+LOCAREA  DS    0D
+         DS    CL6                     Not used by RPFDAIR
+LOCVOL   DS    CL6                     Obtained volume
+         DS    CL253                   Rest of LOCAREA
+*
+         DS    0D
+DSCB1    DS    CL140
+OBTVOL   DS    CL6
+*
+BLDLLIST DS    0F                      For BLDL macro
+N1       DC    AL2(1)                  BLDL 1 entry
+L1       DC    AL2(76)                 Length of entry
+BLDLNAME DS    CL8                     Member name to BLDL
+BLDLTTR  DS    CL3
+BLDLKZ   DS    CL2                     K and Z byte
+BLDLC    DS    C                       C byte (# halfwords userdata)
+         DS    CL62                    Rest of BLDLLIST
+*
+         AIF   (NOT &OS390).NOSMS2
+         AIF   (NOT &SMS).NOSMS2
+SMS_M    ISITMGD CONCAT=0,DCB=,DATATYPE=YES,MF=L
+         ORG   SMS_M
+         IGWCISM DSECT=NO
+.NOSMS2  ANOP
+*
+         DS    0F
+EXLST    DC    X'07',AL3(JFCB)         \____JFCB exit of SEQDCB_____/
+EXLST2   DC    X'91',AL3(DCBABEND)     /       DCB abend exit       \
+JFCB     DS    CL176                   Copy of JFCB
+DCBCOMP  DS    CL2                     Open abend completion code
+SW       DS    X                       Flags
+$913     EQU   128                     913 abend detected
+WORKL    EQU   *-WORKAREA              Length
+         TITLE 'RPFCOMM AREA'
+COMMAREA RPFCOMM
+SPFDATA  DSECT  ,                      Member with ISPF user data
+*                                      or the new format RPF user data
+SPFC     DS    C                       C byte (15 or 20 if ISPF stats)
+SPFUSER  EQU   *                       ISPF stats
+SPFVERS  DS    X                           Version
+SPFMOD   DS    X                           Mofification number
+         DS    CL2
+SPFDATEI DS    PL4                         Date member created
+JFCBSECT DSECT
+         IEFJFCBN
+         CVT   DSECT=YES,LIST=NO
+         PRINT NOGEN
+         DCBD  DSORG=PS,DEVD=DA
+         IKJCPPL
+         IKJDACB
+         IKJDAPL
+         IKJDAP08
+         IKJDAP18
+         END

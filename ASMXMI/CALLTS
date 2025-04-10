@@ -1,0 +1,40 @@
+         TITLE 'Invoke IKJDAIR, A(Parm block) in R1'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:   CALLTS                                            *
+*        Function:  Invoke IKJDAIR to allocate or unallocate data sets*
+*                   Register 1 contains the address of the allocation *
+*                   or unallocation DAIR parameter blocks.            *
+*                                                                     *
+*        Note:      Do not touch the registers 2-12, unless saved     *
+*                   and restored.                                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+CALLTS   CSECT
+         USING WORKAREA,R13            Make our working storage avail.
+         USING COMMAREA,R11            Make RPFCOMM available
+         ST    R12,R12TS               Save RPFMVCPY first base
+         LR    R12,R15                 Setup base register
+         USING CALLTS,R12
+         ST    R14,R14TS               Save register 14
+         LR    R14,R1                  Save A(IKJDAIR parm block)
+         XC    ECB,ECB                 Clear ECB
+         LA    R1,RPFDAPL
+         L     R2,COMMCPPL             Pickup our CPPL
+         USING CPPL,R2
+         USING DAPL,R1
+         MVC   DAPLUPT(4),CPPLUPT
+         MVC   DAPLECT(4),CPPLECT
+         XC    ECB,ECB                 Clear Event control block
+         LA    R0,ECB                  Address of our ECB
+         ST    R0,DAPLECB              Set A(ECB) in DAPL
+         MVC   DAPLPSCB(4),CPPLPSCB
+         ST    R14,DAPLDAPB            Set A(parm block) in DAPL
+         RPFSA24                       Goto addressing mode 24
+         CALLTSSR EP=IKJDAIR,MF=(E,RPFDAPL)
+         RPFSA31                       Restore addressing mode
+         L     R12,R12TS               Restore register 12
+         L     R14,R14TS               Restore register 14
+         BR    R14
+         LTORG ,
+         DROP  ,

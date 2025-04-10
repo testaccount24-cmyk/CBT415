@@ -1,0 +1,11 @@
+         MACRO
+&NAME    RPFSA31 &REG=14
+&NAME    TM    COMMOS,X'93'            MVS/XA OR LATER?
+         BNO   SA&SYSNDX.2             NO: NO SWITCH NEEDED
+         LA    0,1                     LOAD AM31 BIT
+         SLL   0,31                    PROMOTE TO HIGH-ORDER
+         LA    &REG,SA&SYSNDX.2
+         OR    &REG,0                  SET AM31 BIT
+         DC    Y(11*256+&REG)          BSM 0,XX
+SA&SYSNDX.2 DS    0H
+         MEND

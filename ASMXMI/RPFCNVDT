@@ -1,0 +1,350 @@
+RPFCNVDT TITLE 'Convert 3/4 byte Julian date to Gregorian'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFCNVDT                                      *
+*                                                                     *
+*        Author:        Rob Prins, Skybird systems                    *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*        How to call:                                                 *
+*                 CALL  RPFCNVDT,(DATE,OUTPUT)                        *
+*                 ....                                                *
+*        DATE     DS    PL3/PL4        DATE PACKED SIGNED (YY)YYDDD   *
+*        OUTPUT   DS    0CL49          DATE TO BE GIVEN BACK          *
+*        DAYNUM   DS    CL2            01 IS SUNDAY 07 IS SATURDAY    *
+*        DAYNAME1 DS    CL09           ENGLISH                        *
+*        DAYNAME2 DS    CL09           DUTCH                          *
+*                 DS    CL1                                           *
+*        DD       DS    CL2            DATE (E.G. 28 FOR E.G. 28 DEC) *
+*                 DS    CL1                                           *
+*        MONTHNUM DS    CL2            01 is January 12 is December   *
+*        M#NAME1  DS    CL09           ENGLISH                        *
+*        M#NAME2  DS    CL09           DUTCH                          *
+*                 DS    CL1                                           *
+*        JJ       DS    CL4            YEAR                           *
+*                                                                     *
+*        RPFCNVDT calculates the days and dates in a correct way      *
+*        until December 31,2071. If the first parm is 4 bytes         *
+*        and the second PARM contains X'FF' in the first byte         *
+*        then you gat a correct date until December 31,2099.          *
+*                                                                     *
+*        Register 8 contains the 3 or 4 byte packed Julian date       *
+*        Register 9 contains the 49 answer area containing the        *
+*                   Gregorian date incl. UK + NL dayname and monthname*
+*                                                                     *
+*        Change log:                                                  *
+*        Jan 18, 1996 RPr: Add century support.                       *
+*        Apr,23, 1997 RPr: RPFCNVDT use no sliding century if the     *
+*                          1st byte of the input field contains X'FF'.*
+*                          If first byte = FF, then RPFCNVDT assumes  *
+*                          that the first PARM (the date) is a four   *
+*                          byte packed field containing 'YYYYDDDF'    *
+*        Feb 05, 1999 RPr: PARM1 can also be an 'SMF DATE' (CCYYDDD)  *
+*                          'CC' contains 00 for 19th or 01 for 20th.  *
+*                          If so, 19 will be added to 'CC' to make    *
+*                          to make a YYYYDDDF field.                  *
+*        Jul 06, 1999 RPr: If PARM1 = packed zero or hex zero         *
+*                          the current date will be returned          *
+*        Aug 05, 1999 CRo: LV=543 (72+471)                            *
+*                          make TABLE and CONST equal = 471 bytes     *
+*        Dec 17, 2018 RPr: Make RPF suitable for MVS/380 and up  @rpa01
+*        Nov 22, 2019 RPr: Module redesigned                          *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFCNVDT CSECT
+RPFCNVDT AMODE 31                      *                         @rpa01
+RPFCNVDT RMODE ANY                     *                         @rpa01
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFCNVDT,R12            Make RPFCNVDT addressable
+         LM    R8,R9,0(R1)             Load parameters
+         L     R3,=A(TABLELL)          Length
+         GETMAIN R,LV=(3)              Obtain SAVE & workarea
+         ST    R1,8(,R13)              Foreward pointer
+         ST    R13,4(,R1)              Backward pointer
+         LR    R13,R1                  New savearea
+         USING TABLE,R13               471 byte workarea
+*---------------------------------------------------------------------*
+*
+*        Move constants to GETMAINED area + 72 pointed to by
+*        register 13, the first 72 bytes of the area is the save area
+*
+*        The length of CONST = 471 bytes
+*        The length of TABLE is 543 bytes (incl. Save area)
+*        The length and order of TABLEC and CONST should be equal!
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+*
+         MVC   TABLEC(240),CONST       Move CONST to ...
+         MVC   TABLEC+240(231),CONST+240 ... Getmained area + 72
+*
+         MVC   JJ(2),=C'  '            Blank area
+         CLI   0(R9),X'FF'             4 bytes date field received?
+         BNE   DATE01                  No: we have 3 bytes
+*
+*        Process a 4 byte Julian date (to DATE01) = ccyyddds
+*
+         CLC   0(3,R8),=X'000000'      No date supplied?
+         BE    @NODATE                 Yes: use current date
+         B     @DATE                   No: use 4 byte date from Parm
+*
+*        Process a 3 byte Julian date (to @NODATE) = yyddds
+*
+DATE01   DS    0H                                                 @2000
+         CLC   0(2,R8),=X'0000'        No date supplied?
+         BE    @NODATE                 Yes: take current date
+         UNPK  DAYNB(5),0(3,R8)        Unpack yyddd
+         OI    DAYNB+4,X'F0'           Make absolute
+         PACK  YEAR(2),DAYNB(2)        Pack year of Julian date
+         PACK  DAY(2),DAYNB+2(3)       Pack day of Julian date
+         MVC   CC,=C'19'               Default 19xx (20th century)
+         CP    YEAR(2),SLIDE           1972 or lower?
+         BH    DATE09
+         MVC   CC,=C'20'               Lower than 1972, assume 21th
+         B     DATE09                  Finish century check
+*
+@NODATE  DS    0H
+         TIME  DEC                     Obtain current date
+         ST    R1,DATEFLD              Save field
+         UNPK  DAYNBCC(7),DATEFLD      Unpack
+         B     DATE03                  Branch over next instruction
+@DATE    DS    0H
+         UNPK  DAYNBCC(7),0(4,R8)      Unpack 4 byte Julian date
+*
+DATE03   DS    0H
+         OI    DAYNBCC+6,X'F0'         Make absolute
+         PACK  YEAR(2),DAYNB(2)        Pack year of Julian date
+         PACK  DAY(2),DAYNB+2(3)       Pack day of Julian date
+         CLC   DAYNBCC,=C'00'          SMF date (00yyddd)         @2000
+*                                      CC=00 = 19                 @2000
+         BNE   DATE05                  No test if '01'            @2000
+         MVC   DAYNBCC,=C'19'          Change this into '19'      @2000
+DATE05   DS    0H                                                 @2000
+         CLC   DAYNBCC,=C'01'          SMF date (01yyddd)?        @2000
+*                                      CC=01 = 20                 @2000
+         BNE   DATE07                  No: it's a normal date     @2000
+         MVC   DAYNBCC,=C'20'          Change this into '20'      @2000
+DATE07   DS    0H                                                 @2000
+         CLC   DAYNBCC,=C'19'          Below 19?                  @2000
+         BL    ERROR                   Yes: error                 @2000
+         MVC   CC(2),DAYNBCC           Move century to user field
+*
+DATE09   DS    0H                                                 @2000
+         CP    DAY,=P'0'               Check date
+         BNH   ERROR                   Invalid...
+         ZAP   DWB,YEAR
+         CVB   R2,DWB                  Make year binary
+         XR    R3,R3
+         SRDL  R2,2                    Test for a leap year
+         LTR   R3,R3                   Is it a leap year?
+         BNZ   A000                    No: branch
+         MVI   MONTHTAB+21,X'1D'       February has now 29 days
+         CP    DAY,=P'366'             Max day number in leap year?
+         BH    ERROR                   High: invalid date
+         B     A001
+*
+A000     DS    0H
+         CP    DAY,=P'365'             Max # days in a non-leap year?
+         BH    ERROR                   High: invalid date
+A001     DS    0H
+         LA    R2,MONTHTAB             Name table of months
+         ZAP   DWB,DAY
+         CVB   R4,DWB                  Make Julian day binary
+A003     XR    R5,R5                   Clear register
+         IC    R5,0(R2)                Insert number of days in month
+         CR    R4,R5                   Right month reached?
+         BNH   A005                    Yes: good
+         SR    R4,R5                   Subtract # days month from
+*                                      Julian daynumber
+         LA    R2,21(,R2)              Next entry month table
+         B     A003                    Loop
+A005     DS    0H
+         MVC   MM,1(R2)                Move month number in field
+         UNPK  JJ(2),YEAR(2)           Year in field
+         OI    JJ+1,X'F0'
+         CVD   R4,DWB                  Right day of month
+         UNPK  DD(2),DWB               Right day in field
+         OI    DD+1,X'F0'
+         LA    R4,0
+         LA    R3,0                    1 Jan 1900 is a Monday
+*---------------------------------------------------------------------*
+*                                                                     *
+*        1 jan 1900 is Monday, but set the offset in the daytable     *
+*        to Sunday. The test for a leap year will be  set to 'true'   *
+*        for the year 1900, but this year is not a leap year.         *
+*        If the year is 72 or below, this routine assumes a year      *
+*        above 2000.                                                  *
+*        in this case the offset in the daytable (R3) will be         *
+*        set to '6' (1 Jan 2000 is a Saturday and 2000 is a leap      *
+*        year and '6' is pointing to Saturday)                        *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         CLC   CC,=C'20'               Year in in 21the century?
+         BNE   *+8                     No: branch
+         LA    R3,6                    Point to Saturday
+*+8
+         ZAP   DWB,YEAR
+         CVB   R2,DWB                  Make year binary
+A006     DS    0H
+         XR    R5,R5                   Clear register
+         CR    R4,R2                   Year reached?
+         BE    A009                    Yes: good
+         ST    R4,SAVE4                Save register 4
+         SRDL  R4,2                    Test for a leap year
+*
+*        Increase offset with 1, because year is 52 weeks and 1 day
+*        (E.G. Saturday of Year is Sunday in Year+1)
+*
+         LA    R3,1(,R3)
+         LTR   R5,R5                   Leap year?
+         BNZ   A007                    No: branch
+*
+*        A leap year is 52 weeks and 2 days, so increase by 2.
+*        (E.G. Saturday of Year is Monday in Year+1)
+*
+         LA    R3,1(,R3)
+A007     DS    0H
+         L     R4,SAVE4                Restore register 4
+         LA    R4,1(,R4)               Increase
+         B     A006
+A009     DS    0H
+         ZAP   DWB,DAY                 Julian days
+         CVB   R2,DWB                  Make binary
+         AR    R3,R2                   Add to offset daytable
+         BCTR  R3,0                    Minus 1, because offset
+         XR    R2,R2                   Clear even register
+         D     R2,=F'7'                # days in a week
+         MH    R2,=H'20'               Length entry in DAY table
+         LA    R3,DAYTAB               Start address Day name table
+         LA    R3,0(R2,R3)             Right offset in table
+         MVC   DAYNAME(20),0(R3)       Daynames (UK + NL) in field
+END      MVC   0(49,R9),DDMMYY         Set in user supplied field
+BACK     DS    0H
+         LR    R2,R13                  Save reg.14
+         L     R13,4(,R13)             Pickup callers savearea
+         L     R3,=A(TABLELL)          Length
+         FREEMAIN R,LV=(3),A=(2)       Free dynamic area
+         RETURN (14,12),RC=0           Return to caller
+*
+ERROR    DS    0H
+         MVC   DAYNAME,=C'00UNKNOWN  ONBEKEND '
+         MVC   MM(2),=C'00'
+         MVC   MM+2(4),=C'DATE'
+         MVC   MM+6(5),DAYNB
+         MVC   MM+11(4),=C'DAT.'
+         MVC   MM+15(5),DAYNB          Move invalid date to user field
+         B     END                     End of routine
+         TITLE 'CONSTANTS'
+SLIDE    DC    P'71'                   Sliding date for 3 byte Julian
+*
+*        Area CONST (to CONSTEND) will be moved to the GETMAINED
+*        area (TABLE+72)
+*
+CONST    DS    D                       Work field CVD/CVB
+         DS    F                       DATEFLD
+         DC    F'0'                    SAVE4
+*
+         DS    0CL49                   Second parm
+         DS    CL20
+         DC    C' '
+         DS    CL2
+         DC    C' '
+         DS    CL20
+         DC    C' XX'
+         DS    CL2
+*
+         DS    PL2                     Year
+         DS    PL2                     Julian day number
+*
+         DC    AL1(31),C'01',CL9'January',CL9'januari'
+         DC    AL1(28),C'02',CL9'February',CL9'februari'
+         DC    AL1(31),C'03',CL9'March',CL9'maart'
+         DC    AL1(30),C'04',CL9'April',CL9'april'
+         DC    AL1(31),C'05',CL9'May',CL9'mei'
+         DC    AL1(30),C'06',CL9'June',CL9'juni'
+         DC    AL1(31),C'07',CL9'July',CL9'juli'
+         DC    AL1(31),C'08',CL9'August',CL9'augustus'
+         DC    AL1(30),C'09',CL9'September',CL9'september'
+         DC    AL1(31),C'10',CL9'October',CL9'oktober'
+         DC    AL1(30),C'11',CL9'November',CL9'november'
+         DC    AL1(31),C'12',CL9'December',CL9'december'
+*
+         DC    C'01',CL9'Sunday',CL9'zondag'
+         DC    C'02',CL9'Monday',CL9'maandag'
+         DC    C'03',CL9'Tuesday',CL9'dinsdag'
+         DC    C'04',CL9'Wednesday',CL9'woensdag'
+         DC    C'05',CL9'Thursday',CL9'donderdag'
+         DC    C'06',CL9'Friday',CL9'vrijdag'
+         DC    C'07',CL9'Saturday',CL9'zaterdag'
+*
+         DS    CL2                     DAYNBCC
+         DS    CL5                     DAYNB
+         DS    CL3                     FILLER
+CONSTEND EQU   *
+* total = 543 bytes!
+         TITLE 'DYNAMIC WORKAREA'
+TABLE    DSECT
+         DS    18F
+TABLEC   EQU   *
+DWB      DS    D
+DATEFLD  DS    F
+SAVE4    DS    F
+*
+*
+DDMMYY   DS    0CL49                   Second parm
+DAYNAME  DS    CL20                    (xx + Name UK + Day NL)
+         DS    CL1
+DD       DS    CL2
+         DS    CL1
+MM       DS    CL20                    (xx + Month UK + Month NL)
+         DS    C
+CC       DS    CL2
+JJ       DS    CL2
+*
+YEAR     DS    PL2
+DAY      DS    PL2                     Julian day number
+MONTHTAB DS    CL21
+         DS    CL21
+         DS    CL21
+         DS    CL21
+         DS    CL21
+         DS    CL21
+         DS    CL21
+         DS    CL21
+         DS    CL21
+         DS    CL21
+         DS    CL21
+         DS    CL21
+DAYTAB   DS    CL20
+         DS    CL20
+         DS    CL20
+         DS    CL20
+         DS    CL20
+         DS    CL20
+         DS    CL20
+DAYNBCC  DS    CL2                                                @2000
+DAYNB    DS    CL5
+FILLER   DS    CL3                     For future use
+* total = 543 bytes!
+TABLEEND EQU   *
+*
+CONSTLL  EQU   CONSTEND-CONST+72  excl.72
+TABLELL  EQU   TABLEEND-TABLE
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END

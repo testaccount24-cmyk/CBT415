@@ -1,0 +1,63 @@
+Subject:  REPF 1.9.9.
+From:     <robprins2@kpnmail.nl>
+Date:     11/15/2024 11:42 AM
+To:       "Sam Golob" <sbgolob@cbttape.org>
+
+Hi Sam,
+
+Just before the release of MVS Turnkey 5 update-4, there is a new
+release of RPF.
+
+It does contain a few new functions, but the most are fixes and
+changed standards.
+
+Also, the user's guide is updated.
+
+The release notes:
+
+RPF      The prefix '&' of the primary commands is deleted.
+          Increase message length from 22 to 25 bytes.
+
+RPFARCH  Abend0C4 fixed in line command 'N' if the EDIT workspace
+          is located above the 16MB line.
+          Display the true name, GROUP, SUBGROUP, TYPE and VERSION
+          of the aliases and aliases are made non selectable for
+
+          line commands.
+          Fix selection of always the latest version of an ITEM,
+          if more than 1 version is in the ARCHIVE with line command
+          E,B or V.
+          Display aliases and delete alias too with 'D' line
+          command before true name.
+
+RPFBRO   Browse: ISPF vv.mm in header if present.
+          All NON-VSAM data sets supported but truncated to
+          record length=255.
+
+RPFEDIT  Allow primary command CUT with MM-MM line commands.
+          and give options SAVE, CANCEL or END if data changed
+          and AUTOSAVE=N.
+          If only a blank is added in an inserted line, keep
+          that line.
+
+RPFOUT   Display all jobs if a duplicate is detected
+
+Would you like to post the attached file on CBT?
+
+Thank you in advance.
+
+All the best of everything to you and your family.
+
+Met vriendelijke groet/With kind regards
+/Mit freundlichen Gruessen
+/Bien a vous/Saludos Cordiales
+
+Rob Prins
+Haremakers 54, 1531 LC Wormer
+T 06-46312299
+E robprins2@kpnmail.nl
+www.prince-webdesign.nl
+
+Attachments:
+CBT415.zip     2.6 MB
+

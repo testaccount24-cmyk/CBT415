@@ -1,0 +1,17 @@
+         GBLB  &SVS,&MVSXA,&OS390,&LARGE,&SMS
+&SVS     SETB  0                       Set to 1 for OS/VS2 rel. 1.7
+&MVSXA   SETB  0                       Set to 1 for MVS/XA or MVS/ESA
+&OS390   SETB  0                       Set to 1 for Z/OS and OS/390
+&LARGE   SETB  0                       Set to 1 for Z/OS large volumes
+&SMS     SETB  0                       Set to 1 if SMS managed
+         AIF   (&SVS AND &OS390).ERROR1
+         AIF   (&SVS AND &MVSXA).ERROR2
+         AIF   (&MVSXA AND &OS390).ERROR3
+*        IF OS390, MVSXA AND SVS ARE 0, THE OS = MVS
+         AGO   .END
+.ERROR1  MNOTE 8,'SVS AND OS390 ARE MUTUAL EXCLUSIVE'
+         AGO   .END
+.ERROR2  MNOTE 8,'SVS AND MVSXA ARE MUTUAL EXCLUSIVE'
+         AGO   .END
+.ERROR3  MNOTE 8,'MVSXA AND OS390 ARE MUTUAL EXCLUSIVE'
+.END     ANOP

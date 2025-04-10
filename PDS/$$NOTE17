@@ -1,0 +1,85 @@
+    RPF 1.9.8
+Subject:  RPF 1.9.8
+From:     <robprins2@kpnmail.nl>
+Date:     9/6/2024, 9:58 AM
+To:       "Sam Golob" <sbgolob@cbttape.org>
+
+Dear Sam,
+
+Finally, I am satisfied with the release of RPF 1.9.8.
+I have made a lot of updates on RPF.
+There are several new features and many improvements and some
+bugfixes.
+
+And I checked and updated the naming conventions in the panels.
+E.g., DSN, DSname is now 'Data set name'. Volume is 'Volume
+serial', and Member is ' Member name'.
+
+One exception is the Assembler screen (option 4),
+
+One module is completely rewritten. That is RPFLISTC. This module
+is now using SUPERLOCATE instead of LINK to IDCAMS to create the
+data set selection list.
+
+Would you like posting this version (see the attachment) onto CBT?
+Thank you in advance.
+All the best of everything to you and your family.
+
+These are the release notes:
+
+RPF        Minor errors fixed and minor improvements made.
+                  Panvalet interface (modules RPFPAN00 and RPFPAN01) deleted.
+                  OS VS/2 Release 1 (SVS) supported in most modules.
+
+RPFV       Stand alone DS-LIST: ex. PREFIX(SYS1.L) possible to display
+                  all data sets starting with SYS1.L.
+
+RPFDATAL   Entry screen: =n or =n.n (fast jump) supported in Member
+                  name or Data set name field.
+                  Entry screen: Option menu deleted.
+                  Fix test of first character of member name
+
+RPFSRCH    Fix ABEND0C4 in SEARCH of RECFM=V(B) sequential data set.
+
+RPFBRO     Browse: scroll from/to cursor if the cursor is in the data.
+                  Browse: Fix omission of error messages if an error occurs.
+                  Fix browse error and ABEND0C4 in HEX mode if a record
+                  with variable length contains no data.
+
+RPFARCH    Archiver: Line command 'N' added to browse the note of an
+                  item if present and add an '*' after VERSION in ITEM list
+                  if Notes are present.
+
+RPFEDIT    After a succesful 'F' primary command, place cursor on the
+                  line where the string is found, if on the same screen.
+                  Multiple line commands 'D' supported in 1 screen.
+
+RPFPFK     Accept Erase EOF and DEL key.
+
+RPFMVCPY   MOVE/COPY: set cursor on field in error if a problem
+                  is detected.
+
+RPFPDS     Fix IO-error after selecting a member, which is created
+                  by EDIT CREATE primary command.
+                  Fix test of first character of member name in
+                  primary command 'S member' in EDIT mode.
+
+RPFLISTC   DS-LIST: module rewritten. Use Super Locate instead
+                  of link to IDCAMS.
+
+RPFINIT    Option 'CAPS AUT/ON/OFF' read from profile.
+
+RPFDEF     Option 'CAPS AUT/ON/OFF' in session defaults screen
+                  and written on the RPF profile cluster.
+
+Met vriendelijke groet/With kind regards/Bien a vous
+/Mit freundlichen Gruessen/Saludos Cordiales
+
+Rob Prins
+Haremakers 54, 1531 LC Wormer
+Ploegdijk 2 H633, 7241 SC Lochem
+T 06-46312299
+E robprins2@kpnmail.nl
+www.prince-webdesign.nl
+
+

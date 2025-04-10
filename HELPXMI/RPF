@@ -1,0 +1,53 @@
+)F FUNCTION -
+   RPF is a TSO command processor, which gives you full screen
+   capabilities. RPF is a free-to-use ISPF like facility.
+
+   It operates as a command processor under TSO/VTAM in a MVS38J,
+   MVS/380, MVS/XA, MVS/ESA, OS/390 and z/OS operating system.
+   With the exception of MVS38J addressing mode 31 is available, so you
+   you can edit datasets or PDS members up to 999,999 lines.
+
+   RPF provides an easy way of entering and editing data on an IBM3270
+   terminal.
+   The following functions are available.
+
+   Option 0. Set or display defaults.
+   Option 1. Browse source data, output listings or load modules.
+   Option 2. EDIT source sequential datasets or PDS(E) members.
+   Option 3. Utility functions:
+             0. Reset or delete ISPF statistics.
+             1. Library management of PDS(E).
+             2. Create or delete datasets.
+             3. Move or Copy PDS(E) members.
+             4. DSLIST function.
+             5. LIBRARIAN maintenance.
+             6. Display, print, requeue or delete Job output.
+             7. Execute Greg Price's IMON.
+             8. Search strings in sequential or partitioned datasets.
+             9. ARCHIVER interface of Rick Fochtman's ARCHIVER
+   Option 4. Execute assembler and link edit functions.
+   Option 5. Invoke the RPFUSER1 exit if available.
+   Option 6. Execute TSO commands or CLISTS.
+   Option 7. Display HELP information:
+             1. Display RPF introduction
+             2. Display all RPF subcommands.
+             3. Display RPF internal return codes.
+             4. Display all RPF messages.
+             5. Display RPF release notes.
+   Option 8. RPF test facility, use at your own risk.
+   Option 9. Execute RPF operator facilities. Enter HELP for a
+             list of commands.
+
+   If you have any comments on RPF, please contact me, see below.
+
+   Rob Prins, loc. Wormer, phone +31 6 46 31 22 99
+   email:          prin0096@gmail.com
+   www:            www.prince-webdesign.nl/rpf
+)X SYNTAX -
+   RPF n.n
+
+   OPTIONAL - n.n
+   DEFAULTS - NONE
+)O OPERANDS -
+))n.n  - Go directly to option n after startup. E.g. RPF 2; do directly
+         to EDIT or RPF 3.4; go to DSLIST

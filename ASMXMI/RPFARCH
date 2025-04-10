@@ -1,0 +1,2827 @@
+RPFARCH  TITLE 'Read an ARCHIVE LIST output and make a selection list'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFARCH.                                      *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFUTIL (option 3.9)                          *
+*                                                                     *
+*        Function:      Present a menu for allocation an ARCHIVER     *
+*                       archive cluster, mask for ITEM, mask for      *
+*                       GROUP, mask for SUBGROUP and mask for TYPE.   *
+*                       If the Archive is allocated an index will     *
+*                       be read with the Archiver LIST function.      *
+*                       The output of the Index will be placed into   *
+*                       the EDIT workspace and will be set on the     *
+*                       screen. Maintenance can be                    *
+*                       performed to Edit (E), Browse (B), Delete (D),*
+*                       List Notes (N), Print (P), Rename (R) or      *
+*                       View (V) archive items.                       *
+*                       The index can be scrolled with the PFK's or   *
+*                       with the 'UP', 'DOWN', 'B(ottom)', 'T(op)',   *
+*                       'L', 'LEFT' and 'RIGHT' primary commands.     *
+*                                                                     *
+*        Archiver is a component, that archives source, load modules  *
+*        and data sets into a VSAM archive cluster. Archiver is a     *
+*        free component, which can be found on www.cbttape.org,       *
+*        file: 147. Archiver is written by Rick Fochtman.             *
+*                                                                     *
+*        Registers:     Registers 12 and 10 are the base registers.   *
+*                       Register 12 is the base of the subroutines.   *
+*                       Register 11 points to RPFCOMM.                *
+*                       Register 13 points to the working storage.    *
+*                       Register 9 points to the screens mapped by    *
+*                                  the SCREENS DSECT.                 *
+*                       Register 8 points to an archiver entry in the *
+*                                  EDIT workspace.                    *
+*                                                                     *
+*        Subroutines:   RPFPFK    To define/alter the PFK's           *
+*                       RPFEDIT   Edit the Archiver items             *
+*                       RPFBRO    Browse the Archiver items           *
+*                                 and the output of Archiver DELETE   *
+*                       ARCHIVER  Rick Fochtman's Archiver component  *
+*                                                                     *
+*        Change log:                                                  *
+*        Jul 09,2020 RPr: Initial Version                             *
+*        Jul 20,2020 RPr: Add Group, Subgroup and Type of ITEMS       *
+*                         and invoke RPFBRO after Delete processing   *
+*        Aug 01,2020 RPr: Aliasses Archive skipped in display.        *
+*        Aug 26,2020 RPr: Combined date or message in screen.         *
+*        Sep 28,2020 RPr: Process Item version in DELETE.             *
+*        Oct 24,2020 RPr: Remove options in screen.                   *
+*        Jan 24,2021 RPr: ISPF version/mod not inherited anymore.     *
+*        Mar 19,2021 RPr: Msg 'Invalid cmd' changed into              *
+*                         'Sel. B,D,E,P'                              *
+*        Jul 26,2021 RPr: Module optimized                            *
+*        Aug 01,2021 RPr: DYNALLOC's replaced by IKJDAIR calls        *
+*        Aug 09,2021 RPr: RPFARCH made re-entrant and re-usable.      *
+*        Nov 20,2021 RPr: Unallocate files before call to RPFEDIT.    *
+*        Jul 30,2022 RPr: Line command 'V' calls RPFEDIT in View mode.*
+*        Feb 15,2023 RPr: Space ARCHDSN increased to avoid x37 abend. *
+*        Mar 13,2023 RPr: EDIT/BROWSE/DELETE error fixed if GROUP,    *
+*                         SUBGROUP and/or TYPE are omitted.           *
+*        Apr 08,2023 RPr: RECFM=FA/FM/VA/VM error fixed.              *
+*        Apr 23,2023 RPr: ARCHIVER list can be filtered for ITEMS,    *
+*                         GROUPS, SUBGROUPS and TYPES.                *
+*        Sep 27,2023 RPr: VERSION not substituted if a DELETE was     *
+*                         issued for ITEMs without GROUP,SUBGROUP and *
+*                         TYPE. This is fixed.                        *
+*        Sep 28,2023 RPr: RENAME of ITEMS, GROUPS, SUBGROUPS and      *
+*                         TYPES are supported with line command R.    *
+*        Jan 01,2024 RPr: Add 'Confirm item delete' <blank> or '/' in *
+*                         entry screen to automatically delete        *
+*                         or not.                                     *
+*        Mar 22,2024 RPr: Add **END** line + number of items and      *
+*                         message 'Scroll had no effect' deleted.     *
+*        May 23,2024 RPr: Add primary commands LEFT and RIGHT and     *
+*                         place ITEM time saved on screen.            *
+*        Aug 14,2024 RPr: Add line command 'N' (list notes) and       *
+*                         add an '*' after the version if notes are   *
+*                         present.                                    *
+*        Sep 12,2024 RPr: Delete the ALIAS too with 'D' line command. *
+*        Sep 18,2024 RPr: Display info of true name in aliases.       *
+*        Sep 24,2024 RPr: Fix selection of always the latest version  *
+*                         of an ITEM, if more than 1 version is in    *
+*                         the ARCHIVE. With line-command E,B or V.    *
+*        Oct 16,2024 RPr: Abend0C4 fixed with line command 'N' if the *
+*                         EDIT workspace is above the line.           *
+*        Dec 07,2024 RPr: Use standard TSO naming conventions for     *
+*                         data set names.                             *
+*        Feb 14,2025 RPr: Fix wrong data in ITEM on entry screen, if  *
+*                         ITEM is deleted with Erase EOF.             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFARCH  CSECT
+RPFARCH  AMODE 31                      *
+RPFARCH  RMODE 24                      *
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFARCH,R12,R10         Make RPFARCH addressable
+         LA    R10,2048(,R12)          2nd base
+         LA    R10,2048(,R10)                  register
+         L     R11,0(,R1)              Pick up RPFCOMM
+         USING COMMAREA,R11            Address it
+         XC    COMMPRM,COMMPRM         Clear COMMPRM in RPFCOMM
+         LA    R1,SCRENT               80 + SBA's + SF's + attr.
+*                                      See SCRENT in SCRENTRY DSECT
+         CLC   COMMCOLS,=F'96'         Screen width is at least 96?
+         BL    INIT01                 No: narrow screen with LEFT/RIGHT
+         LA    R1,SCRENTEX             Wider screen
+INIT01   DS    0H
+         L     R0,COMMSIZE             # lines on screen
+         BCTR  R0,0                    Minus 3 ....
+         BCTR  R0,0                            .... header
+         BCTR  R0,0                                        .... lines
+         MR    R0,R0                   (80+9)*(lines-3)
+         LA    R0,WORKL                Size of working stor. - LNE5
+         AR    R1,R0                   Total size to allocate
+         LR    R2,R1                   Save this size
+         GETMAIN R,LV=(1)              Allocate dynamic screen area
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1
+         USING WORKAREA,R13            Make working storage addressable
+         MVC   WIDTH,=F'96'            Minimum screen width for
+*                                      extended display.
+         ST    R2,WORKSIZE
+         USING MEMAREA,R8              Address workspace entry
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE'
+         DC    CL8' '
+         DC    CL8'&SYSTIME'
+         EJECT
+START    DS    0D
+         GETMAIN R,LV=1024             Allocate screen output area
+         ST    R1,SCROUTP              Save its address
+         LA    R0,SCRWORK              Screens in WORKAREA
+         LA    R1,SCREENSL             Length of all screens
+         LR    R3,R1                   Length 1 = length 2
+         L     R2,=V(SCREENS)          Input
+         MVCL  R0,R2                   Copy the screens
+         LA    R9,SCRWORK              Point to screens in WORKAREA
+         USING SCREENS,R9              Make the screens addressable
+         MVC   END1TXT,END1MDL         Move message to working storage
+         MVC   ERR8TXT,ERR8MDL         Move message to working storage
+         MVC   SYSPRINT,MDLPRINT       Move ...
+         MVC   SYSIN,MDLSYSIN               model ...
+         MVC   ARCHDCB,MDLARCH                    DCB's
+         MVC   EDITDCB,MDLEDIT                         ..
+         ST    R11,PRMCOMM             Save address RPFCOMM
+         MVI   RECORD-1,C' '           To process MVC RECORD,RECORD-1
+         MVI   RECORD2-1,C' '          To process MVC RECORD2,RECORD2-1
+         MVI   BUFFER,C' '             Blank
+         MVC   BUFFER+1(L'BUFFER-1),BUFFER   output buffer
+         MVI   BUFCONF,C'/'            Init copy of CCONFIRM
+         MVI   SC@2,C' '               Init parse field ...
+         MVC   SC@2+1(L'SC@2-1),SC@2                    for command
+         MVI   MSG2,C'-'               Init
+         MVC   MSG2+1(21),MSG2             message area
+         MVI   SW,0                    Clear switch upon entry
+         MVI   SCR5HYPH,C' '           Move ' ' to
+         MVC   SCR5HYPH+1(L'SCR5HYPH-1),SCR5HYPH  ... header
+         MVI   SCR5HYPH,C'-'           Move 1 hyphen
+         L     R1,COMMCOLS             Current width of screen
+         S     R1,=F'82'               Minus minimum width + 2
+         BM    INIT2                   Do not move if width = 81
+         EX    R1,HYPH                 with hyphens
+         B     INIT2                   Branch
+HYPH     MVC   SCR5HYPH+1(0),SCR5HYPH  << executed >>
+INIT2    DS    0H
+         MVC   SCR1TXT(1),COMMCMD      Move EW or EWA in menu
+         MVC   SCR2TXT(1),COMMCMD      Move EW or EWA in menu
+         MVC   SCR4TXT(1),COMMCMD      Move EW or EWA in screen
+         MVC   SCR5TXT(1),COMMCMD      Move EW or EWA in screen
+         LA    R1,SCRENT               Standard data line on screen
+         CLC   COMMCOLS,WIDTH          At least a screen width of 96?
+         BL    START05                 No: no # mod and # init lines
+         LA    R1,SCRENTEX             Extended data line on screen
+*                                      See DSECT SCRENTRY
+START05  DS    0H
+         ST    R1,DATALINE             Save entry length
+         L     R0,COMMSIZE             Pickup Screen lines
+         BCTR  R0,0
+         BCTR  R0,0
+         BCTR  R0,0                    Discount top 3 lines
+         MR    R0,R0                   Screen size minus 3 lines
+         LA    R1,SCR5LEN(,R1)         Length of TPUT
+         ST    R1,TPUTLEN              Save the TPUT length
+         LM    R0,R1,COMMSIZE          Restore lines and columns
+         LA    R3,3
+         SR    R0,R3                   Get data display line count
+         STH   R0,#LINES               Save it
+         LA    R3,NEXTENT              Length of entry in workspace
+         MH    R3,#LINES               * number of lines (21 -> 96)
+         ST    R3,NEXTSCR              And save for later use
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+         LA    R0,1                    Parameter line (1)
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5TXT+3          And Save
+         STCM  R0,3,SCR4TXT+3          And Save
+*
+         L     R1,COMMCOLS             Screen width
+         LA    R0,24                   Get adjustment size
+         SR    R1,R0                   Get the right column
+         LA    R0,1                    Row 1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5SBA1+1         And Save (r1,c56+)
+         MVI   SCR5SBA1,COMMSBA        Move SBA order
+*
+         LA    R1,1                    Column 1
+         LA    R0,2                    Row 2
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5SBA2+1         And Save (r2,c1)
+*
+         L     R1,COMMCOLS             Screen width
+         LA    R0,2                    Row 2
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5SBA3+1         And Save (r2,c last)
+*
+         LH    R2,#LINES               # data lines
+         LA    R3,LNE5                 Point to data area in screen
+         USING SCRENTRY,R3             Use DSECT
+         LA    R4,4                    First data line is line4
+SCR01    DS    0H
+         MVI   SCRESBA,C' '            Blank first character of line
+         L     R1,DATALINE             Length of data entry in screen
+         BCTR  R1,0                    Minus 1
+         BCTR  R1,0                    Minus 2
+         EX    R1,WMOVE                Blank rest of line
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         MVI   SCRESBA,COMMSBA         Move SBA order
+         STCM  R0,3,SCRESBA+1          And Save
+*
+         MVC   SCREATT1,=X'1DC9'       SF + hilite unprot MDT on
+         MVC   SCREATT2,=X'1DF1'       SF + no hilite MDT on
+         MVC   SCREATT3,=X'1DF0'       SF + no hilite MDT off
+         MVC   SCRECOL1,=AL3(TURQ)
+         MVC   SCRECOL2,=AL3(GREEN)
+         MVC   SCRECOL3,=AL3(TURQ)
+         MVC   SCRECOL4,=AL3(TURQ)
+         LA    R4,1(,R4)               Increase line number
+         L     R1,DATALINE             Length of data entry in screen
+         LA    R3,0(R1,R3)             Next line in screen
+         BCT   R2,SCR01                And do complete screen
+         DROP  R3                      Kill addr. of SCR5LINE
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         XR    R2,R2                   Default no centering
+         L     R5,COMMCOLS             Width of screen
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+         B     WRSBA01                 Branch of Ex instruction
+WMOVE    MVC   1(0,R3),0(R3)           << executed >>
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Parameter line (1)
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1TXT+3
+*
+         LA    R0,2                    Parameter line (2)
+         LA    R1,2                    Parameter column (2)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1SBA1+1         And Save
+*
+         LA    R0,4                    Parameter line (4)
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1SBA2+1         And Save
+*
+         LA    R0,5                    Parameter line (5)
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1SBA3+1         And Save
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR2TXT+3
+*
+         LA    R0,1                    Row 1
+         LA    R1,56                   Column 56+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R1C56+1
+*
+         LA    R0,5                    Row 5
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R5C2+1
+*
+         LA    R0,6                    Row 6
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R6C1+1
+*
+         LA    R0,8                    Row 8
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R8C1+1
+*
+         LA    R0,9                    Row 9
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R9C1+1
+*
+         LA    R0,10                   Row 10
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R10C1+1
+*
+         LA    R0,11                   Row 11
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R11C1+1
+*
+         LA    R0,12                   Row 12
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R12C1+1
+*
+         LA    R0,14                   Row 14
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R14C1+1
+*
+         LA    R0,16                   Row 16
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R16C1+1
+*
+         L     R0,COMMSIZE             Row last
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLAST+1
+*
+         LA    R0,3                    Row 3
+         LA    R1,4                    Column 4
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4R3C4+1
+*
+         LA    R2,5                    # lines to change in SCR4
+         LA    R4,5                    First line is line 5
+         LA    R3,S4R5C3               Screen line
+SCR03    DS    0H
+         LR    R0,R4                   Row (R4)
+         LA    R1,3                    Column 3
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)
+*
+         LR    R0,R4                   Row (R4)
+         LA    R1,14                   Column 14
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,19(R3)
+*
+         LA    R3,SCR4ILEN(,R3)        Next line
+         LA    R4,1(,R4)               Next line
+         BCT   R2,SCR03                Loop until all done
+*
+         LA    R0,12                   Row 12
+         LA    R1,3                    Column 3
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4R12C3+1
+*
+         L     R0,COMMSIZE             Row last
+         LA    R1,4                    Column 4
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S4LASTC4+1
+*
+*        end of screen setup           ------------------------------*
+*
+         MVC   SCR2UID,COMMUSER        TSO Userid into screen
+         MVC   SCR2CONF,CCONFIRM       Delete confirmation
+         MVC   SCR2DSN,COMMARCH        Archive cluster name in RPFCOMM
+RESTART  DS    0H
+         LA    R1,SCR2TXT              Parm TPUTS (address screen)
+         LA    R0,SCR2LEN              Parm TPUTS (length  screen)
+         L     R15,=V(TPUTS)           Display Archive cluster info
+         BALR  R14,R15                 Execute
+         MVI   MSG2,C'-'               Clear ...
+         MVC   MSG2+1(L'MSG2-1),MSG2         message field
+         LA    R5,BUFFER               Set BUFFER address and
+         L     R3,COMMSCR              Input screen
+         LR    R1,R3                   Duplicate area address
+         LA    R0,221                  Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         MVC   AIDBYTE,0(R3)           Save AID byte
+         XR    R6,R6                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   SCAN00Z                 Branch if zero or less
+         LA    R3,3(,R3)
+SCAN00A  CLI   0(3),COMMSBA            SBA order found?
+         BE    SCAN00B                 Yes: skip 3 bytes SBA
+         MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R6,1(,R6)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,SCAN00A              Loop
+         B     SCAN00Z                 Conversion finished
+SCAN00B  DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes input (SBA)
+         BCTR  R4,0                    Minus 1 bct
+         BCTR  R4,0                    Minus 1 bct
+         BCT   R4,SCAN00A              Test next byte
+SCAN00Z  DS    0H
+         LTR   R6,R6                   Nothing received?
+         BZ    RESTART                 Yes: reshow screen
+         CLI   AIDBYTE,X'F3'           PFK3 pressed?
+         BE    RETURN9                 Yes: exit RPFARCH
+         CLI   AIDBYTE,X'C3'           PFK15 pressed?
+         BE    RETURN9                 Yes: exit RPFARCH
+SCAN01   DS    0H
+         MVI   BUFARCH,C' '            Clear DSName ...
+         MVC   BUFARCH+1(L'BUFARCH-1),BUFARCH  ... of Archive cluster
+         MVC   ITEM,BUFARCH            Clear Item (member) name
+         MVC   GROUP,ITEM              Clear Group of item
+         MVC   SUBGROUP,ITEM           Clear Subgroup of item
+         MVC   TYPE,ITEM               Clear Type of item
+         LA    R5,BUFFER               Point to start of Buffer
+SCAN07   DS    0H
+         CLC   S2ARCH,0(R5)            Search for Archiver file
+         BE    SCAN09                  Found: process DSN Archive
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN07               Examine next bytes
+         B     RESTART                 No data anymore: display screen
+SCAN09   LA    R5,L'S2ARCH(,R5)        Point after 'ARCHIVE     ='
+         SH    R6,=AL2(L'S2ARCH)       Decrease BCT register
+         LA    R4,BUFARCH              ARCHIVE data set name
+SCAN11   DS    0H
+         CLC   S2ITEM,0(R5)            Search for ITEM name
+         BE    SCAN13                  Found: process ITEM
+         MVC   0(1,R4),0(R5)           Move 1 character Archive cluster
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN11               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN13   LA    R5,L'S2ITEM(,R5)        Point after 'ITEM        ='
+         SH    R6,=AL2(L'S2ITEM)       Decrease BCT register
+         LA    R4,ITEM                 Point to Item field
+SCAN15   DS    0H
+         CLC   S2GRP,0(R5)             Search for GROUP name
+         BE    SCAN17                  Found: process GROUP
+         MVC   0(1,R4),0(R5)           Move 1 character ITEM name
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN15               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN17   LA    R5,L'S2GRP(,R5)         Point after 'GROUP       ='
+         SH    R6,=AL2(L'S2GRP)        Decrease BCT register
+         LA    R4,GROUP                Point to GROUP field
+SCAN19   DS    0H
+         CLC   S2SGRP,0(R5)            Search for SUBGROUP name
+         BE    SCAN21                  Found: process SUBGROUP
+         MVC   0(1,R4),0(R5)           Move 1 character GROUP name
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN19               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN21   LA    R5,L'S2GRP(,R5)         Point after 'GROUP       ='
+         SH    R6,=AL2(L'S2GRP)        Decrease BCT register
+         LA    R4,SUBGROUP             Point to SUBGROUP field
+SCAN23   DS    0H
+         CLC   S2TYPE,0(R5)            Search for TYPE name
+         BE    SCAN25                  Found: process TYPE
+         MVC   0(1,R4),0(R5)           Move 1 character SUBGROUP name
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN23               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN25   LA    R5,L'S2TYPE(,R5)        Point after 'TYPE        ='
+         SH    R6,=AL2(L'S2TYPE)       Decrease BCT register
+         LA    R4,TYPE                 Point to TYPE name
+SCAN27   DS    0H
+         CLC   S2CONFI,0(R5)           Search for Confirm Deletes
+         BE    SCAN29                  Found: process Confirm deletes
+         MVC   0(1,R4),0(R5)           Move 1 character TYPE name
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN27               Examine next bytes
+SCAN29   LA    R5,L'S2CONFI(,R5)       Point after 'Confirm Item del'
+         SH    R6,=AL2(L'S2CONFI)      Decrease BCT register
+         BNP   SCAN33                  No more bytes left
+         MVC   BUFCONF,0(R5)           Move 1 character Confirm
+         OI    BUFCONF,X'40'           Xlate to upper
+SCAN33   DS    0H
+         MVC   SCR2DSN,BUFARCH         DSN of Archive in screen
+         MVC   SCR2ITEM,ITEM           and ITEM name
+         MVC   SCR2GRP,GROUP           and GROUP name
+         MVC   SCR2SGRP,SUBGROUP       and SUBGROUP name
+         MVC   SCR2TYPE,TYPE           and TYPE name
+         MVC   SCR2CONF,BUFCONF        Comfirm deletes Y or N
+         CLI   BUFCONF,C'/'            Delete confirmation set?
+         BE    TSTARCH1                Yes: test if Archive present
+         CLI   BUFCONF,C' '            Delete confirmation not set?
+         BE    TSTARCH1                Yes: test if Archive present
+         MVC   MSG2,ERRATXT            Msg: Confirm not Y or N
+         B     RESTART
+TSTARCH1 DS    0H
+         MVC   CCONFIRM,BUFCONF        Confirm item delete to RPFCOMM
+         CLI   BUFARCH,C' '            Archive DSN specified?
+         BNE   TSTARCH2                Yes: test if Archive exists
+         MVC   MSG2,ERR5TXT            Msg: Specify Archive
+         B     RESTART
+TSTARCH2 DS    0H
+*
+         LA    R3,BUFARCH              Archiver data set from RPFCOMM
+         LA    R4,ARCHIVE              Parsed data set
+         BAL   R14,PARSE               Remove quotes or add TSO prefix
+         MVC   COMMARCH,BUFARCH        Data set name to RPFCOMM
+         XC    CAMLST(16),CAMLST       Clear CAMLST
+         MVC   CAMLST(2),=X'4400'      CAMLST NAME
+         ST    R4,CAMLST+4             Set in CAMLST NAME
+         LA    R1,LOCAREA              Area to receive info
+         ST    R1,CAMLST+12            Set in CAMLST NAME
+         LOCATE CAMLST                 Locate the data set         @rp2
+         LTR   R15,R15                 RC = 0 Locate?
+         BZ    ARCHFND                 Yes: Archive found
+         MVC   MSG2,ERR2TXT            Msg: data set not in catalog
+         B     RESTART                 Go to error routine
+ARCHFND  DS    0H
+         MVC   SCR5DSN,ARCHIVE         DSN Archive cluster in screen
+         LA    R3,SCR5DSN+39           Last position of DSN Archive
+         LA    R4,38                   Loop max. 38 times
+DSN1     DS    0H                      Replace trailing blanks by '-'
+         CLI   0(R3),C' '              Trailing blank found?
+         BNE   DSN9                    No: end of scan
+         MVI   0(R3),C'-'              Replace by '-'
+         BCTR  R3,0                    Prevous position in DSN
+         BCT   R4,DSN1                 Loop until all spaces replaced
+DSN9     DS    0H
+         CLC   ITEM,=CL8' '            ITEM mask is blank?
+         BNE   *+8                     No: skip
+         MVI   ITEM,C'*'               Select all items
+         CLC   GROUP,=CL8' '           GROUP mask is blank?
+         BNE   *+8                     No: skip
+         MVI   GROUP,C'*'              Select all groups
+         CLC   SUBGROUP,=CL8' '        SUBGROUP mask is blank?
+         BNE   *+8                     No: skip
+         MVI   SUBGROUP,C'*'           Select all subgroups
+         CLC   TYPE,=CL8' '            TYPE mask is blank?
+         BNE   *+8                     No: skip
+         MVI   TYPE,C'*'               Select all types
+REFRESH  DS    0H
+         BAL   R14,INDEX               Read in the Archiver index into
+*                                      the EDIT workspace
+         B     *+4(15)                 Check completion
+         B     RPFCMD                  Rc=0, good
+         B     RPFCMD                  Rc=4, workspace truncated
+         B     ERR1                    Rc=8, allocation errors
+         B     EMPTY                   Rc=12, no matched items
+EMPTY    MVC   MSG2,ERR9TXT            Else RC=12, no items found
+         L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE
+         B     RESTART                 Notify error
+ERR1     MVC   MSG2,ERR8TXT            Move error message
+         B     RESTART                 Notify error to user
+         TITLE 'Examine the primary commands'
+*---------------------------------------------------------------------*
+*        Possible primary commands:
+*
+*        BOTTOM    Goto bottom of item list     (Alias = B)
+*        DOWN      Scroll forward
+*        END       End of RPFARCH
+*        L xxx     Locate display on item xxx
+*        LEFT      Display item date on a narrow screen
+*        PFK       Alter/display Program function keys
+*        REFRESH   read the ARCHIVE again and refresh the EDIT
+*                  workspace
+*        RETURN    same as END, but always return to MAIN
+*        RIGHT     Display item time instead of date on a narrow screen
+*        TOP       Goto top of item list         (Alias = T)
+*        UP        Scroll backward
+*
+*        =n.n      Return, goto main and execute option n.n
+*        ?         Refresh screen
+*
+*        Register 5 points to the start of the screen output and
+*        should be preserved.
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFCMD   DS    0H                      Write the Archiver index on scr.
+         BAL   R14,RPFTPUT             Write the screen
+         MVI   MSG5,C'-'               Clear
+         MVC   MSG5+1(L'MSG5-1),MSG5        message area
+RPFC001  DS    0H                      Process the output
+         LA    R2,AIDBYTE              Address AID byte
+         L     R5,SCROUTP              Screen output area
+         L     R15,=V(CONVIN)          Populate the screen
+         BALR  R14,R15
+         MVI   REP5,C' '               Clear ...
+         MVC   REP5+1(L'REP5-1),REP5            command area
+         LTR   R15,R15                 Conversion OK?
+         BNZ   RPFC015                 New screen if yes
+         TR    0(24,R5),COMTCAPS       Xlate command field to upper
+         MVC   SC@BUFF,0(R5)           Copy command buffer
+         TRT   SC@BUFF,COMSKPSP        Search for first non-blank
+         BZ    RPFC003                 All blanks, nothing to parse
+         MVC   0(24,R5),0(R1)          Shift command to start of BUFFER
+RPFC003  DS    0H
+         CLI   AIDBYTE,X'7D'           Enter key pressed?
+         BE    RPFC013                 Yes: good
+         LR    R2,R5                   1st 24 byte receives the command
+         LA    R1,AIDBYTE              Address AID byte
+         CALL  PFK                     Get PFK definitions
+         L     R5,SCROUTP              Re pickup screen output area
+         B     RPFC005(R15)            Branchlist
+RPFC005  B     RPFC013                 Rc = 0, no errors
+         B     RPFC011                 Rc = 4, CON=Y specified
+         B     RPFC009                 Rc = 8, PFK not defined
+         B     RPFC007                 RC = 12, PFK definition invalid
+RPFC007  DS    0H
+         MVC   MSG5,ERR4TXT            Msg: PFK definition invalid
+         MVI   REP5,C' '               Clear ...
+         MVC   REP5+1(L'REP5-1),REP5            command area
+         XC    REP5,REP5               Clear command area
+         B     RPFC069                 Re-write screen
+RPFC009  MVC   MSG5,ERR3TXT            Msg: PFK not defined
+         XC    REP5,REP5               Clear command area
+         B     RPFC069                 Review screen
+RPFC011  DS    0H
+         MVC   REP5,0(R5)              Repeat command
+         B     RPFC069                 Review screen
+RPFC013  DS    0H
+         CLI   0(R5),C'?'              Refresh screen?
+         BNE   RPFC021                 Proceed if not
+RPFC015  DS    0H
+         XC    REP5,REP5               Clear command area
+         B     RPFC069                 Write the screen
+RPFC021  DS    0H
+         CLI   0(R5),C'='              =n or =n.n command?
+         BNE   RPFC023                 No: branch
+         MVC   CMAINOPT,1(R5)          Move options
+         OI    COMMFLG2,$COMRTRN       Set return indicator in RPFCOMM
+         B     RETURN                  And terminate (to main)
+RPFC023  DS    0H                      Process the commands
+         MVC   BUFFER(24),0(R5)        Move command
+         CLI   BUFFER,C'&&'            &&  entered (repeat command)?
+         BNE   RPFC025                 No: do not repeat command
+         MVC   0(24,R5),BUFFER+1       Move command back without '&&'
+         MVI   23(R5),C' '
+         MVC   REP5,BUFFER             Repeat command
+RPFC025  DS    0H
+         BAL   R14,RPFSCRN             Process the line commands
+         CLC   0(4,R5),=C'DOWN'        DOWN command (scroll forward)?
+         BNE   RPFC029                 No: test other commands
+         L     R8,COMMFSCR             Point to first line on screen
+         AL    R8,NEXTSCR              Next screen
+         CL    R8,COMMLAST             Compare with COMMLAST pointer
+         BH    RPFC069                 Beyond: ignore scroll
+         ST    R8,COMMFSCR             New first line on screen
+         B     RPFC069                 Write the screen
+RPFC029  CLC   0(3,R5),=C'PFK'         Command 'PFK' entered?
+         BNE   RPFC035                 No: test other commands
+         L     R15,EPPFK               Entry point RPFPFK
+         LA    R1,PRMCOMM              Parameter with A(RPFCOMM)
+         BALR  R14,R15                 Link to RPFPFK
+         B     RPFC015                 Write new screen
+RPFC035  DS    0H                      Test if UP command
+         CLC   0(2,R5),=C'UP'
+         BNE   RPFC039                 No: test other commands
+         L     R8,COMMFSCR             Pick 1st line on screen
+         CL    R8,COMWSTRT             Compare with start workspace
+         BNH   RPFC069                 Yes: scroll no effect - ignore
+         SL    R8,NEXTSCR              Decrease with #LINES * NEXTENT
+         CL    R8,COMWSTRT             And compare with start workspace
+         BNL   *+8                     High: good
+         L     R8,COMWSTRT             Not high: reset to begin
+         ST    R8,COMMFSCR             New 1st line on screen
+         B     RPFC069                 Write the screen
+RPFC039  DS    0H
+         CLI   0(R5),C'B'              Command 'B' or 'BOTTOM'?
+         BNE   RPFC041                 No: test other commands
+         L     R8,COMMLAST             Last record pointer
+         SL    R8,NEXTSCR              Subtract length of screen
+         LA    R8,NEXTENT(,R8)         Add length one entry
+         CL    R8,COMWSTRT             Before the beginning workspace?
+         BNL   RPFC040                 No: good
+         L     R8,COMWSTRT             Reset to top
+         B     RPFC069                 Write the screen
+RPFC040  ST    R8,COMMFSCR             And store the result
+         B     RPFC069                 Write the screen
+RPFC041  DS    0H
+         CLC   0(2,R5),=C'L '          'Locate on item' command?
+         BNE   RPFC057                 No: search for other commands
+         LA    R3,2(,R5)               Load locate character string
+         LA    R4,8                    Max 8 chars = item name
+         XR    R1,R1                   Count length in register 1
+RPFC043  CLI   0(R3),C' '              End of Locate string?
+         BE    RPFC045                 Yes: stop search
+         LA    R1,1(,R1)               Count non blank byte
+         LA    R3,1(,R3)               Next byte in 'SCREEN'
+         BCT   R4,RPFC043              Loop
+RPFC045  LTR   R1,R1                   No bytes found ?
+         BZ    RPFC049                 Yes: issue message
+         BCTR  R1,0                    Minus 1 for EX
+         L     R8,COMWSTRT             Load start address    (BXLE)
+         L     R7,COMMLAST             Last record pointer   (BXLE)
+         LA    R7,79(,R7)              Adjust offset         (BXLE)
+         LA    R6,NEXTENT              Length of entry       (BXLE)
+         LA    R3,2(,R5)               Address char string
+RPFC047  EX    R1,LCOMPARE             Compare if match found
+         BNL   RPFC055                 Low or equal: found
+         BXLE  R8,R6,RPFC047           Loop                  (BXLE)
+RPFC049  MVC   MSG5,ERR6TXT            Msg: Enter locate string
+         MVC   REP5(24),0(R5)          Repaat command
+         B     RPFC069                 and re-write screen
+LCOMPARE CLC   LITEM(0),0(R3)          << executed >>
+RPFC055  DS    0H                      Locate the found item
+         ST    R8,COMMFSCR             New first line in screen
+         B     RPFC069                 Write the screen
+RPFC057  DS    0H
+         CLC   0(3,R5),=C'TOP'         Primary command TOP?
+         BE    RPFC059                 Yes: process command
+         CLC   0(2,R5),=C'T '          'TOP' command (alias 'T')?
+         BNE   RPFC061                 No: search for other commands
+RPFC059  MVC   COMMFSCR,COMWSTRT       First line is 1st member
+         B     RPFC069                 Write the screen
+RPFC061  DS    0H
+         CLC   0(4,R5),=C'LEFT'        Primary command LEFT?
+         BNE   RPFC063                 Yes: process command
+         NI    SW,255-$RIGHT           Set right aligned off
+         B     RPFC069                 Write the screen
+RPFC063  DS    0H
+         CLC   0(5,R5),=C'RIGHT'       Primary command RIGHT?
+         BNE   RPFC065                 Yes: process command
+         CLC   COMMCOLS,WIDTH          A wide screen?
+         BNL   RPFC069                 Yes: ignore the RIGHT command
+         OI    SW,$RIGHT               Date replaced by Time in screen
+         B     RPFC069                 Write the screen
+*
+RPFC065  DS    0H
+         CLC   0(6,R5),=C'RETURN'      RETURN command entered?
+         BNE   RPFC066                 No: test other commands
+         OI    COMMFLG2,$COMRTRN       Set return indicator in RPFCOMM
+         B     RETURN                  And terminate RPFARCH
+RPFC066  DS    0H
+         CLC   =C'REFRESH',0(R5)       Refresh items in EDIT workspace?
+         BNE   RPFC067
+         B     REFRESH                 Build the list again
+RPFC067  DS    0H
+         CLC   0(3,R5),=C'END'         Command 'END'?
+         BE    RPFC071                 Yes: return to entry screen
+         CLI   0(R5),C' '              Nothing entered?
+         BE    RPFC069                 Proceed
+         MVC   MSG5,ERR7TXT            Msg: Invalid command
+         MVC   REP5,0(R5)              Repeat command in error
+*
+*        Landing point to re-write screen
+*
+RPFC069  DS    0H
+         B     RPFCMD
+RPFC071  DS    0H
+         L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE data sets
+         B     RESTART
+*
+*        Return to previous caller
+*
+RETURN   DS    0H
+         L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE data sets
+RETURN9  DS    0H
+         MVC   COMMRECL,=F'80'         Set default EDIT record length
+         NI    COMMFLG4,255-$COMFB-$COMVB  set RECFM back to
+         OI    COMMFLG4,$COMFB         ... FB
+         L     R2,SCROUTP              Screen output area
+         FREEMAIN R,LV=1024,A=(2)      Release this area
+         LR    R3,R13                  Pickup working storage
+         L     R2,WORKSIZE             Length of working storage
+         L     R13,4(,R13)             Callers save area
+         FREEMAIN R,LV=(2),A=(3)
+         RETURN (14,12),RC=0
+         TITLE 'Parse dataset names'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  PARSE.                                             *
+*                                                                     *
+*        Function: Remove quotes from quoted data set names - or -    *
+*                  add TSO prefix is the input data set name is       *
+*                  not quoted.                                        *
+*                                                                     *
+*        Register 3 contains the to be parsed data set name           *
+*                 4 is the address of the field that received the     *
+*                   parsed data set name                              *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+PARSE    ST    R14,R14PARSE            Save register 14
+         ST    R11,PARMFLD             Parameter for DSNPARS
+         ST    R3,PARMFLD+4            Unparsed data set name
+         ST    R4,PARMFLD+8            Parsed data set name
+         L     R15,EPDSNPA             Routine address
+         LA    R1,PARMFLD              Parameter
+         BALR  R14,R15                 Execute
+         L     R14,R14PARSE            Restore register 14
+         BR    R14                     Return
+         TITLE 'Process the ARCHIVER index'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:   INDEX                                             *
+*                                                                     *
+*        Function:  Locate the Archiver item or the Archiver LIST     *
+*                   index and place the contents of the item or       *
+*                   LIST index into the EDIT workspace.               *
+*                                                                     *
+*        Return codes (in register 15)                                *
+*                   0, no errors. Index or item read in workspace     *
+*                   4, EDIT workspace too small                       *
+*                   8, Allocation errors                              *
+*                  12, No items found                                 *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+INDEX    DS    0H
+         ST    R14,R14INDEX
+         OI    SW,$LIST                Indicate LIST statement
+         L     R15,=V(ALLOC)           Routine address
+         BALR  R14,R15                 Allocate SYSIN and SYSPRINT
+         LTR   R15,R15                 Alloc OK?
+         BNZ   INDEX97                 No: notify
+         L     R2,COMWSTRT             Start address workspace
+         ST    R2,COMMFSCR             And set in COMMFSCR
+         SL    R2,=A(NEXTENT)          Minus length 1 entry
+         ST    R2,COMMLAST             Save as Last record
+         ZAP   COUNTER,=P'0'           Clear counter
+         MVC   RECORD,RECORD-1         Clear record
+         MVC   RECORD2,RECORD2-1       Clear record2
+         MVC   RECORD(12),=CL12' LIST ITEM=('
+         MVC   RECORD+12(8),ITEM       ITEM mask
+         LA    R1,RECORD+20            Point after ITEM mask
+         TRT   RECORD+12,COMSKPNS      Stop at first blank
+         MVI   0(R1),C','              Separator
+         LA    R3,1(,R1)               Point after comma
+         MVC   0(8,R3),GROUP           Move GROUP mask
+         LA    R1,8(,R3)               Point after GROUP
+         TRT   0(8,R3),COMSKPNS        Stop at first blank
+         MVI   0(R1),C','              Separator
+         LA    R3,1(,R1)               Point after comma
+         MVC   0(8,R3),SUBGROUP        Move SUBGROUP mask
+         LA    R1,8(,R3)               Point after SUBGROUP
+         TRT   0(8,R3),COMSKPNS        Stop at first blank
+         MVI   0(R1),C','              Separator
+         LA    R3,1(,R1)               Point after comma
+         MVC   0(8,R3),TYPE            Move SUBGROUP mask
+         LA    R1,8(,R3)               Point after SUBGROUP
+         TRT   0(8,R3),COMSKPNS        Stop at first blank
+         MVC   0(2,R1),=C'),'          complete LIST ...
+         MVC   RECORD2+15(24),=CL24'DATA=N,NOTE=Y,ALIASES=Y' STATEMENT
+         L     R15,=V(ARCHIVER)        Write record and ....
+         BALR  R14,R15                 call the ARCHIVER
+         LA    R1,INDEX93              EODAD address
+         STCM  R1,7,SYSPRINT+DCBEODA-IHADCB
+         MVI   COMOPN,128              This is the only and last DCB
+         OPEN  SYSPRINT,MF=(E,COMOPN)  Open ARCHIVER LIST output
+         L     R8,COMWSTRT             First record in workspace
+INDEX01  DS    0H
+         MVI   0(R8),C' '              Clear
+         MVC   1(NEXTENT-1,R8),0(R8)        workspace line
+         XC    LPREFIX,LPREFIX         Clear prefix
+INDEX03  DS    0H
+         RPFSA24                       Enter AMODE24
+         GET   SYSPRINT,ARCH           Read record
+         RPFSA31                       Restore addressing mode
+         CLI   HYPHEN,C'-'             Do we have a member line?
+         BE    INDEX05                 Yes: create an entry in workspc
+         CLC   ARCHITEM+8(3),=C'-->'   NOTES data?
+         BNE   INDEX03                 No: next ITEM
+         SL    R8,=A(NEXTENT)          Point to previous entry
+         MVI   LNOTE,C'*'              Mark Notes present
+         LA    R8,NEXTENT(,R8)         Restore to current entry
+         B     INDEX03                 Read next record
+INDEX05  MVC   LITEM,ARCHITEM          Move Item name
+         MVC   LGROUP,ARCHGRP          Move Item Group
+         MVC   LSUBGRP,ARCHSGRP        Move Item Subgroup
+         MVC   LTYPE,ARCHTYPE          Move Item Type
+         MVC   LVERS,ARCHVERS          Item version
+         CLC   =C' ALIAS ',ARCHDSO     Do we have an alias in Archive?
+         BNE   INDEX07                 No carry
+         MVI   LNOTE,C'A'              This is an alias
+         MVC   LALISIT(8),ARCHALIS     Alias name
+         MVC   LALISGR(8),ARCHALGR     Alias GROUP
+         MVC   LALISSGR(8),ARCHALSG    Alias SUBGROUP
+         MVC   LALISTYP(8),ARCHALTY    Alias TYPE
+         MVC   LALISVER(3),ARCHALV     And Version
+         B     INDEX09                 leave rest of line blank
+INDEX07  MVC   LDSORG,ARCHDSO          DSORG ORIGINAL DATA SET
+         MVC   LRECFM,ARCHRFM          RECFM original data set
+         MVC   LLRECL,ARCHRECL         Original LRECL
+         OC    LLRECL,=C'000'          Replace spaces by zeros
+         MVC   LBLK(2),ARCHBLK         Original BLKSIZE first part
+         OC    LBLK+2(3),ARCHBLK+3     2nd part ',' skipped
+         OC    LBLK,=C'00000'          Replace spaces by zeroes
+         MVC   LDATE(4),ARCHDATE+6     Move YYYY of date
+         MVI   LDATE+4,C'-'            to ...
+         MVI   LDATE+7,C'-'               convert ...
+         MVC   LDATE+5(2),ARCHDATE     (MM)       to ...
+         MVC   LDATE+8(2),ARCHDATE+3   (DD)             ISO format
+         MVC   LTIME,ARCHTIME          Time ITEM saved
+         MVC   L#,ARCH#                Number of records
+INDEX09  AP    COUNTER,=P'1'           Increase item counter
+         ST    R8,COMMLAST             New last record pointer
+         LA    R8,NEXTENT(,R8)         + 1 entry
+         L     R1,COMWRKND             End of EDIT workspace
+         SL    R1,=A(NEXTENT)          Minus 1 line for 3*END**
+         CR    R8,R1                   End of workspace reached?
+         BH    INDEX95                 Yes: Rc=4, workspace full
+         B     INDEX01                 Read next card
+INDEX93  DS    0H
+*                                      EODAD address SYSPRINT DCB
+         RPFSA31                       Restore addressing mode
+         CP    COUNTER,=P'0'           Are there items listed?
+         BNE   INDEX94                 Yes: carry
+         LA    R15,12                  Rc = 12, no items matched
+         B     INDEX99                 Index finished
+INDEX94  DS    0H
+         XR    R15,R15                 Rc = 0, no errors
+         B     INDEX99                 Index finished
+INDEX95  DS    0H
+         LA    R15,4                   Rc = 4, workspace too small
+         B     INDEX99                 Index finished
+INDEX97  DS    0H
+         LA    R15,8                   Rc = 8, allocation errors
+*
+INDEX99  DS    0H
+         LR    R4,R15                  Save return code
+         TM    SYSPRINT+DCBOFLGS-IHADCB,DCBOFOPN Is SYSPRINT open?
+         BNO   INDEX99A                No: do not close
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE SYSPRINT,MF=(E,COMCLS)  Close LIST output
+         FREEPOOL SYSPRINT             and get rid of the buffers
+INDEX99A MVC   END1TXT(6),=X'402020202120' Move edit pattrn
+         ED    END1TXT(6),COUNTER      Make counter readable
+         C     R14,=F'12'              Rc=12?
+         BE    INDEX99B                Yes: do not add **END** line
+         L     R8,COMMLAST             Last item
+         LA    R8,NEXTENT(,R8)         + 1 line in EDIT workspace
+         MVI   0(R8),C' '              Clear
+         MVC   1(NEXTENT-1,R8),0(R8)        workspace line
+         MVC   LITEM,=CL8'**END**'     Text +
+         MVC   LVERS(12),END1TXT       # of items
+         ST    R8,COMMLAST             Last item
+INDEX99B L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE
+         LR    R15,R4
+         L     R14,R14INDEX            Restore register 14
+         BR    R14                     Return
+*
+         TITLE 'TPUT MODIFIED SCREEN'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Function:   Build the item list in the screen (SCR5TXT)      *
+*                    and display this on the screen.                  *
+*        Register usage:                                              *
+*                                                                     *
+*        R3    Number of lines on the screen (21 --> 96)              *
+*        R4    Address of screen to be TPUT'ed.                       *
+*        R8    Current address of Archiver Item in EDIT workspace.    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFTPUT  DS    0H                      Routine to write screen
+         ST    R14,R14TPUT             Save return register
+         LA    R4,LNE5                 1st data line on SCR5
+         USING SCRENTRY,R4             Use DSECT
+         MVC   SCR5HDR2+16(4),=C'Date' Set default Date in header
+         L     R8,COMMFSCR             First line on screen
+         LH    R3,#LINES               Number of lines (21-->96)
+         MVI   SCR5HD2,C' '            Blank ...
+         MVC   SCR5HD2+1(L'SCR5HD2-1),SCR5HD2 extended part of header
+         CLC   COMMCOLS,WIDTH          Wide screen used?
+         BL    TPUT001                 No: no header mod and init lines
+         MVC   SCR5HD2,=CL10'    Time' Part header if wide screen
+         B     TPUT002                 Populate screen
+TPUT001  DS    0H
+         TM    SW,$RIGHT               Right aligned?
+         BNO   TPUT002                 No: carry
+         MVC   SCR5HDR2+16(4),=C'Time' Change Date in Time in header
+TPUT002  DS    0H                      -- START LOOP - populating...
+         MVI   SCRELCMD,C' '           Blank
+         MVC   SCREATT1,=X'1DF9'       SF + hilite prot MDT on
+         MVI   SCREINFO,C' '                     fields
+         MVC   SCREINFO+1(L'SCREINFO-1),SCREINFO       in
+         MVC   SCREITEM,SCREINFO                          the
+         MVC   SCREMSG,SCREINFO                               screen
+         CLC   COMMCOLS,WIDTH          Wide screen used?
+         BL    TPUT003                 No: do not blank extended part
+         MVC   SCRETIME,SCREINFO       Time is in extended part
+TPUT003  DS    0H
+         MVC   SCRECOL2,=AL3(GREEN)    Paint ITEM green
+         MVC   SCRECOL3,=AL3(TURQ)     and paint the rest purple
+         CL    R8,COMMLAST             Beyond last record pointer?
+         BH    TPUT050                 Yes: last item, complete screen
+         MVC   SCREITEM,LITEM          Item name in Archive
+         CLC   LITEM,=CL8'**END**'     The **END** line?
+         BNE   TPUT005                 No: continue populating
+         MVC   SCREVERS(12),LVERS      Move totals in screen
+         MVC   SCRECOL2,=AL3(YELLOW)   Paint the **END** text yellow
+         MVC   SCRECOL3,=AL3(YELLOW)   and paint the rest yellow too
+         B     TPUT020                 And fillup rest of screen
+TPUT005  DS    0H
+         MVC   SCREATT1,=X'1DC9'       SF + highlite noprot MDT on
+         MVI   SCRELCMD,C'.'           Period
+         MVC   SCREVERS,LVERS          Version
+         MVC   SCRENOTE,LNOTE          Notes or alias present
+         MVC   SCREGRP,LGROUP          Group
+         MVC   SCRESGRP,LSUBGRP        Subgroup
+         MVC   SCRETYPE,LTYPE          Type
+         CLI   LNOTE,C'A'              Do we have an alias?
+         BNE   TPUT006                 No: populate with DCB info
+         MVC   SCREDS(25),LALIAS       Yes: move ...
+         MVC   SCREMSG,LALIAS+25       Alias info
+         MVC   SCREATT1,=X'1DF9'       Make aliases non selectable
+         B     TPUT009
+TPUT006  MVC   SCREDS,LDSORG           DSORG original
+         MVC   SCRERFM,LRECFM          RECFM original
+         MVC   SCRERECL,LLRECL         LRECL original
+         MVC   SCREBLK,LBLK            BLKSIZE original
+         MVC   SCRE#,L#                Number of records
+         MVC   SCREMSG(10),LDATE       Default creation date of item
+         MVC   SCREMSG+10(2),=CL2' '   in message field
+         MVC   SCRECOL4,=AL3(TURQ)     Default color for date
+         CLC   COMMCOLS,WIDTH          Wide screen used?
+         BL    TPUT007                 No: no header mod and init lines
+         MVC   SCRETIME(8),LTIME       Move time ITEM saved
+         B     TPUT009                 Place messages in the screen
+TPUT007  DS    0H
+         TM    SW,$RIGHT               Primary command RIGHT given?
+         BNO   TPUT009                 No: carry
+         MVC   SCREMSG(8),LTIME        Default creation time of item
+         MVC   SCREMSG+8(4),=CL4' '    Blank the rest
+TPUT009  DS    0H
+         L     R1,=V(MSGTBLE)          Message table
+         LA    R14,MSG#                # messages in table
+TPUT013  DS    0H
+         CLC   LMSGID,0(R1)            Do we have a valid Msgid?
+         BE    TPUT015                Yes: move the msg instead of date
+         LA    R1,13(,R1)              Next message
+         BCT   R14,TPUT013             Loop until ...
+         B     TPUT020                 Leave date in screen
+TPUT015  DS    0H
+         MVC   SCREMSG,1(R1)           Move message into screen
+         MVI   LMSGID,C' '             Clear msg id
+         MVC   SCRECOL4,=AL3(WHITE)    Change color into white
+TPUT020  DS    0H
+         LA    R8,NEXTENT(,R8)         Next entry in workspace
+TPUT050  DS    0H
+         L     R1,DATALINE             Next line ...
+         LA    R4,0(R1,R4)                   ... on screen
+         BCT   R3,TPUT002              -- END loop - next line
+         L     R0,TPUTLEN              Parm TPUTS (length of screen)
+         LA    R1,SCR5TXT              Parm TPUTS (address screen)
+         L     R15,=V(TPUTS)           Display Archive cluster info
+         BALR  R14,R15                 Execute
+         L     R14,R14TPUT             Restore register 14
+         BR    R14
+         DROP  R4
+         TITLE 'Process the line commands'
+*---------------------------------------------------------------------*
+*
+*        Routine:  RPFSCRN
+*
+*        Function: Process the Line commands.
+*                  Possible commands:
+*                  B - Browse archive item.
+*                  D - Delete archive item.
+*                  E - EDIT archive item.
+*                  N - List the notes if present.
+*                  P - Print archive item.
+*                  R - Rename archive item/group/subgroup/type with
+*                      the Archiver ALTER function.
+*                  V - View archive item.
+*
+*                  Register 3 is used to loop into the formatted
+*                             output of the TGET of the ITEM list and
+*                             contains of a 24 byte primary command
+*                             and max. 96 entries of 9 bytes.
+*                             (1 byte line command + 8 bytes ITEM name)
+*
+*                  Register 4 starts with #LINES and used as a
+*                             loop register thru the screen
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFSCRN  DS    0H
+         ST    R14,R14SCRN             Save register 14
+         L     R8,COMMFSCR
+         L     R3,SCROUTP              Load gotten screen
+         MVC   BUFFER(24),0(R3)        Save command
+         LA    R3,24(,R3)              Skip command area
+         LH    R4,#LINES               Max 21->96 lines
+RPF201   TR    0(9,R3),COMTCAPS        Xlate linecmd + ITEM to caps
+         CLI   1(R3),C' '              Blank in member (last screen)
+         BE    RPF299                  Yes ignore operation
+         CLI   1(R3),C'-'              Deleted member?
+         BE    RPF299                  Yes ignore operation
+         CLI   0(R3),C' '              No operation?
+         BE    RPF299                  Yes ignore operation
+         CLI   0(R3),C'.'              No operation?
+         BE    RPF299                  Yes ignore operation
+         CLI   LNOTE,C'A'              Alias?
+         BE    RPF251                  Yes: No line command possible
+         CLI   0(R3),C'D'              Delete entered?
+         BNE   RPF207                  No: test other commands
+         MVC   SCR1DEL+18(8),1(R3)     Move Item name in confirm
+RPF202   DS    0H
+         CLI   CCONFIRM,C' '           Delete confirmed?
+         BE    RPF203                  Yes: do not ask for confirmation
+         LA    R1,SCR1TXT              Screen address
+         LA    R0,SCR1LEN              Length to be written
+         L     R15,=V(TPUTS)           Write confirmation screen
+         BALR  R14,R15                 Execute
+         L     R7,COMMSCR              Load screen address
+         LR    R1,R7                   Duplicate area address
+         LA    R0,10                   Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Get AID byte
+         LTR   R1,R1                   Input length is 0 (no data)?
+         BZ    RPF299                  Yes: rewrite
+         CLI   0(R7),X'F3'             PFK03 pressed?
+         BE    RPF204                  Yes cancel deletions
+         CLI   0(R7),X'C3'             PFK15 pressed?
+         BE    RPF204                  Yes: cancel deletions
+         CLI   0(R7),X'7D'             'ENTER' pressed (Confirmed)?
+         BNE   RPF202                  No: redisplay confirm screen
+RPF203   DS    0H
+         OI    SW,$LIST                Set List mod (no output)
+         L     R15,=V(ALLOC)           Routine address
+         BALR  R14,R15                 Allocate SYSIN and SYSPRINT
+         LTR   R15,R15                 Allocations OK?
+         BZ    RPF205                  Yes: process
+         MVI   LMSGID,C'8'             Msgid = 8, Delete error
+         B     RPF299                  Next entry
+RPF204   DS    0H
+         MVI   LMSGID,C'9'             Msgid = 9, Delete reject
+         B     RPF299
+RPF205   DS    0H                      Delete ARCHIVER item
+         MVC   RECORD,RECORD-1         Clear record first
+         MVC   RECORD2,RECORD2-1       Clear record2
+         MVC   RECORD(39),=C' DELETE DATA=Y,NOTE=Y,BACK=N,ALIASES=Y,'
+         MVC   RECORD2+15(6),=C'ITEM=(' move ITEM keyword
+         LA    R1,RECORD2+21           Point after ITEM=(
+         L     R15,=V(MVEITEM)         Add ITEM, GROUP, SUBGROUP,
+         BALR  R14,R15                 TYPE and VERSION in record
+         L     R15,=V(ARCHIVER)        Write record and ....
+         BALR  R14,R15                 call the ARCHIVER
+         MVC   COMMPRM(8),=CL8'ARCHPRT'
+         RPFSA24                       Switch to AMODE 24
+         LA    R1,PRMCOMM              Address of A(RPFCOMM)
+         LINK  EP=RPFBRO
+         RPFSA31                       Restore addressing mode
+         L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE
+         MVI   LITEM,C' '              Blank the EDIT
+         MVC   LITEM+1(79),LITEM       workspace entry
+         MVC   LITEM,=CL8'-deleted'    and set delete marker
+         MVI   LMSGID,C'D'             Msgid = D(eleted)
+         B     RPF299
+RPF207   DS    0H
+         CLI   0(R3),C'R'              Rename?
+         BNE   RPF211                  No test other functions
+         L     R15,=V(RENAME)          Rename an ITEM with ALTER func.
+         BALR  R14,R15
+         B     *+4(R15)                Branchlist
+         B     RPF208                  Rc = 0, good
+         B     RPF209                  Rc = 4, PF3/PF15 pressed
+         B     RPF210                  Rc = 8, Rename error
+RPF208   MVI   LMSGID,C'R'             Msgid = R(enamed)
+         B     RPF299                  Next entry if possible
+RPF209   MVI   LMSGID,X'FB'            Msgid = X'FB', rename rejected
+         B     RPF299                  Next entry if possible
+RPF210   MVI   LMSGID,X'FC'            Msgid = X'FC', rename error
+         B     RPF299                  Next entry if possible
+RPF211   DS    0H
+         CLI   0(R3),C'P'              Print?
+         BNE   RPF213                  No test other functions
+         OI    SW,$PRT                 Mark PRINT only
+         BAL   R14,BROWSE
+         NI    SW,255-$PRT             Reset flag
+         LTR   R15,R15                 Print ok ?
+         BNZ   RPF212                  No: issue error
+         MVI   LMSGID,C'P'             Msgid = P(rinted)
+         B     RPF299                  Next entry if possible
+RPF212   DS    0H
+         MVI   LMSGID,C'1'             Msgid = 1, error in PRINT
+         B     RPF299                  Next entry if possible
+RPF213   DS    0H
+         CLI   0(R3),C'B'              Browse?
+         BNE   RPF221                  No: test other line commands
+         CLC   LLRECL,=C'255'          Lrecl > 255?
+         BH    RPF216                  Yes: browse impossible
+         TM    COMMFLG1,$COMNTMP       No temporary data set available?
+         BNO   RPF217                  Branch if RPFEDT1 present
+RPF216   DS    0H
+         MVI   LMSGID,C'2'             Msgid = 2, Browse N/A
+         B     RPF299                  Next entry if possible
+RPF217   DS    0H
+         BAL   R14,BROWSE              Browse the Archived item
+         CLI   CMAINOPT,C' '           =n/=n.n cmd given in BROWSE
+         BNE   RETURN                  Y: return immediately
+         LTR   R15,R15                 Browse ok?
+         BZ    RPF219                  Yes: good, branch
+         MVI   LMSGID,C'3'             Msgid = 3, Browse error
+         B     RPF299                  Next entry if possible
+RPF219   DS    0H
+         MVI   LMSGID,C'B'             Msgid = B(rowsed)
+         B     RPF299                  Next entry if possible
+RPF221   CLI   0(R3),C'E'              EDIT Line command given?
+         BNE   RPF231                  Branch if not
+         CLC   LLRECL,=C'255'          Lrecl > 255?
+         BH    RPF222                  Yes: EDIT   impossible
+         CLI   LRECFM,C'U'             Undefined records?
+         BE    RPF222                  Yes: EDIT   impossible
+         TM    COMMFLG1,$COMNTMP       No temporary ds under RPFEDT1?
+         BNO   RPF223                  Present: branch
+RPF222   DS    0H
+         MVI   LMSGID,C'4'             Msgid = 4, Edit N/A
+         B     RPF299                  Next entry if possible
+RPF223   DS    0H
+         MVI   EDITPRM,C'E'            Set RPFEDIT in EDIT mode
+         L     R15,=V(EDIT)            Save workspace and go to EDIT
+         BALR  R14,R15
+         CLI   CMAINOPT,C' '           =n/=n.n cmd given in EDIT?
+         BNE   RETURN                  Y: return immediately
+         LTR   R15,R15                 Edit ok?
+         BZ    RPF229                  Yes: branch
+         TM    SW,$WSFULL              Workspace too small?
+         BO    RPF227                  Yes: branch
+         MVI   LMSGID,C'5'             Msgid = 5, not edited
+         B     RPF299                  Next entry in ITEM list
+RPF227   MVI   LMSGID,C'6'             Msgid = 6, Truncated
+         B     RPF299                  Next entry in ITEM list
+RPF229   MVI   LMSGID,C'E'             Msgid = E(dited)
+         B     RPF299                  NEXT entry in ITEM list
+RPF231   CLI   0(R3),C'V'              VIEW Line command given?
+         BNE   RPF241                  Branch if not
+         CLC   LLRECL,=C'255'          Lrecl > 255?
+         BH    RPF232                  Yes: EDIT   impossible
+         CLI   LRECFM,C'U'             Undefined records?
+         BE    RPF232                  Yes: EDIT   impossible
+         TM    COMMFLG1,$COMNTMP       No temporary ds under RPFEDT1?
+         BNO   RPF233                  Present: branch
+RPF232   DS    0H
+         MVI   LMSGID,X'FA'            Msgid = FA, View N/A
+         B     RPF299                  Next entry if possible
+RPF233   DS    0H
+         MVI   EDITPRM,C'V'            Set RPFEDIT in VIEW mode
+         L     R15,=V(EDIT)            Save workspace and go to EDIT
+         BALR  R14,R15
+         CLI   CMAINOPT,C' '           =n/=n.n cmd given in EDIT?
+         BNE   RETURN                  Y: return immediately
+         LTR   R15,R15                 Edit ok?
+         BZ    RPF239                  Yes: branch
+         MVI   LMSGID,C'5'             Msgid = 5, not edited
+         B     RPF299                  Next entry in ITEM list
+RPF239   MVI   LMSGID,C'V'             Msgid = V(iewed)
+         B     RPF299                  NEXT entry in ITEM list
+RPF241   CLI   0(R3),C'N'              List the NOTES?
+         BNE   RPF251                  Branch if not
+         L     R15,=V(ALLOC)           Routine address
+         BALR  R14,R15                 Allocate SYSIN and SYSPRINT
+         LTR   R15,R15                 Allocations OK?
+         BZ    RPF243                  Yes: process
+         MVI   LMSGID,C'8'             Msgid = 8, Alloc error
+         B     RPF299                  Next entry
+RPF243   MVC   RECORD,RECORD-1         Clear record first
+         MVC   RECORD2,RECORD2-1       Clear record2
+         MVC   RECORD(20),=C' LIST DATA=N,NOTE=Y,'
+         MVC   RECORD2+15(6),=C'ITEM=(' move ITEM keyword
+         LA    R1,RECORD2+21           Point after ITEM=(
+         L     R15,=V(MVEITEM)         Add ITEM, GROUP, SUBGROUP,
+         BALR  R14,R15                 TYPE and VERSION in record
+         L     R15,=V(ARCHIVER)        Write record and ....
+         BALR  R14,R15                 call the ARCHIVER
+         LA    R1,RPF247               EODAD address
+         STCM  R1,7,SYSPRINT+DCBEODA-IHADCB  New EODAD address
+         MVI   COMOPN,128              This is the only and last DCB
+         OPEN  SYSPRINT,MF=(E,COMOPN)  Open the output
+         MVI   LMSGID,X'FD'            Msgid = X'FD' (No notes data)
+         RPFSA24                       Enter addressing mode 24
+RPF245   DS    0H                      EODAD SYSPRINT DCB
+         GET   SYSPRINT,ARCH           Read a record
+         CLC   ARCHITEM+8(3),=C'-->'   NOTES data?
+         BNE   RPF245                  No: read next record
+         RPFSA31                       Enter addressing mode 31
+*                                      Because LMSGID = ATL
+         MVI   LMSGID,C'N'             Msgid = N (Notes found)
+         B     RPF248
+RPF247   DS    0H                      Eodad SYSPRINT DCB
+         RPFSA31                       Enter addressing mode 31
+RPF248   MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE SYSPRINT,MF=(E,COMCLS)  Close and ...
+         FREEPOOL SYSPRINT                       free the buffers
+         CLI   LMSGID,C'N'             Notes found?
+         BNE   RPF249                  No: do not browse
+         MVC   COMMPRM(8),=CL8'ARCHPRT'
+         RPFSA24                       Switch to AMODE 24
+         LA    R1,PRMCOMM              Address of A(RPFCOMM)
+         LINK  EP=RPFBRO               Invoke the RPF browser
+         RPFSA31                       Restore addressing mode
+RPF249   L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE
+         B     RPF299
+RPF251   DS    0H
+         MVI   LMSGID,C'7'             Msgid = 7, invalid cmd
+         B     RPF299                  Next entry if possible
+RPF299   DS    0H
+         LA    R3,9(,R3)               Next entry (linecmd + ITEM)
+         LA    R8,NEXTENT(,R8)         Next entry in workspace
+         BCT   R4,RPF201               Process next entry
+         L     R14,R14SCRN             Restore register 14
+         BR    R14
+         TITLE 'Browse Archiver items'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Register 8 points to the current entry in the EDIT           *
+*                   workspace and is mapped by DSECT MEMAREA          *
+*                                                                     *
+*        Return codes:  00 - Browse OK                                *
+*                       04 - Allocation error ARCHIVER files          *
+*                       08 - Browse error                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+BROWSE   DS    0H
+         STM   R0,R14,SAVEALL          Save registers
+         NI    SW,255-$LIST            Allocate all + ARCHDS
+         L     R15,=V(ALLOC)           Routine address
+         BALR  R14,R15                 Allocate SYSIN and SYSPRINT
+         LTR   R15,R15                 Alloc OK?
+         BNZ   BRO995                  No: error
+         MVC   RECORD,RECORD-1         Clear record
+         MVC   RECORD2,RECORD2-1       Clear second record
+         MVC   RECORD(23),=CL23' LOAD DDN=ARCHDS,ITEM=('
+         LA    R1,RECORD+23            Point after
+         L     R15,=V(MVEITEM)         Add ITEM, GROUP, SUBGROUP,
+         BALR  R14,R15                 TYPE and VERSION in record
+         L     R15,=V(ARCHIVER)        Write record and ....
+         BALR  R14,R15                 call the ARCHIVER
+BRO011   DS    0H
+         MVC   COMMPRM(8),=CL8'ARCHDS' RPFBRO will browse this DDNAME
+         TM    SW,$PRT                 PRINT only in RPFBRO?
+         BNO   BRO013                  No: carry
+         MVC   COMMPRM+8(8),=CL8'PRINT'  Tell this to RPFBRO
+BRO013   DS    0H
+         RPFSA24                       Switch to amode 24
+         LA    R1,PRMCOMM              Address of A(RPFCOMM)
+         LINK  EP=RPFBRO
+         RPFSA31                       Restore addressing mode
+         LTR   R15,R15                 Browse ok?
+         BZ    BRO997                  Yes good
+         MVC   MSG5,COMMPRM            Move message of RPFBRO in screen
+         L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE
+         LA    R15,8                   Set return code
+         B     BRO999                  End of routine
+BRO995   DS    0H
+         LA    R15,4                   Allocation error
+         B     BRO999                  End of routine
+BRO997   DS    0H
+         L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE
+         XR    R15,R15
+BRO999   DS    0H
+         LM    R0,R14,SAVEALL          Restore the registers
+         BR    R14
+         TITLE 'Model DCB''s'
+         PRINT NOGEN
+MDLEDIT  DCB   DDNAME=RPFEDT1,DSORG=PS,MACRF=(GL,PM),EODAD=GET003,     *
+               RECFM=FB,LRECL=80,BLKSIZE=12960
+MDLEDITL EQU   *-MDLEDIT
+MDLPRINT DCB   DDNAME=ARCHPRT,DSORG=PS,LRECL=133,MACRF=GM
+MDLPRTL  EQU   *-MDLPRINT
+MDLARCH  DCB   DDNAME=ARCHDS,DSORG=PS,EODAD=EDIT09,MACRF=(GM,PM)
+MDLARCHL EQU   *-MDLARCH
+MDLSYSIN DCB   DDNAME=ARCHIN,DSORG=PS,MACRF=PM,                        *
+               RECFM=F,LRECL=80,BLKSIZE=80
+MDLSYSL  EQU   *-MDLSYSIN
+         PRINT GEN
+         TITLE 'Constants'
+ARPRM    DC    AL2(L'PARM)                        \____parameter_____/
+PARM     DC    C'SYSIN=ARCHIN,SYSPRINT=ARCHPRT'   /   for ARCHIVER   \
+ERR2TXT  DC    CL25'- Data set not in catalog'
+ERR3TXT  DC    CL25'--------- PFK not defined'
+ERR4TXT  DC    CL25'-- PFK definition invalid'
+ERR5TXT  DC    CL25'--------- Specify Archive'
+ERR6TXT  DC    CL25'----- Enter locate string'
+ERR7TXT  DC    CL25'--------- Invalid command'
+ERR9TXT  DC    CL25'-- No items meet criteria'
+ERRATXT  DC    CL25'---- Confirm not '' '' or N'
+ERR8MDL  DC    CL25'---- xxxxxxxx alloc error'
+END1MDL  DC    CL12'xxxxxx items'
+*
+         DS    0H
+*
+         LTORG ,
+         DROP
+         COPY  TPUTS
+         TITLE 'Convert screen routine'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        C O N V I N:        Convert a TGET ASIS screen to formatted  *
+*        The SBA's and attribute bytes will be removed and the        *
+*        rest will be placed in 'SCREEN'. The AID byte will be        *
+*        placed in 'AIDBYTE'                                          *
+*        The length of the output will be placed in register 1        *
+*        Register 2 points to the AID byte, set by caller.            *
+*        Register 5 points to the output screen area, set by caller.  *
+*                                                                     *
+*        Return codes:                                                *
+*              0, successful convert                                  *
+*              4, partial screen or no data received                  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+CONVIN   CSECT                         Convert screen routine
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Our working storage
+         STM   R2,R14,SAVECONV         Save register 2-14
+         LR    R12,R15                 Entry point
+         USING CONVIN,R12              Provide addressability
+         L     R3,COMMSCR              Screen address from RPFCOMM
+         LR    R1,R3                   Duplicate area address
+         LA    R0,2048                 Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         MVC   0(1,R2),0(R3)           Save AIDbyte
+         LR    R4,R1                   Save input length
+         SH    R4,=H'6'                Skip AID, cursor and first SBA
+         C     R4,=F'100'              Significate bytes received?
+         BNH   CONV095                 Not high: error, incomplete scr.
+         LA    R3,6(,R3)               Point after AID, cursor and SBA
+         LR    R1,R5                   Save register 5
+         MVI   0(R5),C' '              Blank command ...
+         MVC   1(23,R5),0(R5)          field in output
+         LA    R14,24                  Max length of command
+*
+*        Output screen is pointed to by register 5
+*
+CONV001  DS    0H
+         CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+         MVC   0(1,R5),0(R3)           Move byte input to screen area
+         LA    R3,1(,R3)               Next byte input
+         LA    R5,1(,R5)               Next byte output
+         BCT   R14,CONV001             Test next byte
+CONV003  DS    0H
+         LA    R5,24(,R1)              Reset output scr.           @rp8
+         LH    R2,#LINES               # data lines on screen
+*
+*        We are here after the command field and at the first
+*        item entry. Each entry contains the following.
+*        SBA selection field and selection code (0 or 1 byte)
+*        SBA member entry and member name (always 8 bytes),
+*            because the member name is a protected field with MDT on
+*        The number of item entries is in #LINES (21 -> 96)
+*
+CONV005  DS    0H
+         CLI   0(R3),COMMSBA           SBA of selection field?
+         BNE   CONV095                 Should be there. otherwise error
+         LA    R3,3(,R3)               Point after SBA
+         MVI   0(R5),C' '              Init selection field to blank
+         CLI   0(R3),COMMSBA           SBA of member name?
+         BE    CONV007                 Erase or DEL key used in sel.
+         MVC   0(1,R5),0(R3)           Move byte to output screen
+         LA    R3,1(,R3)               Next byte input
+CONV007  DS    0H
+         LA    R5,1(,R5)               Next byte output
+         CLI   0(R3),COMMSBA           SBA of item name after sel.?
+         BNE   CONV095                 Should be there ...
+         LA    R3,3(,R3)               Point after SBA item name
+         MVC   0(8,R5),0(R3)           Move item name (always 8)
+         LA    R5,8(,R5)               Point after item name output
+         LA    R3,8(,R3)               Point after item name input
+         BCT   R2,CONV005              Loop until all lines done
+         XR    R15,R15                 Rc = 0, successful conversion
+         B     CONV099                 End of routine
+CONV095  DS    0H
+         LA    R15,4                   Rc = 4, conversion failed
+CONV099  DS    0H
+         LM    R2,R14,SAVECONV         Restore registers 2-14
+         BR    R14                     Return to caller
+         LTORG ,
+         DROP
+         TITLE 'Allocate ARCHIVER data sets'
+*---------------------------------------------------------------------*
+*
+*        Routine:  ALLOC
+*        Function: Allocate the following data sets.
+*                  DDname=ARCH, DSN=archive VSAM cluster
+*                  DDname=ARCHPRT,  temporary data set.
+*                         Processed if a LIST statement is used.
+*                  DDname=ARCHIN, temporary data set containing the
+*                         Archiver control statement.
+*
+*        If the $LIST flag is off, an output data set to contain
+*        the data to be LOADed. This data set will be Edited or
+*        Browsed. DDname=ARCHDS
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+ALLOC    CSECT
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Our working storage
+         USING MEMAREA,R8              Address workspace entry
+         STM   R2,R14,SAVEALC          Save register 2-14
+         LR    R12,R15                 Entry point
+         USING ALLOC,R12               Provide addressability
+         XC    RPFD08,RPFD08           Clear allocation parm block
+         XC    RPFATTR,RPFATTR         Clear DAIR attr. control block
+         XC    RPFD34,RPFD34           Clear attribute parm block
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08MNM,=CL8' '         Provide no member name
+         MVC   DA08SER(8),=CL8' '      No volume serial provided
+         MVC   DA08UNIT,=CL8' '        No unit name
+         MVI   DA08DSP1,DA08SHR        DISP=SHR
+         MVC   DA08DDN,=CL8'ARCH'      DD-name
+         LA    R1,ARCHIVE+44           Calculate ...
+         TRT   ARCHIVE,COMSKPNS        Register -> first blank
+         LA    R0,ARCHIVE              Point to beginning of dsn
+         SLR   R1,R0                   ... length
+         STCM  R1,3,ARCHIVEL           And save real length
+         LA    R1,RPFD08               Reload allocation parm block
+         LA    R0,ARCHIVEL             Length + DSN
+         ST    R0,DA08PDSN             Store in allocation parm block
+         L     R15,=V(CALLTS)          Allocate ARCHIVER cluster
+         CALL  (15)
+         LA    R1,RPFD08               Point to allocation parm block
+         LA    R1,=CL8'ARCH'           DDname if error occurs
+         LTR   R15,R15                 Alloc OK?
+         BNZ   ALLOCER                 Yes: good
+         LA    R1,RPFD08               Reload allocation parm block
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08PQTY+3,X'01'        1 cylinders primary
+         MVI   DA08SQTY+3,X'0A'        10 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name
+         MVC   DA08DDN,=CL8'ARCHPRT'   DD-name
+         LA    R0,PRTDSNL              Length + DSN
+         ST    R0,DA08PDSN             Store in allocation parm block
+         L     R15,=V(CALLTS)          Allocate ARCHPRT
+         CALL  (15)
+         LA    R1,=CL8'ARCHPRT'        DDname if error occurs
+         LTR   R15,R15                 Alloc OK?
+         BNZ   ALLOCER                 Yes: good
+         LA    R1,RPFD08               Reload allocation parm block
+         MVC   DA08DDN,=CL8'ARCHIN'    DD-name
+         MVI   DA08PQTY+3,X'01'        1 tracks primary
+         MVI   DA08SQTY+3,X'00'        No secondary space
+         MVI   DA08CTL,DA08TRKS        Track allocation
+         LA    R0,INDSNL               Length + DSN
+         ST    R0,DA08PDSN             Store in allocation parm block
+         L     R15,=V(CALLTS)          Allocate ARCHIN
+         CALL  (15)
+         LA    R1,=CL8'ARCHIN'         DDname if error occurs
+         LTR   R15,R15                 Alloc OK?
+         BNZ   ALLOCER                 No: error
+         DROP  R1                      RPFD08
+         TM    SW,$LIST                Processing ARCHIVER list?
+         BO    ALLOCOK                 Yes: do not allocate output
+         PACK  DBW,LLRECL              Convert LRECL to packed
+         CVB   R14,DBW                 and to binary
+         STH   R14,ALRECL              Save LRECL
+         PACK  DBW,LBLK                Convert BLKSIZE to packed
+         CVB   R14,DBW                 and to binary
+         STH   R14,ABLK                Save LRECL
+         LA    R14,RPFATTR             DAIR ACB
+         USING DAIRACB,R14             Address this DSECT
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               Address this DSECT
+         LA    R15,RPFD34              Point to attribute parm block
+         USING DAPB34,R15              Address this DSECT
+         MVC   DA08DDN,=CL8'ARCHDS'    DDNAME to allocate
+         LA    R0,ARCHDSNL             Length + DSNAME
+         ST    R0,DA08PDSN             Length and DSNAME
+         MVI   DA08DSP1,DA08NEW        DISP=NEW
+         MVI   DA08PQTY+3,X'14'        20 cylinders primary
+         MVI   DA08SQTY+3,X'08'        8 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         OI    DA08CTL,DA08ATRL        Attibute list present
+         OI    DA08CTL,DA08RLSE        Release
+         MVI   DA08DSO,X'40'           DSORG=PS
+         MVC   DA08ALN,=CL8'RPFARCH'   Attribute list name
+         MVC   DAILRECL,ALRECL         LRECL
+         MVC   DAIBLKSI,ABLK           BLKSIZE
+         MVI   DA34CD+1,X'34'          Entry code
+         MVC   DA34NAME,DA08ALN        Move attribute list name
+         MVI   DA34CTRL,DA34CHN        Chain attr. list
+         STCM  R14,15,DA34ADDR         Address of DAIRACB (attr. list)
+         L     R1,=V(RECFMTB)          RECFM table
+         LA    R0,#RECFM               # entries in RECFMTB
+ALLOC01  DS    0H
+         CLC   LRECFM,0(R1)            Match found of RECFM?
+         BE    ALLOC03                 Yes: good, process RECFM
+         LA    R1,5(,R1)               Next entry in table
+         BCT   R0,ALLOC01              Loop until found or all done
+         B     ALLOC05                 Skip RECFM
+ALLOC03  DS    0H
+         MVC   DAIRECFM,4(R1)          Move binary value RECFM
+ALLOC05  DS    0H
+         LA    R1,RPFD34               Chain the attribute list
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,=CL8'RPFARCH'        DDname if error occurs
+         LTR   R15,R15                 Chaining successful?
+         BNZ   ALLOCER                 No: error
+         LA    R1,RPFD08               Allocate ARCHDS temp. data set
+         L     R15,=V(CALLTS)          for EDIT and BROWSE functions
+         CALL  (15)
+         LA    R1,=CL8'ARCHDS'         DDname if error occurs
+         LTR   R15,R15                 Allocation successful?
+         BNZ   ALLOCER                 No: some error occurred
+         MVI   COMOPN,128              This is the only and last DCB
+         OPEN  (ARCHDCB,(OUTPUT)),MF=(E,COMOPN) Open to add EOF marker
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE ARCHDCB,MF=(E,COMCLS)   Close and ...
+         FREEPOOL ARCHDCB                        free the buffers
+         B     ALLOCOK                 Everything is successful
+ALLOCER  DS    0H
+         MVC   ERR8TXT+5(8),0(R1)      DDname in error
+         L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE
+         LA    R15,4                   Return code
+         B     ALLOC99                 Branch
+ALLOCOK  DS    0H
+         XR    R15,R15                 Return code = 0, good
+ALLOC99  DS    0H
+         LM    R2,R14,SAVEALC          Restore registers 2-14
+         BR    R14                     Return
+PRTDSNL  DC    AL2(8)                  \__________ length + _________/
+PRTDSN   DC    CL44'&&ARCHPRT'         / temporary SYSPRINT data set \
+*
+ARCHDSNL DC    AL2(8)                  \__________ length + _________/
+ARCHDSN  DC    CL44'&&ARCHDSN'         /   Temporary Output data set \
+*
+INDSNL   DC    AL2(7)                  \__________ length + _________/
+INDSN    DC    CL44'&&ARCHIN'          /  Temporary SYSIN Archiver   \
+         LTORG ,
+         DROP
+         TITLE 'Unallocate SYSPRINT and SYSIN'
+UNALLOC  CSECT
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Our working storage
+         STM   R8,R14,SAVEUNAL         Save registers 8-14
+         LR    R12,R15                 Entry point
+         USING UNALLOC,R12             Provide addressability
+         XC    RPFD18,RPFD18           Clear unallocation parm block
+         LA    R1,RPFD18               Point to unallocation parm blk
+         USING DAPB18,R1               Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'ARCHIN'    DDNAME to unallocate
+         MVC   DA18MNM(8),=CL8' '      Provide no member name
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm blk
+         MVC   DA18DDN,=CL8'ARCHPRT'   DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm blk
+         MVC   DA18DDN,=CL8'ARCH'      DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R1                      RPFD18
+         TM    SW,$LIST                List flag on (INDEX) ?
+         BNZ   UNALL01                 Yes: no unalloc of ARCHDS
+         LA    R1,RPFD34               Unchain the attribute list
+         USING DAPB34,R1               Address SET attr. parmlst
+         MVI   DA34CD+1,X'34'          Entry code
+         MVI   DA34CTRL,DA34UNCH       Unchain attribute list
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R1                      RPFD34
+         LA    R1,RPFD18               Point to unallocation parm blk
+         USING DAPB18,R1               Address unalloc parm block
+         MVC   DA18DDN,=CL8'ARCHDS'    DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+UNALL01  DS    0H
+         LM    R8,R14,SAVEUNAL         Restore registers 8-14
+         BR    R14                     Return
+         LTORG ,
+         DROP  ,
+         TITLE 'Write ARCHIVER sysin, link and close SYSIN'
+*---------------------------------------------------------------------*
+*
+*        Function: open SYSIN, write the record on SYSIN and
+*                  LINK to the ARCHIVER. After this close
+*                  SYSIN and free the buffers.
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+ARCHIVER CSECT
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Make working storage available
+         ST    R14,R14ARCH             Save register 14
+         ST    R12,R12ARCH             Save register 12
+         LR    R12,R15                 Setup base register
+         USING ARCHIVER,R12            Provide addressability
+         MVI   COMOPN,128              This is the only and last DCB
+         OPEN  (SYSIN,(OUTPUT)),MF=(E,COMOPN) Open ARCHIVER SYSIN
+         RPFSA24                       Enter AMODE24
+         PUT   SYSIN,RARCHIVE          Write ' SET VSAM1DD=' record
+         PUT   SYSIN,RECORD            Write record on SYSIN
+         CLI   RECORD2+15,C' '         Do we have a second record?
+         BE    ARCHCLS                 No: close and invoke Archiver
+         PUT   SYSIN,RECORD2           Write 2nd record on SYSIN
+ARCHCLS  DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE SYSIN,MF=(E,COMCLS)     Close data set
+         FREEPOOL SYSIN
+         LA    R1,=A(ARPRM)            Parameter for ARCHIVER
+         LINK  EP=ARCHIVER             Process ARCHIVER
+         RPFSA31                       Restore addressing mode
+         L     R12,R12ARCH             Restore register 12
+         L     R14,R14ARCH             Restore register 14
+         BR    R14                     Return
+RARCHIVE DC    CL80' SET VSAM1DD=ARCH'
+         LTORG ,
+         DROP
+         TITLE 'Move keyword ITEM/GROUP/SUBGROUP/TYPE/VERSION into the X
+               record.'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  MVEITEM                                            *
+*                                                                     *
+*        Function: move the ITEM, GROUP, SUBGROUP, ITEM and VERSION   *
+*                  into the record. If one of those keywords are      *
+*                  omitted, a comma will be set.                      *
+*                  The keywords ITEM and VERSION are always present.  *
+*                                                                     *
+*        Input:    Register 1, points to the place where the          *
+*                  keywords will be substituted.                      *
+*                                                                     *
+*        Output:   a complete record.                                 *
+*                  Register 1, points after ')' in ITEM statement.    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+MVEITEM  CSECT
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Make working storage available
+         USING MEMAREA,R8              Address workspace entry
+         ST    R12,R12MVE              Save base register
+         ST    R14,R14MVE              Save return register
+         LR    R12,R15                 Entry point
+         USING MVEITEM,R12             Provide addressability
+         LR    R14,R1                  Point to pos of ITEM/GROUP etc.
+         MVC   0(8,R14),LITEM          Move Item name
+*
+         LA    R1,8(,R14)              Point after ITEM
+         TRT   0(8,R14),COMSKPNS       Find trailing blanks (if < 8)
+         MVI   0(R1),C','              Add a comma after ITEM
+         LA    R14,1(,R1)              Position after comma
+         MVC   0(8,R14),LGROUP         Move ITEM group
+         LA    R1,8(,R14)              Point after Group
+         TRT   0(8,R14),COMSKPNS       Stop at first blank
+         MVI   0(R1),C','              Move comma after GROUP
+         LA    R14,1(,R1)              Position after comma
+         MVC   0(8,R14),LSUBGRP        Move SUBGROUP
+         LA    R1,8(,R14)              Point after SUBGROUP
+         TRT   0(8,R14),COMSKPNS       Stop at first blank
+         MVI   0(R1),C','              Move comma after SUBGROUP
+         LA    R14,1(,R1)              Position after comma
+         MVC   0(8,R14),LTYPE          Move ITEM Type
+         LA    R1,8(,R14)              Point after Type
+         TRT   0(8,R14),COMSKPNS       Stop at first blank
+         MVI   0(R1),C','              Move comma after TYPE
+         LA    R1,1(,R1)               Position after comma
+         LA    R14,3                   VERSION is max. 3 bytes
+         LA    R15,LVERS               Address of VERSION in R15
+MVEIT03  DS    0H
+         CLI   0(R15),C' '             First byte blank?
+         BNE   MVEIT05                 No: move version
+         LA    R15,1(,R15)             Test next byte of version
+         BCT   R14,MVEIT03             Loop
+MVEIT05  DS    0H
+         BCTR  R14,0                   Minus 1 for EX
+         EX    R14,MOVEVER1            Move the version
+         ALR   R1,R14                  Point after ....
+         LA    R1,1(,R1)                           VERSION
+         MVI   0(R1),C')'              End parenthese
+         LA    R1,1(,R1)               Point after ')' (the answer)
+         L     R12,R12MVE              Restore base register
+         L     R14,R14MVE              Restore return register
+         BR    R14                     return
+MOVEVER1 MVC   0(0,R1),0(R15)          << executed >>
+*
+         LTORG ,
+         DROP
+         TITLE 'Edit a Archiver item'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        E D I T   Edit the specified item.                           *
+*                  This routine executes the following functions      *
+*                  1. Save RPFARCH workspace on DDNAME RPFEDT1        *
+*                  2. Read item into workspace                        *
+*                  3. Invoke the editor (RPFEDIT).                    *
+*                  4. Restore workspace from RPFEDT1                  *
+*                  5. Save if asked for item with RPFSAVE with s      *
+*                     SAVE menu with 5 options.                       *
+*                                                                     *
+*                  Reg 8 points to the current Archiver entry in      *
+*                  the EDIT workspace                                 *
+*                                                                     *
+*        Input:    EDITPRM: contains an E or a 'V'.                   *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+EDIT     CSECT
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Our working storage
+         USING MEMAREA,R8              Address workspace entry
+         STM   R2,R14,SAVEEDIT         Save all the registers
+         LR    R12,R15                 Setup base register
+         USING EDIT,R12                Provide addressability
+         NI    SW,255-$WSFULL-$VB      Set WSFULL + VB flag off
+         LR    R7,R1                   Save parameter (E or V)
+         MVC   SFIRSTSC,COMMFSCR       Save COMMFSCR
+         MVC   COMMGRP,LGROUP          Move Group,
+         MVC   COMMSGRP,LSUBGRP             Subgroup and
+         MVC   COMMTYPE,LTYPE               Type into RPFCOMM
+         CLI   LRECFM,C'F'             Is RECFM = Fxx?
+         BE    EDIT01                  Yes: good
+         CLI   LRECFM,C'V'             Is RECFM = Vxx?
+         BNE   EDIT95                  No: invalid RECFM
+         OI    SW,$VB                  Mark Variable records
+EDIT01   DS    0H
+         CLC   LLRECL,=C'255'          Is record length good?
+         BH    EDIT95                  No: error
+         MVC   COMMARDS,=C'PO'         Tell RPFARSVE that original
+         CLC   =C'PO',LDSORG           Was original file a PDS?
+*                                      data set was a PDS(E)
+         BE    *+10                    Yes: carry on
+         MVC   COMMARDS,=C'PS'         Tell RPFARSVE that original
+*                                  data set was a sequential data set
+         MVI   COMOPN,128              This is the only and last DCB
+         OPEN  (EDITDCB,(OUTPUT)),MF=(E,COMOPN) Open RPFEDT1
+         L     R3,COMWSTRT             COMWSTRT pointer
+         LA    R4,NEXTENT              Length of workspace entry (88)
+         L     R5,COMMLAST             COMMLAST pointer
+         LA    R5,1(,R5)               Plus 1 for BXLE
+EDIT03   DS    0H
+         MVC   RECORD,8(R3)            Move workspace entry to record
+*                                      to the record
+         RPFSA24                       Switch to amode 24
+         BAL   R14,PUTIT               Write record on RPFEDT1
+         RPFSA31                       Restore addressing mode
+         BXLE  R3,R4,EDIT03            Loop until all workspace
+*                                      entries are save upon RPFEDT1
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE EDITDCB,MF=(E,COMCLS)   Close RPFEDT1
+         FREEPOOL EDITDCB              and free the buffers
+         NI    SW,255-$LIST            Allocate all + ARCHDS
+         L     R15,=V(ALLOC)           Routine address
+         BALR  R14,R15                 Allocate SYSIN and SYSPRINT
+         LTR   R15,R15                 Alloc OK?
+         BNZ   EDIT95                  No: error
+         MVC   RECORD,RECORD-1         Clear record
+         MVC   RECORD2,RECORD2-1       Clear second record
+         MVC   RECORD(23),=CL23' LOAD DDN=ARCHDS,ITEM=('
+         LA    R1,RECORD+23            Point after
+         L     R15,=V(MVEITEM)         Add ITEM, GROUP, SUBGROUP,
+         BALR  R14,R15                 TYPE and VERSION in record
+         L     R15,=V(ARCHIVER)        Execute ARCHIVER load function
+         BALR  R14,R15
+         L     R2,COMWSTRT             Start of EDIT workspace
+         ST    R2,COMMFSCR             Becomes first line on screen
+         SL    R2,=A(NEXTENT)
+         ST    R2,COMMLAST
+         MVC   COMMBR,LITEM            Move Item name in member
+         LA    R1,8                    Max length of the member
+         LA    R14,COMMBR              Member field
+EDIT04   CLI   0(R14),C'+'             + is allowed in Archiver ITEM
+*                                      but not in a PDS member name
+         BNE   *+8                     No: good
+         MVI   0(R14),C'@'             Replace by national character
+         LA    R14,1(,R14)             Next position
+         BCT   R1,EDIT04               Loop until all done
+         MVI   COMOPN,128              This is the only and last DCB
+         OPEN  ARCHDCB,MF=(E,COMOPN)   Open the output of ARCHIVER
+*
+         NI    COMMFLG4,255-$COMFB-$COMVB set RECFM off in RPFCOMM
+         L     R3,COMWSTRT             Point to first record
+         PACK  DBW,LLRECL              Pack the record length
+         CVB   R5,DBW                  and make binary
+         TM    SW,$VB                  Do we have variable records
+         BNO   EDIT05                  No: carry
+         SH    R5,=H'4'                Decrease LRECL
+EDIT05   DS    0H
+         LA    R4,EDITREC              Point to record
+         MVI   0(R4),C' '              Blank the ...
+         MVC   1(254,R4),0(R4)                  record before read
+         RPFSA24                       Enter AMODE31
+         GET   ARCHDCB,(4)             Read a record
+         RPFSA31                       Restore addressing mode
+         TM    SW,$VB                  Do we have variable records
+         BNO   EDIT07                  No: carry
+         LA    R4,4(,R4)               Skip RDW
+EDIT07   DS    0H
+         LR    R1,R5                   Record length
+         BCTR  R1,0                    Minus for EX
+         EX    R1,MOVEREC              Move record in EDIT worksp
+         XC    0(8,R3),0(R3)           Clear prefix
+         ST    R3,COMMLAST             New COMMLAST in RPFCOMM
+         LA    R3,8(,R3)               Next entry ...
+         LA    R3,0(R3,R5)             ... in EDIT workspace
+         CL    R3,COMWRKND             Beyond end of workspace?
+         BNH   EDIT05                  Continue
+         CLI   EDITPRM,C'V'            Editor in VIEW mode?
+         BE    EDIT09                  Yes: accept truncation.
+         OI    SW,$WSFULL              Mark Workspace truncated
+EDIT09   DS    0H                      ---- EODAD
+         RPFSA31                       Restore addressing mode
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE ARCHDCB,MF=(E,COMCLS)   Close Archive output
+         FREEPOOL ARCHDCB              and free the buffers
+         TM    SW,$WSFULL              Workspace truncated?
+         BO    EDIT14                  Yes: skip RPFEDIT
+         ST    R5,COMMRECL             Set record length
+*
+*        Tell RPFARSVE (Archiver save) the RECFM of the original
+*        data set. If saved into a normal data set, like a PDS(E) or
+*        sequential data set, these flags are not examined.
+*        RPFARSVE is called by RPFSAVE
+*
+         OI    COMMFLG4,$COMFB         Set RECFM=FB
+         TM    SW,$VB                  unless ....
+         BNO   EDIT12                  ...
+         NI    COMMFLG4,255-$COMFB     RECFM is ...
+         OI    COMMFLG4,$COMVB                     VB
+EDIT12   DS    0H
+*
+*        Flag $COMCURR is set, to tell RPFSAVE, that the SAVE
+*        entry menu will be displayed to make it possible to select
+*        option 5, to save the Edited item in the Archive cluster.
+*
+         OI    COMMFLG1,$COMCURR       Bypass LOAD (RPFEDITL)
+         L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE
+         CLI   EDITPRM,C'E'            RPFEDIT in EDIT mode?
+         BE    EDIT13                  Yes: leave in EDIT mode
+         OI    COMMFLG4,$COMVIEW       Tell RPFEDIT to go in VIEW mode
+EDIT13   DS    0H
+         L     R15,EPEDIT              Entry point RPFEDIT in RPFCOMM
+         XC    COMMVM,COMMVM           No ISPF stats (Archive Item)
+         LA    R1,PRMCOMM              Parameter with A(RPFCOMM)
+         BALR  R14,R15                 Link to RPFEDIT
+         NI    COMMFLG4,255-$COMVIEW   Tell RPFEDIT to go back in EDIT
+         B     EDIT14                  Branch over MOVEREC
+MOVEREC  MVC   8(0,R3),0(R4)           << executed >>
+*
+*        Restore the EDIT workspace with the ARCHIVER item list
+*
+EDIT14   DS    0H
+         L     R3,COMWSTRT             Pick-up start address workspace
+         SL    R3,=A(NEXTENT)          Minus 88
+         ST    R3,COMMLAST             Save in 'COMMLAST' in RPFCOMM
+         L     R3,COMWSTRT             Reload register 3
+         MVI   COMOPN,128              This is the only and last DCB
+         OPEN  EDITDCB,MF=(E,COMOPN)   Open saved workspace in RPFEDT1
+EDIT15   DS    0H
+         RPFSA24                       Switch to amode 24
+         BAL   R14,GETIT               Read saved workspace record
+         LR    R2,R1                   Save addres of record
+         RPFSA31                       Restore AMODE (destroys R1)
+         LTR   R15,R15                 EOF ?
+         BNZ   EDIT93                  Yes: branch
+         XC    0(8,R3),0(R3)           Clear prefix in workspace
+         MVC   8(80,R3),0(R2)          Move record to data portion
+         ST    R3,COMMLAST             And reset 'COMMLAST' in RPFCOMM
+         LA    R3,NEXTENT(,R3)         Go to next entry in workspace
+         B     EDIT15                  Read next record
+EDIT93   DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE EDITDCB,MF=(E,COMCLS)   Close the DCB
+         FREEPOOL EDITDCB              and free the buffers
+         B     EDIT99                  Return code 0
+EDIT95   DS    0H
+         LA    R3,8                    EDIT not available
+         B     EDIT999                 Branch
+EDIT99   DS    0H
+         XR    R3,R3                   Clear return code
+         TM    SW,$WSFULL              Workspace too small?
+         BNO   *+8                     No: test other errors
+         LA    R3,4                    Else Rc = 4
+EDIT999  DS    0H
+         L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE
+         MVC   COMMFSCR,SFIRSTSC       Restore COMMFSCR
+         LR    R15,R3                  Set return code
+         LM    R2,R14,SAVEEDIT         Restore the registers
+         BR    R14                     Return
+*
+*        Read a record from RPFEDT1, the saved EDIT workspace
+*
+GETIT    DS    0H
+         ST    R14,R14GETIT            Save return register
+         GET   EDITDCB                 Read record (addr. in register1)
+         LA    R1,0(,R1)               Make a clean address
+         XR    R15,R15                 Rc= 0: record succesfully read
+         B     GET099                  End of routine
+GET003   DS    0H
+         LA    R15,4                   Rc = 4: end of file
+GET099   DS    0H
+         L     R14,R14GETIT            Restore register 14
+         BR    R14                     Return
+*
+*        Field RECORD contains the data to be written
+*
+PUTIT    DS    0H
+         ST    R14,R14PUTIT            Save register 14
+         PUT   EDITDCB,RECORD          Write record on RPFEDT1
+         L     R14,R14PUTIT            Restore register 14
+         BR    R14                     Return
+         LTORG ,
+         DROP
+         TITLE 'Rename an ITEM with the ALTER function'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  RENAME                                             *
+*                                                                     *
+*        Function: Rename an ITEM with the Archiver ALTER function.   *
+*                  Build an ALTER control statement and link to the   *
+*                  ARCHIVER program.                                  *
+*                                                                     *
+*        Returncodes:  00 - Rename executed                           *
+*                      04 - Not renamed, PF3/PF15 pressed.            *
+*                      08 - Rename error, allocation failed.          *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RENAME   CSECT
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Our working storage
+         USING SCREENS,R9              Address screen area
+         USING MEMAREA,R8              Address workspace entry
+         STM   R2,R14,SAVEREN          Save all the registers
+         LR    R12,R15                 Setup base register
+         USING RENAME,R12              Provide addressability
+         MVC   SCR4ITEM,LITEM          Move ..
+         MVC   SCR4GRP,LGROUP                 items ..
+         MVC   SCR4SGRP,LSUBGRP                       in ..
+         MVC   SCR4TYPE,LTYPE                              screen
+         MVC   SCR4VERS,LVERS          Inclusive version
+REN001   DS    0H
+         LA    R1,SCR4TXT              Parm TPUTS (address screen)
+         LA    R0,SCR4LEN              Parm TPUTS (length  screen)
+         L     R15,=V(TPUTS)           Display RENAME screen
+         BALR  R14,R15                 Execute
+         MVI   S4MSG,C' '              Clear ...
+         MVC   S4MSG+1(L'S4MSG-1),S4MSG      message area
+         L     R3,COMMSCR              Input screen
+         LR    R1,R3                   Duplicate area address
+         LA    R0,160                  Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         MVC   AIDBYTE,0(R3)           Save AID byte
+         XR    R6,R6                   Init output length
+         LA    R5,BUFFER               Set output in BUFFER
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   REN001                  Branch if zero or less
+         LA    R3,3(,R3)
+REN005   CLI   0(3),COMMSBA            SBA order found?
+         BE    REN009                  Yes: skip 3 bytes SBA
+         MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R6,1(,R6)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,REN005               Loop
+         B     REN013                  Conversion finished
+REN009   DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes input (SBA)
+         BCTR  R4,0                    Minus 1 bct
+         BCTR  R4,0                    Minus 1 bct
+         BCT   R4,REN005               Test next byte
+REN013   DS    0H
+         LTR   R6,R6                   Nothing received?
+         BZ    REN001                  Yes: reshow screen
+         CLI   AIDBYTE,X'F3'           PFK3 pressed?
+         BE    REN990                  Yes: set RC=4, Not renamed
+         CLI   AIDBYTE,X'C3'           PFK15 pressed?
+         BE    REN990                  Yes: set RC=4, Not renamed
+         MVI   RENAMEIT,C' '           Clear ITEM/G/S/T/V to rename to
+         MVC   RENAMEIT+1(L'RENAMEIT-1),RENAMEIT
+         LA    R5,BUFFER               Point to start of Buffer
+REN017   DS    0H
+         CLC   S4ITEM,0(R5)            Search for Archiver ITEM name
+         BE    REN019                  Found: process ITEM
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,REN017               Examine next bytes
+         B     REN001                  No data anymore: display screen
+REN019   LA    R5,L'S4ITEM(,R5)        Point after 'ITEM        ='
+         SH    R6,=AL2(L'S4ITEM)       Decrease BCT register
+         LA    R4,RITEM                Point to ITEM to rename
+REN025   DS    0H
+         CLC   S4GRP,0(R5)             Search for GROUP name
+         BE    REN027                  Found: process GROUP
+         MVC   0(1,R4),0(R5)           Move 1 character ITEM
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,REN025               Examine next bytes
+         B     REN001                  No data anymore: display menu
+REN027   LA    R5,L'S4GRP(,R5)         Point after 'GROUP       ='
+         SH    R6,=AL2(L'S4GRP)        Decrease BCT register
+         LA    R4,RGROUP               Point to GROUP field
+REN033   DS    0H
+         CLC   S4SGRP,0(R5)            Search for SUBGROUP name
+         BE    REN035                  Found: process SUBGROUP
+         MVC   0(1,R4),0(R5)           Move 1 character GROUP name
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,REN033               Examine next bytes
+         B     REN001                  No data anymore: display menu
+REN035   LA    R5,L'S4SGRP(,R5)        Point after 'SUBGROUP    ='
+         SH    R6,=AL2(L'S4SGRP)       Decrease BCT register
+         LA    R4,RSUBGRP              Point to SUBGROUP field
+REN041   DS    0H
+         CLC   S4TYPE,0(R5)            Search for TYPE name
+         BE    REN043                  Found: process TYPE
+         MVC   0(1,R4),0(R5)           Move 1 character SUBGROUP name
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,REN041               Examine next bytes
+         B     REN001                  No data anymore: display menu
+REN043   LA    R5,L'S4TYPE(,R5)        Point after 'TYPE        ='
+         SH    R6,=AL2(L'S4TYPE)       Decrease BCT register
+         LA    R4,RTYPE                Point to TYPE field
+REN049   DS    0H
+         CLC   S4VERS,0(R5)            Search for VERSION
+         BE    REN051                  Found: process VERSION
+         MVC   0(1,R4),0(R5)           Move 1 character SUBGROUP name
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,REN049               Examine next bytes
+         B     REN001                  No data anymore: display menu
+REN051   LA    R5,L'S4VERS(,R5)        Point after 'VERSION     ='
+         SH    R6,=AL2(L'S4VERS)       Decrease BCT register
+         BNP   REN061                  No more bytes left
+         LA    R4,VERS                 Point to VERSION
+REN057   DS    0H
+         MVC   0(1,R4),0(R5)           Move 1 character VERSION
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,REN057               Examine next bytes
+REN061   DS    0H
+*
+*        Check if GROUP, SUBGROUP or TYPE is blank. If so, replace
+*        by the original, since Archiver ALTER does not blank out
+*        these fields.
+*
+         CLI   RGROUP,C' '             GROUP filled in RENAME screen?
+         BNE   *+10                    Yes: good
+         MVC   RGROUP,LGROUP           Move original GROUP
+         CLI   RSUBGRP,C' '           SUBGROUP filled in RENAME screen?
+         BNE   *+10                    Yes: good
+         MVC   RSUBGRP,LSUBGRP         Move original SUBGROUP
+         CLI   RTYPE,C' '              TYPE filled in RENAME screen?
+         BNE   *+10                    Yes: good
+         MVC   RTYPE,LTYPE             Move original TYPE
+         MVC   SCR4ITEM,RITEM          Move ITEM name
+         MVC   SCR4GRP,RGROUP          and GROUP name
+         MVC   SCR4SGRP,RSUBGRP        and SUBGROUP name
+         MVC   SCR4TYPE,RTYPE          and TYPE name
+         MVC   SCR4VERS,VERS           and VERSION
+         CLI   RITEM,C' '              Required field ITEM specified?
+         BNE   REN063                  Yes: test validity of fields
+         MVC   S4MSG,ITEMTXT           Msg: ITEM cannot be blank
+         B     REN001                  Retry
+REN063   DS    0H
+         LA    R3,32                   Length of ITEM/GRP/SGRP/TYPE
+         LA    R4,RITEM                Fields to scan
+REN065   DS    0H
+         LA    R1,STRING               String with valid characters
+         LA    R2,L'STRING             Length
+REN067   DS    0H
+         CLC   0(1,R4),0(R1)           Is string valid?
+         BE    REN071                  Yes: test next character fields
+         LA    R1,1(,R1)               Next character in string to test
+         BCT   R2,REN067               Loop until all characters tested
+         MVC   S4MSG,CHARTXT           Msg: invalid characters found
+         B     REN001                  Retry
+REN071   DS    0H
+         LA    R4,1(,R4)               Next character fields
+         BCT   R3,REN065               Loop until all fields tested
+         CLC   RITEM(32),LITEM         Still the same names?
+         BNE   REN073                  No: good, test if already exist
+         MVC   S4MSG,SAMETXT           Msg: All fields are the same
+         B     REN001                  Retry
+*
+*        Check if new ITEM/GROUP/SUBGROUP/TYPE/VERSION is not present
+*
+REN073   DS    0H
+         L     R4,COMWSTRT             Start of EDIT workspace (BXLE)
+         LA    R6,NEXTENT              Default length entry    (BXLE)
+         L     R7,COMMLAST             Last record workspace   (BXLE)
+         LA    R7,1(,R7)               +1                      (BXLE)
+REN075   DS    0H
+         CLC   8(35,R4),RITEM          NEWNAME in Archive (workspace)?
+         BE    REN079                  Yes: msg Already exists
+         BXLE  R4,R6,REN075            Check complete workspace
+         B     REN083                  Good, RENAME entry
+REN079   DS    0H
+         MVC   S4MSG,DUPLTXT           Msg: ITEM already exists
+         B     REN001                  Retry
+*
+REN083   DS    0H                      Call the Archiver with ALTER
+         OI    SW,$LIST                Set List mod (no output)
+         L     R15,=V(ALLOC)           Routine address
+         BALR  R14,R15                 Allocate SYSIN and SYSPRINT
+         LTR   R15,R15                 Allocations OK?
+         BNZ   REN992                  No: rc=8
+         MVC   RECORD,RECORD-1         Clear both ...
+         MVC   RECORD2,RECORD2-1                     records
+         MVC   RECORD(13),=CL13' ALTER ITEM=('
+         LA    R1,RECORD+13            Start pos. ITEM/GRP/SUBGRP ...
+         L     R15,=V(MVEITEM)         Add ITEM, GROUP, SUBGROUP,
+         BALR  R14,R15                 TYPE and VERSION in record
+         MVI   0(R1),C','              Continuation
+         MVC   RECORD2+15(5),=C'NEW=(' Move NEW keyword of ALTER
+         MVC   LITEM(35),RITEM         Renamed fields into workspace
+         LA    R1,RECORD2+20           Start pos. ITEM/GRP/SUBGRP ...
+         L     R15,=V(MVEITEM)         Add ITEM, GROUP, SUBGROUP,
+         BALR  R14,R15                 TYPE and VERSION in record
+         L     R15,=V(ARCHIVER)        Write record and ....
+         BALR  R14,R15                 call the ARCHIVER
+         MVC   COMMPRM(8),=CL8'ARCHPRT'
+         RPFSA24                       Switch to AMODE 24
+         LA    R1,PRMCOMM              Address of A(RPFCOMM)
+         LINK  EP=RPFBRO
+         RPFSA31                       Restore addressing mode
+         L     R15,=V(UNALLOC)         Routine address
+         BALR  R14,R15                 Free ARCHIVE
+         SR    R15,R15                 RC=0
+         B     REN999                  Exit, all done
+REN990   DS    0H
+         LA    R15,4                   RC=4, not renamed
+         B     REN999                  Exit, all done
+REN992   DS    0H
+         LA    R15,8                   RC=8, rename error
+REN999   DS    0H
+         LM    R2,R14,SAVEREN          Restore the registers
+         BR    R14                     Return
+ITEMTXT  DC    CL30'Item cannot be blank'
+CHARTXT  DC    CL30'Invalid characters found'
+SAMETXT  DC    CL30'All fields are equal, retry'
+DUPLTXT  DC    CL30'Newname already in Archive'
+STRING   DC    C'0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$+ '
+         LTORG ,
+         DROP
+*
+         TITLE 'P F K  SEARCH ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        P F K    Routine to check the AIDbyte with the PFK definition*
+*                 in RPFCOMM. If the PFK is found, the command        *
+*                 in the PFK will be placed into the field pointed    *
+*                 to by register 2.                                   *
+*        Register 1 points to the AID byte                            *
+*        Register 2 points to the command area of the screen          *
+*                                                                     *
+*        Returncodes: 00 PFK found confirmation is no                 *
+*                     04 PFK found confirmation is yes                *
+*                     08 pfk not defined or not found                 *
+*                     12 Invalid PFK definition                       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+PFK      CSECT
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Our working storage
+         STM   R2,R14,SAVEPFK          Save registers 2-14
+         LR    R12,R15                 Setup base
+         USING PFK,R12
+         LA    R4,COMPFK01             Pickup PFK's from RPFCOMM
+         LA    R5,24                   Max 24 PFK's
+PFK01    CLC   0(1,R4),0(R1)           Test PFK against AID byte
+         BE    PFK05                   Yes: found
+         LA    R4,26(,R4)              Next PFK
+         BCT   R5,PFK01                Test next PFK
+         LA    R15,8                   Pfk not found
+         B     PFK99                   End of routine
+PFK05    CLI   1(R4),C'X'              PFK not defined?
+         BNE   PFK06                   Yes: proceed
+         LA    R15,8                   Returncode
+         B     PFK99                   End of routine
+PFK06    DS    0H                      Clear input command field
+         MVI   1(R2),C' '              Clear output ...
+         MVC   2(22,R2),1(R2)          command field
+         TM    0(R2),X'94'             Max operand (SCROLL)?
+         BNO   PFK08                   No: branch
+         CLC   2(4,R4),=C'DOWN'        Scroll forward?
+         BNE   PFK07                   No: test if UP is given
+         MVC   0(6,R2),=C'BOTTOM'      Yes: BOTTOM command
+         B     PFK08A
+PFK07    CLC   2(2,R4),=C'UP'          Scroll backward?
+         BNE   PFK08                   No: ignore
+         MVC   0(3,R2),=C'TOP'         'TOP' command
+         B     PFK08A
+PFK08    DS    0H
+         MVC   0(24,R2),2(R4)          Move PFK command in screen
+         CLI   1(R4),C'N'              No confimation?
+         BNE   PFK09                   Yes: rc = 0
+PFK08A   DS    0H
+         XR    R15,R15
+         B     PFK99
+PFK09    CLI   1(R4),C'Y'              Confirmation?
+         BNE   PFK11                   No: invalid PFK definition
+         LA    R15,4                   Rc = 4: confirmation
+         B     PFK99
+PFK11    LA    R15,12                  Invalid PFK definition
+         B     PFK99                   End of routine
+PFK99    LM    R2,R14,SAVEPFK          Restore register 14
+         BR    R14                     Return to caller
+         LTORG ,
+         DROP
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         TITLE 'Large areas'
+LARGE    CSECT ,
+RECFMTB  DS    0H
+         ENTRY RECFMTB
+         DC    CL4'F',X'80'
+         DC    CL4'FA',X'84'
+         DC    CL4'FB',X'90'
+         DC    CL4'FBM',X'92'
+         DC    CL4'FBA',X'94'
+         DC    CL4'FBS',X'98'
+         DC    CL4'FM',X'82'
+         DC    CL4'V',X'40'
+         DC    CL4'VA',X'44'
+         DC    CL4'VB',X'50'
+         DC    CL4'VBM',X'52'
+         DC    CL4'VBA',X'54'
+         DC    CL4'VBS',X'58'
+         DC    CL4'VM',X'42'
+         DC    CL4'U',X'C0'
+#RECFM   EQU   (*-RECFMTB)/5
+MSGTBLE  DC    C'B',CL12'Browsed'
+         ENTRY MSGTBLE
+         DC    C'D',CL12'Deleted'
+         DC    C'E',CL12'Edited'
+         DC    C'N',CL12'NOTES listed'
+         DC    C'P',CL12'Printed'
+         DC    C'R',CL12'Renamed'
+         DC    C'V',CL12'Viewed'
+         DC    C'1',CL12'Print error'
+         DC    C'2',CL12'Browse N/A'
+         DC    C'3',CL12'Browse error'
+         DC    C'4',CL12'Edit N/A'
+         DC    C'5',CL12'Not edited'
+         DC    C'6',CL12'Truncated'
+         DC    C'7',CL12'Invalid sel.'
+         DC    C'8',CL12'Alloc error'
+         DC    C'9',CL12'Not deleted'
+         DC    X'FA',CL12'View N/A'
+         DC    X'FB',CL12'Not renamed'
+         DC    X'FC',CL12'Rename error'
+         DC    X'FD',CL12'No NOTES'
+MSG#     EQU   (*-MSGTBLE)/13
+         DROP  ,
+         TITLE 'SCREEN FORMATS.'
+SCREENS  CSECT
+*
+*        DELETE confirmation screen
+*
+SCR1TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR1TXT  DC    X'00C21100001DF8'
+SCR1DEL  DC    CL79'Confirm Delete of xxxxxxxx ------------------------X
+               ---------------------------'
+SCR1SBA1 DC    X'11000013'             r02,c02+
+SCR1SBA2 DC    X'110000',X'1DF0'       r04,c01+
+         DC    C'Hit  ',X'1DF8',C'ENTER    ',X'1DF0',C'To delete.'
+SCR1SBA3 DC    X'110000',X'1DF0'       r05,c01+
+         DC    C'Press',X'1DF8',C'PF03/PF15',X'1DF0',C'To cancel.'
+SCR1LEN  EQU   *-SCR1TXT
+SCR1LENF EQU   *-SCR1TXTF              Length with ESC character
+*
+*        ARCHIVER entry screen
+*
+SCR2TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR2TXT  DC    X'00C21100001DF8'       EW or EWA, r1,c1
+         DC    C'RPF ARCHIVER parameters selection: User ID = '
+SCR2UID  DS    CL8
+         DC    CL5'-----'
+R1C56    DC    X'110000'               r1,c56+
+MSG2     DC    CL25'-------------------------'
+R5C2     DC    X'110000'               r5,c2+
+         DC    AL3(YELLOW),C'Specify Archive VSAM cluster below:'
+*
+R6C1     DC    X'110000',AL3(TURQ)     r6,c1+
+         DC    X'1DF5'
+S2ARCH   DC    C'Archive     =',X'1DC913',AL3(RED),AL3(USCORE)
+SCR2DSN  DC    CL46' ',AL3(HDEFAULT)   Archive VSAM cluster
+         DC    X'1DF0',AL3(TURQ)
+*
+R8C1     DC    X'110000',AL3(TURQ)     r8,c1+
+         DC    AL3(YELLOW)
+         DC    C' Enter parameters below. If all fields are blank, all X
+               items are selected'
+*
+R9C1     DC    X'110000',AL3(TURQ)     r9,c1+
+         DC    X'1DF5'
+S2ITEM   DC    C'Item        =',X'1DC9',AL3(RED),AL3(USCORE)
+SCR2ITEM DC    CL8' ',AL3(HDEFAULT)    Item name or mask
+         DC    X'1DF0',AL3(TURQ)
+         DC    C'ITEM name, mask or blank for all items'
+*
+R10C1    DC    X'110000',AL3(TURQ)     r10,c1+
+         DC    X'1DF5'
+S2GRP    DC    C'Group       =',X'1DC9',AL3(RED),AL3(USCORE)
+SCR2GRP  DC    CL8' ',AL3(HDEFAULT)    Group name or mask
+         DC    X'1DF0',AL3(TURQ)
+         DC    C'GROUP name, mask or blank for all groups'
+*
+R11C1    DC    X'110000',AL3(TURQ)     r11,c1+
+         DC    X'1DF5'
+S2SGRP   DC    C'Subgroup    =',X'1DC9',AL3(RED),AL3(USCORE)
+SCR2SGRP DC    CL8' ',AL3(HDEFAULT)    Subgroup or mask
+         DC    X'1DF0',AL3(TURQ)
+         DC    C'SUBGROUP name, mask or blank for all subgroups'
+*
+R12C1    DC    X'110000',AL3(TURQ)     r12,c1+
+         DC    X'1DF5'
+S2TYPE   DC    C'Type        =',X'1DC9',AL3(RED),AL3(USCORE)
+SCR2TYPE DC    CL8' ',AL3(HDEFAULT)    Type or mask
+         DC    X'1DF0',AL3(TURQ)
+         DC    C'TYPE name, mask or blank for all types'
+*
+R14C1    DC    X'110000',AL3(TURQ)     r14,c1+
+         DC    C' Use wildcards like * for 1 or more characters or % foX
+               r a single character'
+*
+R16C1    DC    X'110000',AL3(TURQ)     r16,c1+
+         DC    X'1DF5'
+S2CONFI  DC    C'Confirm item delete',X'1DC9',AL3(RED),AL3(USCORE)
+SCR2CONF DC    CL1' ',AL3(HDEFAULT)    Confirm deletes Y or N
+         DC    X'1DF0',AL3(TURQ)
+         DC    C'(Select / for confirmation)'
+*
+RLAST    DC    X'1100001DF0',C'Hit ',AL3(WHITE)
+         DC    C'PF03/15',AL3(TURQ)
+         DC    C' to return'
+SCR2LEN  EQU   *-SCR2TXT               Length entry screen
+SCR2LENF EQU   *-SCR2TXTF              Length with ESC character
+*
+*        Archiver RENAME screen
+*
+SCR4TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR4TXT  DC    X'00C21100001DF0',AL3(WHITE)
+         DC    C'  RPF Archiver interface: Rename an ITEM'
+S4R3C4   DC    X'110000'               r03,c04
+         DC    AL3(YELLOW)
+         DC    C'Overtype the fields and press ENTER to rename'
+*
+S4R5C3   DC    X'110000'               r05,c03
+         DC    AL3(TURQ),X'1DF5'       Prot. MDT on
+S4ITEM   DC    CL10'ITEM     ='
+S4R5C14  DC    X'110000',AL3(RED)      r05,c14+
+         DC    X'1DC913'               Overtype field
+SCR4ITEM DC    CL8' ',X'1DF0'
+SCR4ILEN EQU   *-S4R5C3
+*
+S4R6C3   DC    X'110000'               r06,c03
+         DC    AL3(TURQ),X'1DF5'       Prot. MDT on
+S4GRP    DC    CL10'GROUP    ='
+S4R6C14  DC    X'110000',AL3(RED)      r06,c14
+         DC    X'1DC9'                 Overtype field
+SCR4GRP  DC    CL8' ',X'1DF0',C' '
+*
+S4R7C3   DC    X'110000'               r07,c03
+         DC    AL3(TURQ),X'1DF5'       Prot. MDT on
+S4SGRP   DC    CL10'SUBGROUP ='
+S4R7C14  DC    X'110000',AL3(RED)      r07,c14
+         DC    X'1DC9'                 Overtype field
+SCR4SGRP DC    CL8' ',X'1DF0',C' '
+*
+S4R8C3   DC    X'110000'               r08,c03
+         DC    AL3(TURQ),X'1DF5'       Prot. MDT on
+S4TYPE   DC    CL10'TYPE     ='
+S4R8C14  DC    X'110000',AL3(RED)      r08,c14
+         DC    X'1DC9'                 Overtype field
+SCR4TYPE DC    CL8' ',X'1DF0',C' '
+*
+S4R9C3   DC    X'110000'               r09,c03
+         DC    AL3(TURQ),X'1DF5'       Prot. MDT on
+S4VERS   DC    CL10'VERSION  ='
+S4R9C14  DC    X'110000',AL3(TURQ)     r09,c14
+         DC    X'1DF5'                 Do not overtype field
+SCR4VERS DC    CL3' ',X'1DF0'
+*
+S4R12C3  DC    X'1100001DF8'           r12,c03
+         DC    AL3(WHITE)
+S4MSG    DC    CL30' ',X'1DF0'
+S4LASTC4 DC    X'110000',AL3(TURQ)     Row last c4
+         DC    C'Hit'
+         DC    AL3(WHITE),C' ENTER'
+         DC    AL3(TURQ),C' to rename or'
+         DC    AL3(WHITE),C' PF03/PF15'
+         DC    AL3(TURQ),C' to return'
+SCR4LEN  EQU   *-SCR4TXT
+SCR4LENF EQU   *-SCR4TXTF              Length with ESC character
+*
+*       Archiver index data screen
+*
+SCR5TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR5TXT  DC    X'00C21100001DF8'
+         DC    CL18'Items of Archive: '
+SCR5DSN  DC    CL40' '
+SCR5HYPH DC    117C' '
+SCR5SBA1 DC    X'110000'               r1,c56+
+MSG5     DC    CL25'-------------------------'
+SCR5SBA2 DC    X'110000',X'1DF8',C'Cmd =>',X'1DC113'
+         DC    AL3(USCORE)
+REP5     DC    CL24' ',AL3(HDEFAULT),X'1DF0'
+SCR5SBA3 DC    X'110000',X'1DF0',AL3(YELLOW)  R02,C last
+SCR5HDR  DC    C' C Item     Ver Group    Subgroup Type     DS RFM RE'
+SCR5HDR2 DC    C'C BLK   Records Date/Msg'
+SCR5HD2  DC    CL10' '                 Extended part with TIME
+SCR5LEN  EQU   *-SCR5TXT
+SCR5LENF EQU   *-SCR5TXTF
+SCREENSL EQU   *-SCREENS
+*
+         COPY  CALLTS
+*
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F
+DBW      DS    D
+SBAR0R1  DS    D
+SAVEPFK  DS    13F                     Save registers PFK
+         ORG   SAVEPFK
+SAVEALC  DS    13F                     Save registers ALLOC
+         ORG   SAVEPFK
+SAVECONV DS    13F                     Save registers CONVIN
+SAVEEDIT DS    13F                     Save registers EDIT
+SAVEREN  DS    13F                     Save registers RENAME
+SAVEUNAL DS    7F                      Save registers UNALLOC
+WORKSIZE DS    F                       Length of this workarea
+PRMCOMM  DS    F                       A(A(RPFCOMM))
+PARMFLD  DS    3F                      3 parameters for DSNPARS
+RPFDAPL  DS    5F                      DAIR parameter list
+ECB      DS    F                       An Event control block
+RPFATTR  DS    CL48                    Attribute list
+RPFD08   DS    CL84                    IKJDAIR entry 08, allocation
+RPFD18   DS    CL40                    IKJDAIR entry 18, unallocation
+RPFD34   DS    CL20                    Entry 34, chain/unchain attr.lst
+*
+EDITDCB  DS    CL(MDLEDITL)
+SYSPRINT DS    CL(MDLPRTL)
+ARCHDCB  DS    CL(MDLARCHL)
+SYSIN    DS    CL(MDLSYSL)
+*
+DATALINE DS    F                       Length of data entry in screen
+CAMLST   CAMLST NAME,ARCHIVE,,LOCAREA
+         DS    0D                      LOCAREA is on dbw boundary
+LOCAREA  DS    CL6
+LOCVOL   DS    CL6
+LOCREST  DS    CL253
+*
+         DC    C' '                    \___ MVC RECORD,RECORD-1 ___/
+RECORD   DS    CL80                    /                           \
+         DC    C' '                    \___ MVC RECORD2,RECORD2-1__/
+RECORD2  DS    CL80                    /                           \
+*
+EDITPRM  DS    C                       Contains E or V for EDIT.
+EDITREC  DS    CL255                   Record to read from RPFEDT1
+*
+ARCH     DS    0CL133                  Output line LIST function
+CC       DS    C                       ASA control character
+HYPHEN   DS    C                       Hyphen before item name
+ARCHITEM DS    CL10                    Archived item
+HYPH2    DS    C                       Hyphen before GROUP
+ARCHGRP  DS    CL10                    Group
+HYPH3    DS    C                       Hyphen before SUBGROUP
+ARCHSGRP DS    CL10                    Subgroup
+HYPH5    DS    C                       Hyphen before TYPE
+ARCHTYPE DS    CL10                    Type
+F1       DS    CL10                    Filler
+ARCHVERS DS    CL3                     Version
+F2       DS    CL2                     Filler
+ARCHDSO  DS    CL2                     DSORG original data set
+F3       DS    CL4                     Filler
+ARCHRFM  DS    CL3                     Record format original data set
+F4       DS    CL7                     Filler
+ARCHRECL DS    CL3                     LRECL leading blanks, right al.
+F5       DS    CL3                     Filler
+ARCHBLK  DS    CL6                     BLKSIZE nn,nnn
+F6       DS    CL2                     Filler
+ARCHDATE DS    CL10                    Date
+F7       DS    C                       Filler
+ARCHTIME DS    CL8                     Time
+F8       DS    CL7                     Filler
+ARCH#    DS    CL7                     Number of records
+         ORG   ARCHDSO
+F12      DS    C                       Filler
+ARCHALTX DS    CL10                    Should contain: 'ALIAS FOR -'
+         DS    C                       Contains '-'
+ARCHALIS DS    CL10                    The alias name
+         DS    C                       Contains '-'
+ARCHALGR DS    CL10                    Alias GROUP
+         DS    C                       Contains '-'
+ARCHALSG DS    CL10                    Alias SUBGROUP
+         DS    C                       Contains '-'
+ARCHALTY DS    CL10                    Alias Type
+         DS    CL10                    Contains '-' + 9 spaces
+ARCHALV  DS    CL3                     Alias Version
+         ORG   ,
+FX       DS    CL((ARCH+133)-*)
+*
+BUFFER   DS    CL180                   Buffer, output from menu
+*                                      And output from RENAME menu
+ARCHIVEL DC    AL2(0)                  \____________L + ______________/
+ARCHIVE  DC    CL44' '                 /     DSN  Archive cluster     \
+*                                      And output from RENAME menu
+BUFARCH  DC    CL46' '
+*
+*                                 Output of Data entry screen, SCR2TXT
+ITEM     DS    CL8                   \ Contains Archiver item        /
+GROUP    DS    CL8                   | Contains Archiver Item Group  |
+SUBGROUP DS    CL8                   | Contains Archiver Item Subgrp |
+TYPE     DS    CL8                   | Contains Archiver Item Type   |
+*
+*                                      Output of RENAME screen, SCR4TXT
+RENAMEIT DS    0CL35
+RITEM    DS    CL8                   \ Contains Archiver item        /
+RGROUP   DS    CL8                   | Contains Archiver Item Group  |
+RSUBGRP  DS    CL8                   | Contains Archiver Item Subgrp |
+RTYPE    DS    CL8                   | Contains Archiver Item Type   |
+VERS     DS    CL3                   / Contains Archiver Item Version\
+*
+BUFCONF  DS    C                       Confirm item delete
+SW       DC    X'00'
+$LIST    EQU   128
+$WSFULL  EQU   64
+$VB      EQU   16
+$PRT     EQU   8                       Print only in RPFBRO
+$RIGHT   EQU   4                       Screen is right aligned
+SFIRSTSC DS    F
+SAVEALL  DS    15F
+R12ARCH  DS    F                       Save register 12 ARCHIVER
+R12MVE   DS    F                       Save register 12 MVEITEM
+R12TS    DS    F                       Save register 12 CALLTS
+R14ALLOC DS    F                       Save register 14 ALLOC
+R14ARCH  DS    F                       Save register 14 ARCHIVER
+R14CONV  DS    F                       Save register 14 CONVIN
+R14GETIT DS    F                       Save register 14 GETIT
+R14INDEX DS    F                       Save register 14 INDEX
+R14MVE   DS    F                       Save register 14 MVEITEM
+R14RENAM DS    F                       Save register 14 RENAME
+R14PARSE DS    F                       Save register 14 PARSE
+R14PUTIT DS    F                       Save register 14 PUTIT
+R14SCRN  DS    F                       Save register 14 RPFSCRN
+R14TPUT  DS    F                       Save register 14 RPFTPUT
+R14TS    DS    F                       Save register 14 CALLTS
+R14UNAL  DS    F                       Save register 14 UNALLOC
+NEXTSCR  DS    F                       21 --> 96 * NEXTENT
+TPUTLEN  DS    F                       Length of screen
+SCROUTP  DS    F                       Address of output screen area
+WIDTH    DS    F                       Contains min value extended scr.
+ALRECL   DS    H                       LRECL in ALLOC routine
+ABLK     DS    H                       BLKSIZE in ALLOC routine
+#LINES   DS    H                       # lines = scrsize -3
+AIDBYTE  DS    C
+SC@BUFF  DS    CL24                    \_____ copy of _____/
+SC@2     DS    CL24                    /  command buffer   \
+COUNTER  DS    PL3                     To count Archive mods
+ERR8TXT  DS    CL25
+END1TXT  DS    CL18                    # items after last item in scr.
+SCRWORK  DS    CL(SCREENSL)
+WORKL    EQU   *-WORKAREA
+LNE5     EQU   *                       Max 96 lines of 98 bytes
+*              CL(98*(99-3))
+         DROP  ,
+         TITLE 'DSECT''s'
+         CVT   DSECT=YES,LIST=NO
+         IKJCPPL
+         IKJDAPL
+         IKJDACB
+         IKJDAP08                      IKJDAIR allocation parm block
+         IKJDAP18                      IKJDAIR unallocation parm block
+         IKJDAP34                      IKJDAIR chain/unchain attr.list
+         PRINT NOGEN
+         DCBD  DSORG=PS,DEVD=DA
+         PRINT GEN
+COMMAREA RPFCOMM
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8                       Entry in EDIT workspace
+R9       EQU   9                       Address of screens
+R10      EQU   10                      Base register 2
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12                      Base register 1 + base register
+*                                      subroutines
+R13      EQU   13                      Working storage
+R14      EQU   14
+R15      EQU   15
+*
+         TITLE 'Archive index area (1 line in EDIT workspace)'
+MEMAREA  DSECT
+LPREFIX  DS    CL8                     8
+LITEM    DS    CL8                     16        |
+LGROUP   DS    CL8                     24        |
+LSUBGRP  DS    CL8                     32        | do not insert here
+LTYPE    DS    CL8                     40        |
+LVERS    DS    CL3                     43        |
+LNOTE    DS    C
+LDSORG   DS    CL2                     45
+LRECFM   DS    CL3                     48
+LLRECL   DS    CL3                     51
+LBLK     DS    CL5                     56
+LDATE    DS    CL10                    66
+L#       DS    CL7                     73
+LMSGID   DS    CL1                     74
+LTIME    DS    CL8                     82
+         ORG   LDSORG
+LALIAS   DS    0CL37
+LALISIT  DS    CL8                     53        Alias item name
+         DS    C                       54
+LALISGR  DS    CL8                     62        Alias GROUP
+LALISSGR DS    CL8                     70        Alias SUBGROUP
+LALISTYP DS    CL8                     78        Alias TYPE
+         DS    C                       79
+LALISVER DS    CL3                     82        Alias VERSION
+         ORG   ,
+         TITLE 'Archiver Index listing on screen'
+SCRENTRY DSECT                         Line on screen (mapped by LNE5)
+SCRESBA  DS    CL3          3
+SCREATT1 DS    CL2          5          X'1DC9'  Hilite unprot MDT on
+SCRECOL1 DS    CL3          8          Color Red
+SCRELCMD DS    C            9          Line command (B, D, E, P or V)
+SCREATT2 DS    CL2         11          X'1DF1'  No hilite MDT on
+SCRECOL2 DS    CL3         14          Color Green
+SCREITEM DS    CL8         22          Archiver Item
+SCREATT3 DS    CL2         24          X'1DF0'  No hilite MDT off
+SCRECOL3 DS    CL3         27          Color Turquoise
+SCREINFO DS    0CL56          <--|
+SCREVERS DS    CL3         30    |     Archiver item version
+SCRENOTE DS    CL1         31    |
+SCREGRP  DS    CL8         39    |     Archiver item group
+SCREFIL2 DS    CL1         40    |
+SCRESGRP DS    CL8         48    |     Archiver item subgroup
+SCREFIL3 DS    CL1         49    |
+SCRETYPE DS    CL8         57    |     Archiver item Type
+SCREFIL4 DS    CL1         58    |
+SCREDS   DS    CL2         60    |     Original DSORG
+SCREFIL5 DS    CL1         61    |
+SCRERFM  DS    CL3         64    |     Original RECFM
+SCREFIL6 DS    CL1         65    |
+SCRERECL DS    CL3         68    |     Original LRECL
+SCREFIL7 DS    CL1         69    |
+SCREBLK  DS    CL5         74    |     Original BLKSIZE (nnnnn)
+SCREFIL8 DS    CL1         75    |
+SCRE#    DS    CL7         82    |     # records
+SCREFIL9 DS    CL1         83 <--|
+*
+SCRECOL4 DS    CL3         84
+SCREMSG  DS    CL12        98          Message or Date Item saved
+SCRENT   EQU   *-SCRENTRY
+SCRETIME DS    CL10        108         Time Item saved
+SCRENTEX EQU   *-SCRENTRY
+*
+         END

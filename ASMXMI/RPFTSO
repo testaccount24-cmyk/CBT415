@@ -1,0 +1,1067 @@
+RPFTSO   TITLE 'RPF - TSO INTERFACE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFTSO                                        *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFMAIN  (option 6)                           *
+*                       RPFBRO   (Primary command TSO in Browse)      *
+*                       RPFEDIT  (Primary command TSO in Edit)        *
+*                       RPFPDS   (Primary command TSO in member list) *
+*                       RPFVTOC1 (Primary command TSO in DS list)     *
+*                                                                     *
+*        Function -                                                   *
+*             This routine is the RPF-interface with TSO              *
+*             routine operation:                                      *
+*                                                                     *
+*             Routine initialization -                                *
+*                  1. Pick up address RPFCOMM and CPPL                *
+*                  2. Allocate CSOA, CSPL and VSOAFLGS in Subpool 1   *
+*                  3. Initialize CSPL.                                *
+*                                                                     *
+*             Command processing -                                    *
+*                  1. If 'END' or '=n.n' entered, terminate        @rp2
+*                  2. If command is not supported, issue error-       *
+*                     message and retry                               *
+*                  3  Process typed in TSO command or retrieve a      *
+*                     saved TSO command from the screen.              *
+*                  4. Set up Command-Buffer and complete CSPL.        *
+*                  5. Invoke IKJSCAN; if necessary issue message      *
+*                     and retry                                       *
+*                  6. Complete CPPL and issue STLINENO                *
+*                     to establish proper display-area                *
+*                  7. Establish STAX routine                          *
+*                  8. MVS38J: Test if RPF runs APF authorized and TSO *
+*                     command does not have AC=1 in the directory,    *
+*                     reset APF flag in JSCB and issue SYNCH macro.   *
+*                 8A. MVS/XA or later with TSO/E: skip APF test.      *
+*                  9. Attach appropriate Command-Processor            *
+*                 10. Detach Command-Processor, re-establish Full-    *
+*                     screen mode and repeat processing.              *
+*                 11. Cancel STAX routine                             *
+*                 12. Restore APF flag in JSCB if APF has been reset  *
+*                     in step 8.                                      *
+*                 13. Wrap around last 10 saved TSO commands          *
+*                                                                     *
+*             Routine termination -                                   *
+*                  1. FREEMAIN all workareas                          *
+*                  2. Re-establish old line length and screen length  *
+*                  3. Exit.                                           *
+*                                                                     *
+*        Input -                                                      *
+*             - Pointer to RPFCOMM                                    *
+*             - CPPL address in RPFCOMM (COMMCPPL)                    *
+*                                                                     *
+*        Output -                                                     *
+*             N/A                                                     *
+*                                                                     *
+*        Register usage -                                             *
+*             R0 - R7   - Work register (R3 = temp. address CPPL)     *
+*             R8        - CSPL base register                          *
+*             R9        - CSOA base register                          *
+*             R10       - Second base register (momentarily free)     *
+*             R11       - RPFCOMM base register                       *
+*             R12       - Base register                               *
+*             R13       - Save area + working storage                 *
+*             R14       - Linkage register                            *
+*             R15       - Entry point/Return code register            *
+*                                                                     *
+*        Authors -                                                    *
+*             A.W. VERMEER - SYSTEMS PROGRAMMING DEPT.                *
+*             Rob Prins    - RPF builder                              *
+*                                                                     *
+*        -------------------- Important Note --------------------     *
+*        Set &OS390 or &MVSXA in member SYSVARS to 1 to               *
+*        bypass APF test, reset APF and SYNCH. With MVS/XA and        *
+*        higher and TSO/E the reset APF and SYNCH are not needed.     *
+*        -------------------- Important Note --------------------     *
+*                                                                     *
+*        Change log:                                                  *
+*        Aug 06,2002 RPr: Bypass command check, allow all commands @rp1
+*        Feb 15,2003 RPr: Allow fast jump command with the '='     @rp2
+*        Apr 04,2004 RPr: Leave fullscr on if 27x132 terminal      @rp3
+*        Dec 18,2018 RPr: add AMODE31 and RMODE24                @rpa01
+*        Mar 25,2019 RPr: Support all kind of 3270 screens            *
+*                         Up to 62x160 (3290)                         *
+*        May 09,2019 RPr: Make Non fullscreen messages visible        *
+*        Jul 07,2019 RPr: Process last 10 issued TSO commands         *
+*        Jul 22,2019 RPr: Skip translate to capitals of TSO cmds      *
+*        Sep 26,2019 RPr: Test on lowercase 'end' and protect         *
+*                         CALLTSSR with RPFSA24/RPFSA31               *
+*        Apr 02,2020 RPr: Extend the screen size to 200               *
+*                         Set STLINENO to line 1 if RPF runs on a     *
+*                         24x80 screen.                               *
+*        May 25,2020 RPr: Fix S306 abend if RPF runs APF authorized   *
+*                         and delete call to RPFTSOEX.                *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Mar 23,2022 RPr: RPFTSO made re-entrant and re-usable.       *
+*        Feb 02,2023 RPr: APF authorization not reset if the TSO      *
+*                         command processor is link edited with AC=1. *
+*        Jan 20,2024 RPr: ABEND30A fixed if underlying TSO command    *
+*                         fails.                                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFTSO   AMODE 31                      *                         @rpa01
+RPFTSO   RMODE 24                      *                         @rpa01
+RPFTSO   CSECT
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFTSO,R12              Make RPFTSO addressable
+         L     R11,0(,R1)              Address of RPFCOMM
+         USING COMMAREA,R11            Make RPFCOMM addressable
+         GETMAIN R,LV=WORKL            Ontain working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1                  Address our SA + working storage
+         USING WORKAREA,R13
+         B     START                   Branch over constants
+         DC    C'&SYSDATE',C' ',C'&SYSTIME'
+START    DS    0H
+         XC    TSOCMD(156),TSOCMD      Init clear CMD in panel
+         MVI   BFFRCMD,C' '            Blank ...
+         MVC   BFFRCMD+1(L'BFFRCMD-1),BFFRCMD  Buffer
+         MVI   BUFFER2,C' '            Blank ...
+         MVC   BUFFER2+1(L'BUFFER2-1),BUFFER2  PARSE buffer
+         MVC   BLDLLIST(4),=X'0001004C' 1 entry to BLDL
+         L     R2,=V(SCREENS)          Input screen area
+         LA    R0,SCR12                Output area
+         LA    R1,SCREENSL             Length input =
+         LR    R3,R1                                 length output
+         MVCL  R0,R2                   Copy contents
+         MVI   SW,0                    Init flags
+         MVC   SCR1TXT(1),COMMCMD      Move EW/EWA in data stream
+         L     R1,COMMCOLS             Pickup screen width
+         LA    R1,9(,R1)               + 2x color + 1x SBA
+         ST    R1,WRKENT               Save length saved TSO commands
+*                                      line on screen
+         MH    R1,=H'10'               10 lines on screen
+         LA    R1,SCR1LEN(,R1)         Add length first part of screen
+         ST    R1,TPUTLEN              Save length of screen
+         L     R1,COMMCOLS             Pickup width again
+         SH    R1,=H'5'                Length TSO command -1
+         CH    R1,=H'155'              > 156 (for EX -1)?
+         BNH   *+8                     No: carry
+         LA    R1,155                  Set to maximum length (156)
+         ST    R1,TSOCMLEN             Save
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1 (command field)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1TXT+3          R01,C01
+         STCM  R0,3,SCR2TXT+3          R01,C01
+*
+         L     R1,COMMCOLS             Pickup screen width
+         LA    R0,39                   Get adjustment size
+         SR    R1,R0                   Get the right column
+         LA    R0,1                    Row 1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S2R1C41+1          r01,c41+
+*
+         L     R1,COMMCOLS             Pickup screen width
+         LA    R0,7                    Get adjustment size
+         SR    R1,R0                   Column 73+ (Time field)
+         LA    R0,1                    Row 1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S1R1C73+1          R01,C73+
+*
+         LA    R0,3                    Row 3
+         LA    R1,1                    Column 1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R3C1+1          R01,C01
+*
+         LA    R0,4                    Row 4
+         LA    R1,1                    Column 1
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R4C1+1          R04,C01
+         STCM  R0,3,SC2R4C1+1          R04,C01
+*
+         LA    R0,8                    Row 8
+         LA    R1,2                    Column 2
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,S1R8C2+1           R08,C02
+*
+         LA    R4,10                   First data line is line 10
+         LA    R5,R10C1                First of 10 saved TSO commands
+         USING SAVETSO,R5              Address screen line
+         LA    R2,10                   10 TSO commands
+SCR01    DS    0H
+         MVC   SCOLOR1,=AL3(WHITE)     Move color 1
+         MVC   SCOLOR2,=AL3(BLUE)      Move color 2
+         MVC   SPREF,=C' => '          Move arrow
+         MVI   SSBA,COMMSBA            Move SBA order
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column (1)
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SSBA+1             And Save second part SBA
+*
+         L     R1,WRKENT               Length TSO command line
+         LA    R5,0(R1,R5)             Next TSO command line
+         LA    R4,1(,R4)               Next line to convert
+         BCT   R2,SCR01                Loop until all done
+         DROP  R5
+         XC    SCR1TX,SCR1TX           Init additional header
+         L     R1,COMMCOLS             Width of screen
+         SH    R1,=H'80'               Minus fixed part of header
+         CH    R1,=H'3'                Is the width 82 or less?
+         BL    ENDSCR                  Yes: end of setup
+         MVI   SCR1TX,C'-'             A dash
+         BCTR  R1,0                    Minus 1
+         BCTR  R1,0                    Minus 2
+         EX    R1,MVEREST              Move additional dashes
+         B     ENDSCR                  End of screen setup
+MVEREST  MVC   SCR1TX+1(0),SCR1TX      << executed >>
+ENDSCR   DS    0H
+*
+*        end of screen setup
+*        -----------------------------------------------------
+*        Test if Jobstep (TSO) is APF authorized and set flag.
+*
+         USING PSA,R0
+         L     R7,PSATOLD              Point to current TCB
+         USING TCB,R7
+         ICM   R7,7,TCBJSTCA           Point to jobstep TCB
+         ICM   R7,7,TCBJSCBB           Point to JSCB
+         DROP  R0,R7                   PSA and TCB
+         USING IEZJSCB,R7
+         TM    JSCBOPTS,JSCBAUTH       Are we APF authorized?
+         BZ    NOAPF                   No: carry
+         OI    SW,$TSOAPF              Mark APF authorized
+NOAPF    L     R3,COMMCPPL             Address of CPPL
+         USING CPPL,R3                 Command Processor ParmList
+         MVC   ORGCBUF,CPPLCBUF        Save Command Buffer Address
+         ST    R3,RPFCPPL              Save this address
+         USING CSOA,R9                 Command Scan Output Area.
+         USING CSPL,R8                 Command Scan Parameter List
+         LA    R2,LCSOA+LCSPL+LCSPLFLG
+         GETMAIN R,LV=(2),SP=1         Allocate CSOA, CSPL and CSPLFLGS
+         XC    0(LCSPL+LCSOA+LCSPLFLG,R1),0(R1)
+         LR    R8,R1
+         ST    R8,RPFCSPL              Save address CSPL
+         LA    R9,LCSPL(,R8)           Get address of CSOA
+         ST    R9,RPFCSOA              Save
+         LA    R1,LCSOA(,R9)           Get address of CSPLFLGS
+         ST    R1,RPFCSFLG             Save
+         MVC   CSPLUPT,CPPLUPT         User profile table (UPT)
+         MVC   CSPLECT,CPPLECT         Environment Control Table
+         MVC   CSPLFLG,RPFCSFLG        CSPL-flags.
+         MVC   CSPLOA,RPFCSOA          Command Scan Output Area
+         LA    R0,CMMDBFFR             Command buffer
+         ST    R0,CSPLCBUF             In CSPL
+         DROP  R3                      CPPL
+*
+*        Setup TSO screen
+*
+         STM   R8,R13,SAVESTAI         Save the registers for abend
+TSO010   DS    0H
+         ENTRY TSO010                  Provide external addressability
+         CALL  RPFTIME                 Get Time of Day
+         MVC   SCR1TIME(8),TIMEDISP+2  Move time into screen
+*
+*        Place the saved TSO commands pointed to by COMTSOCM into
+*        the screen (row 10 to row 19), these commands will be
+*        saved in the RPF profile cluster
+*
+         LA    R2,R10C1                Point to 1st saved TSO cmd scrn
+         USING SAVETSO,R2              Address it
+         L     R4,COMTSOCM             Point to 1st saved TSO cmd bffr
+         LA    R4,8(,R4)               Skip @RPFTSO acronym
+         LA    R3,10                   10 saved TSO commands
+TSO012   DS    0H
+         L     R14,TSOCMLEN            Length of TSO cmd in screen
+         EX    R14,MOVECMD             Move in screen
+         CLC   COMMCOLS,=F'162'        Screen wider than max. length
+         BL    TSO013                  TSO cmd + ' => '? No: carry
+         LA    R1,SAVTSOCM             Point to TSO cmd in screen
+         LA    R14,1(R1,R14)           Point after cmd in screen line
+         MVC   0(2,R14),=X'1DF0'       Add SF order + protect rest line
+         LA    R14,2(,R14)             Point after SF + Attr. byte
+*
+*        Calculate the amount of blanks to move at the end of the
+*        screen line. Screen width - TSOCMLEN - SF - Attribute byte
+*        - 1 because TSOCMLN = length-1, - 1 of the first blank
+*        and - 4 of string ' => '.
+*
+         L     R1,COMMCOLS             Width of screen
+         S     R1,TSOCMLEN             Minus Len TSO cmd -1
+         SH    R1,=H'9'                Skip SF + Attr and minus 2+4+1
+         BNP   TSO013                  No space left in screen line
+         MVI   0(R14),C' '             Move first blank
+         EX    R1,MOVESPCS             Move the blanks
+TSO013   DS    0H
+         L     R1,WRKENT               Length of TSO cmd line on screen
+         LA    R2,0(R1,R2)             Next line on screen
+         LA    R4,156(,R4)             Next command in buffer
+         BCT   R3,TSO012               Loop until all done
+TSO014   DS    0H
+         L     R0,TPUTLEN              Length of screen for TPUTS
+         LA    R1,SCR1TXT              Parm TPUTS (address screen)
+         CALL  TPUTS
+         B     TSO020
+MOVECMD  MVC   SAVTSOCM(0),0(R4)       << executed >>
+MOVESPCS MVC   1(0,R14),0(R14)         << executed >>
+         DROP  R2
+         TITLE 'Get command input from the terminal'
+TSO020   DS    0H
+         LA    R5,BUFFER               Output formatted buffer
+         L     R3,COMMSCR              Load screen address
+         LR    R1,R3                   Duplicate area address
+         LA    R0,200                  Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LR    R4,R1                   Save length
+*
+*        Do a TGET ASIS to obtain the AID byte
+*        After the TGET ASIS remove the SBA's from the output
+*
+         CLI   0(R3),X'F3'             PFK3 (End) pressed?
+         BE    TSO090                  Yes: terminate RPFTSO
+         CLI   0(R3),X'C3'             PFK15 (End) pressed?
+         BE    TSO090                  Yes: terminate RPFTSO
+         CLI   0(R3),X'6D'             Clear key pressed?
+         BE    TSO014                  Yes: redisplay
+         CLI   0(R3),X'6E'             Reshow code?
+         BE    TSO014                  Yes: reshow screen
+         MVC   SBARET,1(R3)            Return SBA
+         XR    R2,R2                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   CONV099                 <= 0: end of routine
+         LA    R3,3(,R3)               Skip AID byte + SBA
+         LA    R5,BUFFER               Output address
+         MVI   BUFFER,C' '             Blank                       @rp1
+         MVC   BUFFER+1(L'BUFFER-1),BUFFER   buffer first          @rp1
+*
+*        Input screen is pointed to by register 3
+*        Output screen is pointed to by register 5
+*        The next section will remove all the SBA's
+*
+CONV001  CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV099                 Conversion complete
+CONV003  LA    R3,3(,R3)               Skip 3 bytes input
+         BCTR  R4,0                    Minus 2
+         BCTR  R4,0                            for BCT
+         C     R4,=F'0'                Register zero?
+         BNH   CONV099                 Yes: conversion completed
+         BCT   R4,CONV001              Loop until all done
+CONV099  LR    R1,R2                   Output length in register 1
+         LR    R3,R1                   Save length entered
+         LA    R1,SBARET               Return SBA
+         CALL  CSR                     Calculate row
+         LTR   R15,R15                 Valid row number found?
+         BNZ   TSO022                  No: continue normally
+*
+*        If the row number in the return SBA is between 10 and 19
+*        (the saved TSO commands), the associated saved TSO command
+*        will be set in the command line of the screen, so the user
+*        can execute the TSO command without re-typing.
+*
+         L     R2,0(,R1)               Pickup the row number
+         C     R2,=F'10'               Between 10
+         BL    TSO022
+         C     R2,=F'19'               and 19?
+         BH    TSO022                  Continue normally
+         S     R2,=F'10'               Subtract 8
+         MH    R2,=H'156'              * length of saved TSO command
+         L     R4,COMTSOCM             1st entry saved TSO commands
+         LA    R4,8(,R4)               Skip @RPFTSO acronym
+         LA    R4,0(R2,R4)             Adjust
+         MVC   TSOCMD(156),0(R4)       Move saved command to cmd line
+         B     TSO014
+TSO022   DS    0H                      Setup the command buffer
+         LTR   R3,R3                   Anything entered?
+         BZ    TSO010                  No: go back
+         BCTR  R3,R0                   Minus 1 for EX
+         XC    TSOCMD(156),TSOCMD      Clear screen area
+         EX    R3,TRTEX                Ex TRT instruction
+         BZ    TSO010                  Zero: no input received
+         EX    R3,MVCEX                Ex Move instruction of command
+         MVC   BUFFER(156),TSOCMD      Move shifted command back
+*---------------------------------------------------------------------*
+*
+*        At this point, register 1 contains the address of the
+*        first non blank character in the field BUFFER.
+*        (Register 1 is set at label 'TRTEX')
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         CLC   =C'END',BUFFER          Was 'END' entered?
+         BE    TSO090                  Yes: terminate
+         CLC   =C'end',BUFFER          Was 'end' entered?
+         BE    TSO090                  Yes: terminate
+         CLI   BUFFER,C'='             '=' command entered ?       @rp2
+         BNE   TSO024                  No: continue                @rp2
+         MVC   CMAINOPT(3),1(R1)       Move RPFMAIN option         @rp2
+*                       The opt after the '=' is option from main  @rp2
+         OI    COMMFLG2,$COMRTRN       Return to RPFMAIN           @rp2
+         B     TSO090                  Exit RPFTSO                 @rp2
+TRTEX    TRT   BUFFER(0),COMSKPSP      Search for first non-blank
+MVCEX    MVC   TSOCMD(0),0(R1)         Move command into panel
+TSO024   DS    0H                                                  @rp2
+         LA    R4,BUFFER+155           End of buffer
+         LA    R3,155                  Max length of command - 1
+         LR    R1,R3                   Copy for BCT
+TSO026   DS    0H
+         CLI   0(R4),C' '              Trailing blank found?
+         BE    TSO028                  Yes: carry
+         CLI   0(R4),0                 Trailing null found?
+         BNE   TSO029                  No: finished
+TSO028   DS    0H
+         BCTR  R4,0                    Previous character in BUFFER
+         BCTR  R3,0                    Discount length
+         BCT   R1,TSO026               and loop
+TSO029   DS    0H
+         CLC   =C'X ',TSOCMD           'X' command (PCF) entered?
+         BE    TSO055                  Yes: command not supported
+         XC    BFFROFFS,BFFROFFS       Set offset always to 0
+         EX    R3,MVCINBUF             (MVC CMMDBFFR+4(0),BUFFER)
+         LA    R3,5(,R3)               Length buffer + header
+         STH   R3,BFFRLGTH             Store into command buffer
+         RPFSA24                       Go to amode 31
+         CALLTSSR EP=IKJSCAN,MF=(E,(R8)) Invoke IKJSCAN
+         RPFSA31                       Restore addressing mode
+         L     R9,CSPLOA
+         TM    CSOAFLG,VALDCMD1+VALDCMD2 Valid command?
+         BNZ   TSO050                  Valid command name syntax
+         TM    CSOAFLG,CMDQMARK+EMPTSEPR
+         BZ    TSO030
+         CALL  MSGRTN,(1,0),MF=(E,CALLST)  Invalid command input
+         B     TSO020
+MVCINBUF MVC   CMMDBFFR+4(0),BUFFER    << executed >>
+         SPACE 2
+TSO030   DS    0H
+         TM    CSOAFLG,SYNTXERR        Any syntax errors?
+         BZ    TSO040                  NO.
+         CALL  MSGRTN,(2,0),MF=(E,CALLST)  Command name syntax error
+         B     TSO020
+         SPACE 2
+TSO040   DS    0H
+         CALL  MSGRTN,(3,0),MF=(E,CALLST)  Command not supported
+TSO050   DS    0H                      Check whether command is support
+         L     R5,CSOACNM              Point to command name       @rp1
+         LH    R6,CSOALNM              Point to command length     @rp1
+         BCTR  R6,0                    Minus 1 for EX              @rp1
+         MVI   INPCMD,C' '             Blank
+         MVC   INPCMD+1(L'INPCMD-1),INPCMD  command name
+         EX    R6,CMDMVE               Move command name           @rp1
+         CLC   =C'RPF',0(R5)           Recursive call to RPF?      @rp1
+         BE    TSO055                  Yes: Error                  @rp1
+         CLC   =C'LOGO',0(R5)          LOGON or LOGOFF?            @rp1
+         BE    TSO055                  Yes: Error                  @rp1
+         B     TSO060                  Bypass command check        @rp1
+CMDMVE   MVC   INPCMD(0),0(5)          << executed >>
+TSO055   DS    0H
+         CALL  MSGRTN,(3,0),MF=(E,CALLST)  Command not supported
+         B     TSO020
+         TITLE 'Set up display-area and attach processor'
+TSO060   DS    0H
+         L     R3,RPFCPPL              Pickup CPPL
+         USING CPPL,R3
+         L     R2,CPPLECT              Load ECT
+         USING ECT,R2                  Address ECT control block
+         MVI   ECTSWS,X'00'            Set command switch
+         MVC   ECTPCMD,=CL8' '         Blank command name into ECT
+         L     R4,CSOACNM              Load scanned command name
+         LH    R14,CSOALNM             Load command length
+         BCTR  R14,0                   Minus 1 for EX
+         EX    R14,MVECECT             Move command into ECT
+TSO061   DS    0H
+         LH    R4,CMMDBFFR             Length of buffer
+         SH    R4,CMMDBFFR+2           Minus offset first operand
+         CH    R4,=H'4'                No operands?
+         BNE   TSO062                  No: do not set NOPD in ECT
+         OI    ECTSWS,ECTNOPD          Set switch in ECT: no operands
+         B     TSO062                  Branch over 2 instr. to EX
+MVECECT  MVC   ECTPCMD(0),0(R4)        << executed >>
+TSO062   DS    0H
+         MVC   CPPLCBUF,CSPLCBUF       Move in address command buffer
+         DROP  R2,R3                   ECT and CPPL
+         XC    PROCECB,PROCECB         Clear processor's ECB
+         MVC   BLDLCMD,INPCMD          Move command name           @rp1
+         BLDL  0,BLDLLIST              Try to find command         @rp1
+         LTR   R15,R15                 RC = 0000 ?                 @rp1
+         BZ    TSO066                  Yes: carry
+         CALL  MSGRTN,(7,1),MF=(E,CALLST)  Command not found
+         B     TSO010                  Retry
+TSO066   DS    0H                                                  @rp1
+         LA    R2,20                   Default line 20
+         CLI   COMMCMD,COMMEW          Do we have a 24x80 screen?
+         BNE   *+8                     No: carry
+         LA    R2,1                    Else set to line 1
+         STLINENO LINE=(2),MODE=OFF   Set FULLSCR off
+*---------------------------------------------------------------------*
+*        In MVS 3.8:
+*        Test if command processor have the AC=1 bit on. If the AC
+*        bit in the directory is off and the APF bit in the jobstep
+*        (JSCBAPF) is on, go to supervisor mode, reset
+*        JSCBAPF, SYNCH to the attach processor routine and
+*        attach the TSO command processor.
+*        After attach, detach the processor, restore JSCBAPF and exit
+*        with SVC 3.
+*        If RPF runs not authorized, or RPF runs authorized with
+*        AC=1 in the TSO command processor, do not reset APF in the
+*        JSCB and attach and detach the processor immediately.
+*
+*        In MVS/ESA or above with TSO/E:
+*        Attach the command processor directly
+*------------------------------------------ (C)-2025 Skybird systems -*
+         AIF   (&OS390).NOSYNCH
+         AIF   (&MVSXA).NOSYNCH
+         TM    BLDLUSER+18,X'08'       APF data present?
+         BNO   RSTAPF                  No: reset APF
+         LA    R1,BLDLUSER+21          Point past basic section
+         TM    BLDLC,X'80'             Do we have an alias?
+         BZ    NOASECT                 No: no alias section
+         LA    R1,11(,R1)              Yes: point past alias section
+NOASECT  TM    BLDLUSER+18,X'10'       SSI data present?
+         BZ    NOSSISEC                No: no SSI section
+         LA    R1,1(,R1)               Yes: skip SSI section
+         SRL   R1,1                    Divide by 2 and multiply
+         SLL   R1,1                    by 2, because on halfword bdy
+         LA    R1,4(,R1)               Point past SSI section
+NOSSISEC CLI   0(R1),1                 AC code is 1 byte?
+         BNE   RSTAPF                  No: reset APF
+         CLI   1(R1),1                 AC=1?
+         BE    TSOATCH                 Yes: do not reset APF
+RSTAPF   DS    0H                                                  @rp1
+         TM    SW,$TSOAPF              Jobstep is APF authorized?
+         BNO   TSOATCH                 No: reset APF is not needed
+         OI    SW,$APFRST              Mark APF has been reset
+         MODESET KEY=ZERO,MODE=SUP     Goto supervisor state
+         NI    JSCBOPTS,255-JSCBAUTH   Are we APF authorized?
+         LA    R15,TSOATCH             Execute attach
+         XC    MSG,MSG                 Clear SYNCH parameter list
+         SYNCH (15),RESTORE=YES,MF=(E,MSG)
+         OI    JSCBOPTS,JSCBAUTH       Restore APF authorization
+         MODESET KEY=NZERO,MODE=PROB   Back to problem state
+         DROP  R7
+         NI    SW,255-$APFRST          Reset RESET flag
+         B     TSOATCHE
+.NOSYNCH ANOP
+TSOATCH  DS    0H                                                  @rp1
+         L     R2,=V(RPFSTAX)          Get address of STAX routine
+         XC    STAXLST(STAXLEN),STAXLST
+         STAX  (R2),DEFER=NO,MF=(E,STAXLST)
+         LA    R2,INPCMD               Point to processor name
+         L     R1,RPFCPPL              Load CPPL-address into reg. 1
+         XC    ATCHLST(ALSTLEN),ATCHLST Clear Subfield ATTACH
+         LA    R15,ATCHLST             SF field
+         LA    R4,PROCECB              ECB address
+         LA    R3,SAVESTAI             ECB address
+         XC    PROCTCB,PROCTCB         CLEAR TCB-ADDRESS.
+         ATTACH EPLOC=(2),ECB=(4),ESTAI=(RPFSTAI,(3)),                 X
+               SF=(E,(15))
+TSO070   DS    0H
+         ST    R1,PROCTCB              Save TCB-address
+         WAIT  ECB=PROCECB             Wait for completion
+         ICM   R2,15,PROCTCB           Is TCB address valid?
+         BZ    TSO071                  No: skip DETACH
+         DETACH PROCTCB                Get rid of subtask
+TSO071   DS    0H
+         STAX  ,                       Cancel STAX routine
+*
+*        Skip  SVC 3 if running in MVS/ESA or above with TSO/E
+*
+         AIF   (&OS390).NOSVC3
+         AIF   (&MVSXA).NOSVC3
+         TM    SW,$APFRST              APF in JSCB reset?
+         BNO   TSOATCHE                No: bypass the SVC 3 for SYNCH
+         XR    R15,R15                 And zero completion code
+         SVC   3                       Terminate SYNCH
+.NOSVC3  ANOP
+TSOATCHE DS    0H
+         CALL  MSGRTN,(5,1),MF=(E,CALLST)  RPF-TSO: Ready.
+         STFSMODE ON,INITIAL=NO,NOEDIT=YES  Re-issue fullscr mode
+         LA    R3,10                   Max 10 commands
+         L     R4,COMTSOCM             Set also in TSO commands buffer
+         LA    R4,8(,R4)               Skip acronym
+*
+*        Wrap around the saved TSO commands and save the last TSO
+*        command. If the last issued TSO command is already present
+*        in the saved TSO command, do not wrap around.
+*        The last issued TSO command will become the first entry
+*        in the saved TSO commands pointed to by COMTSOCM.
+*
+TSO072   DS    0H
+         CLC   0(5,R4),=C'     '       No command in entry?
+         BE    TSO074                  Ok: move to this entry
+         CLC   0(156,R4),BUFFER        Same command?
+         BE    TSO078                  Yes: finished
+         LA    R4,156(,R4)             Next entry in TSO buffer
+         BCT   R3,TSO072               Loop
+TSO074   DS    0H
+         L     R6,COMTSOCM             Start of buffer
+         LA    R6,1412(,R6)            Point to last command
+         LR    R4,R6                   Point to 2nd
+         SL    R4,=F'156'                          last command
+         LA    R3,9                    Shift 9 commands
+TSO076   DS    0H
+         MVC   0(156,R6),0(R4)         Shift command 1 entry down
+         SL    R4,=F'156'              Previous
+         SL    R6,=F'156'              Previous
+         BCT   R3,TSO076               Loop until all shifted
+         L     R6,COMTSOCM             Start of buffer
+         LA    R6,8(,R6)               Skip acronym
+         MVC   0(156,R6),BUFFER        Move new command as first
+         B     TSO010
+TSO078   DS    0H
+         L     R6,COMTSOCM             Point to 1st saved TSO command
+         LA    R6,8(,R6)               Skip acronym
+         CR    R4,R6                   Command already the first
+         BE    TSO080                  Ok: do nothing
+         XC    0(156,R4),0(R6)         Swap
+         XC    0(156,R6),0(R4)             the
+         XC    0(156,R4),0(R6)                commands
+TSO080   DS    0H
+         B     TSO010
+TSO090   DS    0H
+         L     R2,RPFCSPL              Happens to be start of workarea
+         LA    R3,LCSPL+LCSOA+LCSPLFLG Total length of workarea
+         FREEMAIN R,LV=(3),A=(2),SP=1  Get rid of this storage
+         TCLEARQ INPUT                 Clear terminal input queues
+         TCLEARQ OUTPUT                Clear terminal output queues
+         L     R3,RPFCPPL              This CPPL
+         USING CPPL,R3
+         MVC   CPPLCBUF,ORGCBUF        Restore original CMD buffer
+         DROP  R3                      CPPL
+         LR    R3,R13                  Our working storage
+         L     R13,4(,R13)
+         FREEMAIN R,LV=WORKL,A=(3)     Release
+         RETURN (14,12),RC=0
+         EJECT
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine name - RPFSTAI                                       *
+*                                                                     *
+*        Function -                                                   *
+*             This routine traps ABENDS that either occur in a        *
+*             subtask and are not dealt with by the subtask's         *
+*             ESTAE routine.                                          *
+*             as part of it's clean-up it will also clear all the     *
+*             terminal i/o-queues.                                    *
+*             If a subtask has been attached (proctcb <> zero),       *
+*             this routine will detach it and because the subtasks    *
+*             operate in non-fullscreen mode, this routine will set   *
+*             the fullscreen mode on.                                 *
+*             A retry will be attempted in the RPFTSO mainline        *
+*             at the beginning of command-processing if a SDWA is     *
+*             available. If not, this routine will percolate to the   *
+*             next higher ESTAE                                       *
+*                                                                     *
+*        Input -                                                      *
+*             1. SDWA (if available)                                  *
+*             2. SDWAPARM with registers 8-13                         *
+*             3. Retry-address (External)                             *
+*             4. Subtask-ECB (external)                               *
+*                                                                     *
+*        Output -                                                     *
+*             1. If no SDWA is available, a return code of 0 (SETRP)  *
+*                meaning: percolate.                                  *
+*             2. A return code of 4 (SETRP) meaning retry             *
+*             3. A return address in the RPFTSO mainline              *
+*             4. The register contents at the retry-address           *
+*                                                                     *
+*        Register usage -                                             *
+*             R0        - indicates presence of SDWA (R0 0= 12).      *
+*             R1        - pointer to SDWA                             *
+*             R2        - ptr to PROCTCB retry-address.               *
+*             R3        - ptr to register update block.               *
+*             R4 - R5   - work registers.                             *
+*             R6 - R10  - not used.                                   *
+*             R11       - Address of RPFCOMM                          *
+*             R12       - Base register.                              *
+*             R13       - Working storage.                            *
+*             R14       - Linkage register.                           *
+*             R15       - Entry point register.                       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFSTAI  DS    0H
+         DROP  ,
+         USING *,15
+         CH    R0,=H'12'               Any SDWA provided?
+         BNE   STAI010                 Yes: good
+         SLR   R15,R15                 Continue with abend (percolate)
+         BR    R14                     Exit
+STAI010  DS    0H
+         STM   R14,R12,12(R13)         Save registers
+         USING SDWA,R1                 Else retry
+         XR    R2,R2                   Clear register 2
+         ICM   R2,7,SDWACMPC           Insert completion code
+         SRL   R2,12                   Shift out user completion code
+         ST    R2,SDWASR02             Save register 2 for retry rout
+         L     R3,SDWAPARM             PARM with registers 8-13
+         MVC   SDWASR08(24),0(R3)      Restore registers 8-13
+         SETRP RC=4,                   Indicate retry                  *
+               RETADDR=STAIRET,        Retry-address                   *
+               RETREGS=YES,            Restore registers for retry ..  *
+               REGS=(14,12),           Restore registers               *
+               FRESDWA=YES,            And free thr SDWA               *
+               COMPCOD=(0,USER)        Completion code
+         DROP  R1,R15                  SDWA and RPFSTAI
+STAIRET  DS    0H                      Retry routine
+         USING RPFTSO,R12              Make module addressable again
+         USING WORKAREA,R13            Our working storage
+         USING COMMAREA,R11
+         STH   R2,SYSTEMCC             Save system completion code
+         UNPK  DBW(5),SYSTEMCC(3)      Expand each byte
+         NC    DBW(4),=X'0F0F0F0F'     Clear hi order nibbles
+         TR    DBW(4),=C'0123456789ABCDEF'
+         MVC   SYSEBC(4),DBW           Move to user field
+         MVC   MSGTXT2,MSG09           Move message to dynamic area
+         MVC   MSGTXT2+29(3),SYSEBC+1
+         LA    R1,MSGTXT2              Message
+         LA    R0,40                   Length
+         TPUT  (1),(0),R               Issue abend message
+         SVC   3                       Exit
+MSG09    DC    CL40'RPF-TSO: Command abended CC= XXX'
+*
+         LTORG
+VALDCMD1 EQU   B'10000000'             Command valid
+VALDCMD2 EQU   B'01000000'             Command valid
+CMDQMARK EQU   B'00100000'             Command name is question mark
+EMPTSEPR EQU   B'00010000'             BFFR emtpy/only separators
+SYNTXERR EQU   B'00001000'             Syntax error in command name
+IMPLEXEC EQU   B'00000100'             Implicit execute
+         DROP
+         LTORG
+         TITLE 'Screen definitions'
+SCREENS  CSECT
+SCRB     DC    X'27'                   Escape character TPUT FULLSCR
+         DC    X'F1C21100001DF8'
+         DC    X'110000'               r1,c41+(will be calculated)
+         DC    CL40' ',X'1DF0'
+         DC    X'1100001DC113'         r04,c01
+SCRBLEN  EQU   *-SCRB
+*
+SCRA     DC    X'27'                   Escape character TPUT FULLSCR
+         DC    X'F5C21100001DF8'       EW/EWA  r01,c01
+         DC    CL79'RPF TSO Command Processor -------------------------C
+               ----------------------------'
+         DC    80X'00'
+         DC    40X'00'
+         DC    X'110000'                  r01,c73
+         DS    CL8
+         DC    X'1100001DF0',AL3(YELLOW)  R03,C01                  @rp2
+         DC    C'Enter command or '
+         DC    AL3(WHITE),C'END',AL3(YELLOW),C' below or hit '     @rp2
+         DC    AL3(WHITE)                                          @rp2
+         DC    C'PF03/15',AL3(YELLOW),C' to terminate TSO'         @rp2
+         DC    X'1100001DC113',AL3(GREEN) R04,C01                  @rp2
+         DC    AL3(USCORE)             Underscore command line
+         DC    156X'00',X'1DF0'        Command area
+         DC    AL3(HDEFAULT)           Reset underscore
+         DC    X'110000'               r9,c2
+         DC    AL3(YELLOW)
+         DC    C'Place cursor on any place in one of the commands belowx
+                to execute'
+         DC    AL3(HDEFAULT)           Remove underscore attr.
+SCRALEN  EQU   *-SCRA
+SCREENSL EQU   *-SCREENS
+*
+         EJECT
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine name - MSGRTN                                        *
+*                                                                     *
+*        Function -                                                   *
+*             This routine takes care of all the (non)-fullscreen     *
+*             output. All the messages and screens needed are defi-   *
+*             ned in this routine and are accessed thru an address-   *
+*             vector.                                                 *
+*                                                                     *
+*        Input -                                                      *
+*             1. A message code (sequence number in MSGTABLE)         *
+*             2. A screen indicator:                                  *
+*                  - 0 = Fullscreen message (TPUT)                    *
+*                    1 = Non fullscreen message (TPUT nofullscr)      *
+*                                                                     *
+*        Output -                                                     *
+*             1. Screens and TPUT nofullscr messages                  *
+*                                                                     *
+*        Register usage -                                             *
+*             R0        - Not used                                    *
+*             R1        - Parameter list pointer                      *
+*             R2        - Contains message code (parameter 1).        *
+*             R3        - Contains screen indicator (parameter 2)     *
+*             R4 - R12  - Not used                                    *
+*             R13       - Routine base register                       *
+*             R14       - Linkage register                            *
+*             R15       - Entry point register                        *
+*                                                                     *
+*        Author -                                                     *
+*             A.W. VERMEER - SYSTEMS PROGRAMMING DEPT.                *
+*             Rob Prins    - RPF Builder                              *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+MSGRTN   CSECT
+         USING WORKAREA,R13            Our working storage
+         STM   R2,R14,RMSG             Save register 2-14
+         LR    R12,R15                 Base register
+         USING MSGRTN,R12
+         USING CPPL,R10
+         L     R2,4(,R1)               Get screen indicator
+         L     R1,0(,R1)               Get message code
+         BCTR  R1,0                    Calculate offset in vector
+         SLL   R1,2
+         L     R1,MSGTABLE(R1)         Pickup address of message
+         LTR   R2,R2                   Test screen-indicator
+         BNZ   MSG020                  Non fullscreen message
+         MVC   MSGTXT,0(R1)            Move message text into screen
+         LA    R1,SCR2TXT              Parm TPUTS (address screen)
+         LA    R0,SCR2LEN              Length of screen for TPUTS
+         CALL  TPUTS                   Issue a TPUT FULLSCR/NOEDIT
+         B     MSG030
+MSG020   DS    0H
+         LA    R0,40
+         TPUT  (1),(0),R               Issue non fullscr TPUT
+MSG030   DS    0H
+         LM    R2,R14,RMSG             Restore register 2-14
+         BR    R14                     Return to caller
+         CNOP  0,4
+MSGTABLE DC    A(MSG01)
+         DC    A(MSG02)
+         DC    A(MSG03)
+         DC    A(MSG04)
+         DC    A(MSG05)
+         DC    A(MSG06)
+         DC    A(MSG07)                                            @rp1
+         LTORG ,
+         DROP
+         TITLE 'Message screen'
+MSG01    DC    CL40'------------------- Invalid command name'
+MSG02    DC    CL40'--------------- Command name syntx error'
+MSG03    DC    CL40'------------------ Command not supported'
+MSG04    DC    CL40'RPF-TSO: ATTACH for processor failed'
+MSG05    DC    CL40'RPF-TSO: Ready'
+MSG06    DC    CL40'RPF-TSO: Interrupt received'
+MSG07    DC    CL40'RPF-TSO: Command not found'                    @rp1
+         LTORG
+         DROP
+         EJECT
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine name - RPFSTAX                                       *
+*                                                                     *
+*        Function -                                                   *
+*             This routine traps attention interrupts that are        *
+*             generated either in RPFTSO itself or in a subtask       *
+*             whose attention exits could not cope with the           *
+*             interrupt's attention level.                            *
+*                                                                     *
+*        Input -                                                      *
+*             1. A pointer to the attention exit parameter list       *
+*                                                                     *
+*        Output -                                                     *
+*             N/A                                                     *
+*                                                                     *
+*        Register usage -                                             *
+*             R0 - R1   - Not used                                    *
+*             R2        - Used to access external TCB-address         *
+*             R3 - R12  - Not used                                    *
+*             R13       - Routine base register                       *
+*             R14       - Linkage register                            *
+*             R15       - Entry point register                        *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFSTAX  CSECT
+         USING WORKAREA,R13            Our working storage
+         STM   R14,R12,12(R13)         Save registers
+         LR    R12,R15                 Base register
+         USING RPFSTAX,R12
+         STFSMODE ON                   Re-issue fullscr mode
+         CALL  MSGRTN,(6,1),MF=(E,CALLST)  Interrupt received
+         TCLEARQ INPUT                 Clear terminal input queues
+         TCLEARQ OUTPUT                Clear terminal output queues
+         LM    R14,R12,12(R13)         Restore registers
+         BR    R14
+         LTORG
+         DROP
+         EJECT
+*---------------------------------------------------------------------*
+*                                                                     *
+*        TIME - Get time of day, convert to display format            *
+*                                                                     *
+*               Input:  none                                          *
+*               Output: TIMEDISP - time of day, hh:mm:ss              *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFTIME  CSECT
+         USING WORKAREA,R13            Our working storage
+         STM   R10,R14,RTIME           Save registers
+         LR    R12,R15                 Base register
+         USING RPFTIME,R12
+         TIME  DEC                     Get time of day
+         SRL   0,4                     Shift out thousands of seconds
+         ST    0,TIMEWORK              Save time
+         OI    TIMEWORK+3,X'0F'        Insert sign
+         MVC   TIMEDISP,PATT1          Pattern to output field
+         ED    TIMEDISP(10),TIMEWORK   Edit time
+         LM    R10,R14,RTIME           Restore registers
+         BR    R14                     Return
+PATT1    DC    X'402021207A20207A2020' Edit pattern
+         LTORG ,
+         DROP
+         CSR   MF=E                    Convert SBA to row/column
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+         TITLE 'Working storage'
+WORKAREA DSECT
+         DS    18F                     Save area of RPFTSO
+DBW      DS    D                       Workfield RCTOSBA
+SBAR0R1  DS    D                       Workfield RCTOSBA
+RMSG     DS    13F                     Save registers MSG
+RTIME    DS    5F                      Save registers TIME
+SAVESTAI DS    6F                      Registers 8-13 for STAI exit
+WRKENT   DS    F                       Length TSO cmd in screen
+TIMEWORK DS    F                       Work area TIME
+TPUTLEN  DS    F                       Length of complete screen
+TSOCMLEN DS    F                       L Saved TSO cmd (width scr -5)
+CALLST   DS    2F                      CALL MF=L
+SYSEBC   DS    F                       Completion code (EBCDIC)
+RPFCPPL  DS    F                       Address of CPPL
+ORGCBUF  DS    F                       Original command buffer
+RPFCSPL  DS    F                       Address of CSPL
+RPFCSOA  DS    F                       Address of CSOA
+RPFCSFLG DS    F                       Address of CSPL-flags
+PROCTCB  DS    F                       TCB address of subtask
+PROCECB  DS    F                       Subtask ECB
+ATCHLST  ATTACH SF=L                   ATTACH SF=(E,ATCHLST)
+ALSTLEN  EQU   *-ATCHLST
+STAXLST  STAX  DEFER=NO,MF=L
+STAXLEN  EQU   *-STAXLST
+ATCHPRM  DS    XL4                     ATTACH MF=(E,ATCHPRM)
+SBARET   DS    H                       Return SBA after TGET ASIS
+INPCMD   DC    CL8' '
+CMMDBFFR DS    0CL160
+BFFRLGTH DS    H                       Length of buffer + header
+BFFROFFS DS    H                       Offset to command name/operand
+SYSTEMCC DS    H                       Completion code
+BFFRCMD  DS    CL156                   Maximum length of TSO command
+*
+MSGTXT2  DS    CL40                    Dynamic non fullscr msg area
+*
+TIMEDISP DS    CL10                    Output area TIME
+BLDLLIST DS    0F                      Align on fullword
+         DC    AL2(1)                  One entry
+         DC    AL2(76)                 Length of data
+BLDLCMD  DC    CL8' '                  TSO command
+BLDLTTR  DS    XL3                     TTR of member
+BLDLK    DS    X                       Concatenation number
+BLDLZ    DS    X                       Location code
+BLDLC    DS    X                       C-byte with flags
+BLDLUSER DS    CL62                    Userdata
+*
+SW       DS    X                       Flags
+$TSOAPF  EQU   1                       RPFTSO runs APF authorized
+$APFRST  EQU   2                       APF bit in JSCB reset and set
+BUFFER   DS    CL156                   Command input buffer
+BUFFER2  DS    CL156
+MSG      DS    CL128
+         CSR   MF=L
+SCR12    DS    0CL(SCREENSL)           Both screens
+*
+*        SCR2 is a copy of SCRB in SCREENS DSECT
+*        SCR1 is a copy of SCRA in SCREENS DSECT
+*
+SCR2     DS    0CL58
+SCR2TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR2TXT  DC    X'F1C21100001DF8'
+S2R1C41  DC    X'110000'               r1,c41+(will be calculated)
+MSGTXT   DC    CL40' ',X'1DF0'
+SC2R4C1  DC    X'1100001DC113'         r04,c01
+SCR2LEN  EQU   *-SCR2TXT
+*
+SCR1     DS    0CL(SCRALEN)
+SCR1TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR1TXT  DC    X'F5C21100001DF8'       EW/EWA  r01,c01
+         DC    CL79'RPF TSO Command Processor -------------------------C
+               ----------------------------'
+SCR1TX   DC    80X'00'
+         DC    40X'00'
+S1R1C73  DC    X'110000'                  r01,c73
+SCR1TIME DS    CL8
+SC1R3C1  DC    X'1100001DF0',AL3(YELLOW)  R03,C01                  @rp2
+         DC    C'Enter command or '
+         DC    AL3(WHITE),C'END',AL3(YELLOW),C' below or hit '     @rp2
+         DC    AL3(WHITE)                                          @rp2
+         DC    C'PF03/15',AL3(YELLOW),C' to terminate TSO'         @rp2
+SC1R4C1  DC    X'1100001DC113',AL3(GREEN) R04,C01                  @rp2
+         DC    AL3(USCORE)             Underscore command line
+TSOCMD   DC    156X'00',X'1DF0'        Command area
+         DC    AL3(HDEFAULT)           Reset underscore
+S1R8C2   DC    X'110000'               r9,c2
+         DC    AL3(YELLOW)
+         DC    C'Place cursor on any place in one of the commands belowx
+                to execute'
+         DC    AL3(HDEFAULT)           Remove underscore attr.
+SCR1LEN  EQU   *-SCR1TXT
+R10C1    DS    CL((200+9)*10)          Handle up to 10 x 200
+*
+WORKL    EQU   *-WORKAREA
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+         TITLE 'Other DSECT''s'
+         PRINT NOGEN
+         IHAPSA DSECT=YES
+         IKJTCB DSECT=YES,LIST=NO
+         IEZJSCB
+         IKJTAIE
+         IKJECT
+         IKJCPPL
+         CVT DSECT=YES,LIST=NO
+         IHASDWA
+         IKJCSPL
+LCSPL    EQU   *-CSPL
+         IKJCSOA
+LCSOA    EQU   *-CSOA
+CSPLFLGS DSECT
+         DS    F
+LCSPLFLG EQU   *-CSPLFLGS
+*
+*        Screen line with saved TSO command (10 lines)
+*
+SAVETSO  DSECT
+SSBA     DS    CL3                     SBA
+SCOLOR1  DS    CL3                     Color 1 (white)
+SPREF    DS    CL4                     Contains ' => '
+SCOLOR2  DS    CL3                     Color 2 (blue)
+SAVTSOCM DS    CL156                   TSO command
+         PRINT GEN
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         END

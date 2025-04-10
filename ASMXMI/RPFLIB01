@@ -1,0 +1,871 @@
+RPFLIB01 TITLE 'ADD/REPLACE OR DELETE LIBRARIAN MODULES'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFLIB01                                      *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by      RPFLIB, line command D (Delete).              *
+*                       RPFSAVE, option 3 in RPFSAVE.                 *
+*                                                                     *
+*        Function:      Present a menu for allocation a LIBRARIAN     *
+*                       Master File. If the Masterfile is allocated   *
+*                       a LIBRARIAN module can be added/replaced or   *
+*                       deleted.  After successful allocation the     *
+*                       LIBRARIAN routine will be invoked. The        *
+*                       SYSPRINT of LIBRARIAN will be set on a tem-   *
+*                       porary file which will be given to RPFBRO     *
+*                       to browse that file.                          *
+*                       If an error occurs RPFLIB01 redisplayes the   *
+*                       menu, so the user can retry or escape.        *
+*                                                                     *
+*        Subroutine:    RPFBRO, the RPF browse processor              *
+*                                                                     *
+*        Registers:     Register 12 is the base register.             *
+*                       Register 11 points like all RPF modules to    *
+*                       the RPFCOMM control block                     *
+*                       Register 13 points to the dynamic working     *
+*                       storage. The first 72 bytes are the save area.*
+*                       Register 9 points to the screen, mapped by    *
+*                       the CSECT SCREENS.                            *
+*                                                                     *
+*        Return codes in register 15                                  *
+*                       00 - Completion ok.                           *
+*                       04 - LIBRARIAN is not installed.              *
+*                       08 - Exit entered by user or                  *
+*                            Workspace empty                          *
+*                       12 - Allocation work data sets failed         *
+*                                                                     *
+*        Change log:                                                  *
+*        Dec 22,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Mar 08,2020 RPr: Adapt screen according screen size          *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Jul 07,2020 RPr: Remove NOALLOC switch and allocate          *
+*                         the Librarian Masterfile under dd=MASTLIB   *
+*        Oct 24,2020 RPr: Remove option X, use PF3/PF15 instead       *
+*        Jan 11,2021 RPr: Return codes 12,16 and 20 removed           *
+*                         return code 4 (LIB not installed) added     *
+*        Aug 06,2022 RPr: DYNALLOC's replaced by IKJDAIR calls and    *
+*                         RPFLIB01 made re-entrant and re-usable.     *
+*        Dec 07,2024 RPr: Use standard TSO naming conventions for     *
+*                         data set names.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFLIB01 CSECT
+RPFLIB01 AMODE 31
+RPFLIB01 RMODE 24
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Base register
+         USING RPFLIB01,R12            Provide addressability
+         L     R11,0(,R1)              Pick-up RPFCOMM
+         GETMAIN R,LV=WORKL            Obtain storage for working stg
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1
+         USING WORKAREA,R13            Make working storage addressable
+         B     START                   Branch around constants
+         SPACE 2
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         USING COMMAREA,R11            Address this area
+         XC    COMMPRM,COMMPRM         Clear COMMPRM initially
+         LA    R0,SCRN                 Output
+         LR    R9,R0                   Copy
+         LA    R1,SCREENSL             Length of ...
+         LR    R3,R1                             both operands
+         L     R2,=V(SCREENS)          Input
+         MVCL  R0,R2                   and move
+         USING SCREENS,R9              Make the screens addressable
+         MVC   RPFUT5,MDLUT5           Move model DCB to working strg
+         ST    R11,PARMLST             Save address of RPFCOMM
+         MVI   SCR2DESC,C' '           Blank ...
+         MVC   SCR2DESC+1(L'SCR2DESC-1),SCR2DESC  DESC and ...
+         MVC   SCR2PGMR,SCR2DESC             PGMR and
+         MVC   SCR2LANG,SCR2DESC             LANG and
+         MVC   SCR2PGMR(7),COMMUSER    Move userid to PGMR field
+*
+         AIF   (&SVS).SVS1
+         LOAD  EP=RPFLIB02,ERRET=START05 Load User ID/Name table ...
+         AGO   .NOSVS1
+.SVS1    ANOP
+         LOAD  EP=RPFLIB02             Load User ID/Name table ...
+.NOSVS1  ANOP
+*
+*        The Userid/name table (RPFLIB02) is built as follows:
+*        1.   BYTE 0-3             L(4)  Number of entries
+*        2.   BYTE (4-25)          L(22) First entry
+*        3.   BYTE (26-47)         L(22) Second entry
+*        4.   BYTE (..-..)         L(22) ... Next entries
+*        Each entry contains of a 7 byte TSO userid and a 15 byte name
+*             of the owner of the Userid
+*
+         LR    R4,R0                   Save entry point
+         L     R5,0(,R4)               Number of entries
+         LA    R4,4(,R4)               Point to first Userid entry
+START01  CLC   COMMUSER(7),0(R4)       Compare TSO userid in RPFLIB02
+         BE    START02                 Found
+         LA    R4,22(,R4)              Next entry in RPFLIB02 table
+         BCT   R5,START01              Loop until found or all done
+         MVC   MSG2,ERR6TXT            Msg: Userid not in table
+         B     START03                 Not found: set userid in PGMR
+START02  MVC   SCR2PGMR,7(R4)          Move owner of uerid in PGMR
+START03  DS    0H
+         DELETE EP=RPFLIB02            Delete RPFLIB02 module
+START05  MVC   SCR2DSN,COMMSTR         Move Master file from RPFCOMM
+         MVC   SCR2VOL,COMMSVOL        Move Master Volume from RPFCOMM
+         MVC   SCR2MEM,COMMMOD         Move LIB volume from RPFCOMM
+         LM    R4,R5,COMMSIZE          Pickup lines/columns
+         MVC   SCR2TXT(1),COMMCMD      Move EW or EWA in data stream
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR2TXT+3
+*
+*
+         LA    R0,1                    Row 1
+         LA    R1,56                   Column 56+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R1C56+1
+*
+         LA    R0,2                    Row 2
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R2C1+1
+*
+         LA    R0,4                    Row 4
+         LA    R1,4                    Column 4+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R4C4+1
+*
+         LA    R0,5                    Row 5
+         LA    R1,4                    Column 4+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R5C4+1
+*
+         LA    R0,6                    Row 6
+         LA    R1,4                    Column 4+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R6C4+1
+*
+         LA    R0,9                    Row 9
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R9C1+1
+*
+         LA    R0,10                   Row 10
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R10C1+1
+*
+         LA    R0,11                   Row 11
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R11C1+1
+*
+         LA    R0,13                   Row 13
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R13C2+1
+*
+         LA    R0,15                   Row 15
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R15C1+1
+*
+         LA    R0,16                   Row 16
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R16C1+1
+*
+         LA    R0,17                   Row 17
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R17C1+1
+*
+         L     R0,COMMSIZE             Row Last
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC1+1          Last line
+START13  DS    0H
+RESTART  DS    0H
+         LA    R1,SCR2TXT              Area address
+         LA    R0,SCR2LEN              Length
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write LIBRARIAN update screen
+GET1     DS    0H
+         LA    R5,BUFFER               Output formatted buffer
+         L     R3,COMMSCR              Screen address
+         LA    R0,297                  Length
+         LR    R1,R3                   Area address
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LR    R4,R1                   Save length
+*
+*        Do a TGET ASIS to obtain the AID byte
+*        After the TGET ASIS remove the SBA'S from the output
+*
+         CLI   0(R3),X'F3'             PFK3 (End) pressed?
+         BE    EXIT                    Yes: return
+         CLI   0(R3),X'C3'             PFK15 (End) pressed
+         BE    EXIT                    Yes: return
+         XR    R2,R2                   Init output length
+         SH    R4,=H'3'                Skip AID byte and cursor address
+         BNP   CONV099                 No data anymore: end of routine
+         LA    R3,3(,R3)
+         LA    R5,BUFFER               Output address
+*
+*        Input screen is pointed to by register 3
+*        Output screen is pointed to by register 5
+*        The next section will remove all the SBA's
+*
+CONV001  CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  MVC   0(1,R5),0(R3)           Move input byte to buffer
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV099                 Finished
+CONV003  DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes input (SBA)
+         SH    R4,=H'2'                Discount with 2 for BCT
+         BNP   CONV099                 <=0: conversion finished
+         BCT   R4,CONV001              Process next byte
+CONV099  DS    0H
+         LR    R1,R2                   Set length in register 1
+PUT2     DS    0H
+         LTR   R1,R1                   No input received?
+         BZ    RESTART                 Yes: re-display menu
+         MVI   MSG2,C'-'               Clear
+         MVC   MSG2+1(21),MSG2              message
+SCAN01   MVI   OUTPBUF,C' '            Clear ...
+         MVC   OUTPBUF+1(L'OUTPBUF-1),OUTPBUF the screen output buffer
+         LA    R5,BUFFER               Point to start of BUFFER
+         LR    R6,R1                   Actual length of BUFFER
+         LA    R4,COMMAND              Point to 'COMMAND' field
+SCAN03   DS    0H
+         CLC   S2DESC,0(R5)            Search for 'DESC='
+         BE    SCAN04                  Yes: found
+         MVC   0(1,R4),0(R5)           Move byte COMMAND
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN03               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN04   LA    R4,DESC                 Point to DESC field
+         LA    R5,L'S2DESC(,R5)        Point after 'DESC='
+         SH    R6,=AL2(L'S2DESC)       Decrease BCT register
+SCAN05   DS    0H
+         CLC   S2PGMR,0(R5)            Search for 'PGMR='
+         BE    SCAN06                  Yes: found
+         MVC   0(1,R4),0(R5)           Move byte DESC
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN05               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN06   LA    R4,PGMR                 Point to PGMR field
+         LA    R5,L'S2PGMR(,R5)        Point after 'PGMR='
+         SH    R6,=AL2(L'S2PGMR)       Decrease BCT register
+SCAN07   DS    0H
+         CLC   S2LANG,0(R5)            Search for 'LANG='
+         BE    SCAN08                  Yes: found
+         MVC   0(1,R4),0(R5)           Move byte PGMR
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN07               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN08   LA    R4,LANG                 Point to LANG field
+         LA    R5,L'S2LANG(,R5)        Point after 'LANG='
+         SH    R6,=AL2(L'S2LANG)       Decrease BCT register
+SCAN09   DS    0H
+         CLC   S2MOD,0(R5)             Search for LIBRARIAN module
+         BE    SCAN10                  Found: process module
+         MVC   0(1,R4),0(R5)           Move 1 byte LANG field
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN09               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN10   LA    R5,L'S2MOD(,R5)         Point after 'Module      ='
+         SH    R6,=AL2(L'S2MOD)        Decrease BCT register
+         LA    R4,MODULE               Point to 'Module' field
+SCAN11   DS    0H
+         CLC   S2MSTR,0(R5)            Search for Master file DSName
+         BE    SCAN12                  Found: process Master file DSN
+         MVC   0(1,R4),0(R5)           Move 1 byte LIBRARIAN module
+         TR    0(1,R4),COMTCAPS        Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN11               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN12   LA    R5,L'S2MSTR(,R5)        Point after 'Master File ='
+         SH    R6,=AL2(L'S2MSTR)       Decrease BCT register
+         LA    R4,BUFMSTR              Point to Master file DSN field
+SCAN13   DS    0H
+         CLC   S2VOL,0(R5)             Search for Volume
+         BE    SCAN14                  Found: process Master file vol.
+         MVC   0(1,R4),0(R5)           Move 1 byte Master file DSN
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN13               Examine next bytes
+         B     RESTART                 No data anymore: display menu
+SCAN14   LA    R5,L'S2VOL(,R5)         Point after 'Volume   ='
+         SH    R6,=AL2(L'S2VOL)        Decrease BCT register
+         BNP   SCAN16                  Last field erased
+         LA    R4,MSTRVOL              Point to Masterfile Volume field
+SCAN15   DS    0H
+         MVC   0(1,R4),0(R5)           Move 1 byte Master file Volume
+         OI    0(R4),X'40'             Xlate to upper
+         LA    R5,1(,R5)               Next byte input
+         LA    R4,1(,R4)               Next byte output
+         BCT   R6,SCAN15               Examine next bytes
+SCAN16   DS    0H
+         CLI   MODULE,C' '             No module specified?
+         BNE   *+10                    Branch
+         MVC   MODULE,=C'TEMPNAME'     Set TEMPNAME as default name
+         MVC   SCR2VOL,MSTRVOL         if there is one
+         MVC   SCR2DSN,BUFMSTR         Master file DSN in menu
+         MVC   SCR2MEM,MODULE          and Module name too
+         MVC   SCR2DESC,DESC           Move 'DESC' field in menu
+         MVC   SCR2PGMR,PGMR           Move 'PGMR' field in menu
+         MVC   SCR2LANG,LANG           Move 'LANG' field in menu
+         CLI   COMMAND,C'3'            Option 3, Delete selected?
+         BE    ALLOC00                 Yes: proceed
+         CLI   COMMAND,C'1'            Add a LIBRARIAN module?
+         BE    CHECK01                 Yes: proceed
+         CLI   COMMAND,C'2'            Replace a LIBRARIAN module?
+         BE    CHECK01                 Yes: proceed
+         MVC   MSG2,ERR2TXT            Msg: Invalid option
+         B     RESTART                 Write the screen
+CHECK01  CLC   COMWSTRT,COMMLAST       Is there any data in workspace?
+         BNH   ALLOC00                 Yes: good, continue
+         LA    R15,8                   Rc=8, workspace empty, exit
+         B     RETURN                  Return
+ALLOC00  DS    0H
+         CLI   MSTRVOL,C' '            No volume specified?
+         BNE   ALLOC01                 Yes: assume catalged
+         XC    CAMLST,CAMLST           Clear LOCATE parameter list
+         MVI   CAMLST,X'44'            CAMLST NAME
+*
+         ST    R11,PARMFLD             Parameter for DSNPARS
+         LA    R1,BUFMSTR              2nd parameter, unparsed Master
+         ST    R1,PARMFLD+4
+         LA    R1,MSTRFILE             3rd parameter, parsed Master
+         ST    R1,PARMFLD+8
+         L     R15,EPDSNPA             Routine address
+         LA    R1,PARMFLD              Parameter
+         BALR  R14,R15                 Execute
+         LA    R0,MSTRFILE             Data set to find in catalog
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,LOCAREA
+         ST    R0,CAMLST+12            Option 4
+         LOCATE CAMLST                 Search data set om catalog
+         LTR   R15,R15                 Found?
+         BNZ   LOCERR                  No: error
+         MVC   MSTRVOL,LOCVOL          Move volume in RPFCOMM
+         MVC   SCR2VOL,LOCVOL          and in menu screen
+         B     ALLOC01                 Allocate Master file
+LOCERR   MVC   MSG2,ERR1TXT            Msg: Data set not in catalog
+         B     RESTART                 Re-write the screen
+ALLOC01  DS    0H
+         MVI   CAMLST,X'C1'            CAMLST SEARCH
+         LA    R0,MSTRFILE             Data set to obtain
+         ST    R0,CAMLST+4             Option 2
+         LA    R0,MSTRVOL              Volume witch should contain MSTR
+         ST    R0,CAMLST+8             Option 3
+         LA    R0,DSCB1                Format 1 DSCB
+         ST    R0,CAMLST+12            Option 4
+         OBTAIN CAMLST                 Test if data set is on volume
+         LTR   R15,R15                 Ok?
+         BZ    ALLOC02                 Yes: allocate
+         MVC   MSG2,ERR4TXT            Msg: Data set not on volume
+         B     RESTART                 Re-write menu screen
+ALLOC02  EQU   *
+         XC    RPFD08,RPFD08           Clear allocation parm block
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08MNM,=CL8' '         Provide no member name
+         MVC   DA08SER(8),=CL8' '      Clear volume serial first
+         MVC   DA08SER(6),LOCVOL       Add volume in IKJDAP08
+         MVC   DA08UNIT,COMMUNIT       Unit name
+         MVI   DA08DSP1,DA08SHR        DISP=SHR
+         MVC   DA08DDN,=CL8'MASTLIB'   DD-name
+         LA    R1,MSTRFILE+44          Calculate ...
+         TRT   MSTRFILE,COMSKPNS       Register -> first blank
+         LA    R0,MSTRFILE             Point to beginning of dsn
+         SLR   R1,R0                   ... length
+         STCM  R1,3,MSTRFIL            And save real length
+         LA    R1,RPFD08               Point to allocation parm block
+         LA    R2,MSTRFIL              Length + data set name
+         ST    R2,DA08PDSN             And save
+         L     R15,=V(CALLTS)          Allocate with IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD08               Point to allocation parm block
+         LTR   R15,R15                 Allocation OK?
+         BZ    ALLOCOK                 Yes: good
+         MVC   MSG2,ERR3TXT            Msg: Alloc error xxxx
+         UNPK  DBW(5),DA08DARC(3)      Expand each byte
+         NC    DBW(4),=X'0F0F0F0F'     Clear hi order nibbles
+         TR    DBW(4),=C'0123456789ABCDEF'
+         MVC   MSG2+18(4),DBW          Move to user field
+         MVC   MSG2,ERR3TXT
+         B     RESTART                 Review menu screen
+ALLOCOK  EQU   *
+         MVC   DA08SER(8),=CL8' '      Clear volume serial first
+         MVI   DA08DSP1,DA08MOD        DISP=MOD
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08PQTY+3,3            3 cylinders primary
+         MVI   DA08SQTY+3,2            2 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         MVC   DA08DDN,=CL8'RPFUT1'    DD-name
+         LA    R2,UT1DSNL              Length + data set name
+         ST    R2,DA08PDSN             And save
+         MVC   DA08UNIT,COMMSTOR       Unit name
+         L     R15,=V(CALLTS)          Allocate with IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Ok?
+         BNZ   ERROR99                 No: error
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFUT2'    DD-name
+         LA    R2,UT2DSNL              Length + data set name
+         ST    R2,DA08PDSN             And save
+         L     R15,=V(CALLTS)          Allocate with IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Ok?
+         BNZ   ERROR99                 No: error
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFUT3'    DD-name
+         LA    R2,UT3DSNL              Length + data set name
+         ST    R2,DA08PDSN             And save
+         L     R15,=V(CALLTS)          Allocate with IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Ok?
+         BNZ   ERROR99                 No: error
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFUT5'    DD-name
+         LA    R2,UT5DSNL              Length + data set name
+         ST    R2,DA08PDSN             And save
+         MVI   DA08PQTY+3,10           10 cylinders primary
+         MVI   DA08SQTY+3,5            5 cylinders secondary
+         L     R15,=V(CALLTS)          Allocate with IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Ok?
+         BNZ   ERROR99                 No: error
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFPRINT'  DD-name
+         LA    R2,PRTDSNL              Length + data set name
+         ST    R2,DA08PDSN             And save
+         MVI   DA08PQTY+3,5            5 cylinders primary
+         MVI   DA08SQTY+3,4            4 cylinders secondary
+         L     R15,=V(CALLTS)          Allocate with IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Ok?
+         BNZ   ERROR99                 No: error
+         DROP  R1                      DAPB08
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (RPFUT5,(OUTPUT)),MF=(E,COMOPN) Open SYSIN file
+         MVI   RECORD,C' '             Blank
+         MVC   RECORD+1(L'RECORD-1),RECORD   record
+         MVC   RECORD(L'OPT),OPT       -OPT card
+         BAL   R14,UT5PUT              Write on file
+         MVI   RECORD,C' '             Blank
+         MVC   RECORD+1(L'RECORD-1),RECORD   record again
+LIBRA01  DS    0H
+         CLI   COMMAND,C'1'            Add a module?
+         BNE   LIBRA03                 No check others
+         MVC   RECORD(4),=C'-ADD'      Move -ADD card
+         MVC   RECORD+5(8),MODULE      Move LIBRARIAN module name
+         BAL   R14,UT5PUT              Write record
+         B     LIBROPTS                Read workspace with module data
+LIBRA03  DS    0H
+         CLI   COMMAND,C'2'            REP a module?
+         BNE   LIBRA05                 No: it should be DLM
+         MVC   RECORD(4),=C'-SEL'      Move -SEL card
+         MVC   RECORD+5(8),MODULE      Move name of LIB module
+         BAL   R14,UT5PUT              Write record
+         B     LIBROPTS                Read workspace with module data
+LIBRA05  DS    0H
+         MVC   RECORD(4),=C'-DLM'      -DLM record (Delete Module)
+         MVC   RECORD+5(8),MODULE      Module name after '-DLM '
+         BAL   R14,UT5PUT              Write record
+         B     LIBREMOD                Write '-EMOD' card
+LIBROPTS DS    0H
+         MVI   RECORD,C' '             Blank
+         MVC   RECORD+1(L'RECORD-1),RECORD   record
+         CLI   DESC,C' '               No Libarian DESC?
+         BE    LIBROPT2                Yes: skip
+         MVC   RECORD(5),=C'-DESC'     -DESC card
+         MVC   RECORD+6(30),DESC       Description after '-DESC'
+         BAL   R14,UT5PUT              Write record
+LIBROPT2 DS    0H
+         MVI   RECORD,C' '             Blank
+         MVC   RECORD+1(L'RECORD-1),RECORD   record
+         CLI   PGMR,C' '               No Programmer name?
+         BE    LIBROPT3                Yes: skip
+         MVC   RECORD(5),=C'-PGMR'     -PGMR card
+         MVC   RECORD+6(15),PGMR       Move pgmr name after '-PGMR '
+         BAL   R14,UT5PUT              Write record
+LIBROPT3 DS    0H
+         MVI   RECORD,C' '             Blank
+         MVC   RECORD+1(L'RECORD-1),RECORD   record
+         CLI   LANG,C' '               No -LANG?
+         BE    LIBROPT4                Yes: skip
+         MVC   RECORD(5),=C'-LANG'     -LANG card
+         MVC   RECORD+6(03),LANG       Move language after '-LANG '
+         BAL   R14,UT5PUT              Write record
+LIBROPT4 CLI   COMMAND,C'2'            Replace LIBRARIAN module?
+         BNE   LIBRARD                 No: proceed
+         MVI   RECORD,C' '             Blank
+         MVC   RECORD+1(L'RECORD-1),RECORD   record
+         MVC   RECORD(08),=C'-REP ALL' Move -REP ALL card
+         BAL   R14,UT5PUT              Write record
+LIBRARD  L     R3,COMWSTRT             1st record in workspace
+         L     R5,COMMLAST             Last record in workspace
+         LA    R5,87(,R5)              Adjust offset
+         LA    R4,NEXTENT              Length entry of workspace (88)
+LIBRA07  DS    0H
+         USING WORKSPCE,R3             Address workspace record
+         TM    WORKFLGS,$INSERTD       Inserted line with no data?
+         BO    LIBRA08                 Yes: skip that line
+         MVC   RECORD,WORKDATA         Move record below line    @rpa01
+         BAL   R14,UT5PUT              Write workspace line
+         DROP  R3
+LIBRA08  DS    0H
+         BXLE  R3,R4,LIBRA07           Write the complete workspace
+LIBREMOD DS    0H
+         MVI   RECORD,C' '             Blank
+         MVC   RECORD+1(L'RECORD-1),RECORD   record
+         MVC   RECORD(5),=C'-EMOD'     -EMOD card
+         BAL   R14,UT5PUT              Write on file
+         MVC   RECORD(5),=C'-END '     -END card
+         BAL   R14,UT5PUT              Write card
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFUT5,MF=(E,COMCLS)
+         FREEPOOL RPFUT5
+         MVC   BLDLLIB(4),=X'0001000E' 1 entry of 14 bytes
+         MVC   BLDLNAME,LIBRNAME       Name of LIBRARIAN program
+         BLDL  0,BLDLLIB
+         LTR   R15,R15                 Test if LIBRARIAN is installed
+         BNZ   ERROR97                 No: not installed
+         RPFSA24                       Switch to amode 24        @rpa01
+         LINK  EPLOC=LIBRNAME,PARAM=(LIBPARM,DDNAMES),VL=1
+         RPFSA31                       Restore addressing mode   @rpa01
+         MVC   COMMMOD,MODULE          LIB module into RPFCOMM
+         MVC   COMMSTR,BUFMSTR         Master file DSN into RPFCOMM
+         MVC   COMMSVOL,MSTRVOL        Master file Volume into RPFCOMM
+LINKBRO  DS    0H
+         MVC   COMMPRM(8),=CL8'RPFPRINT' Move DDNAME of LIBR output
+         RPFSA24                       Switch to amode 24        @rpa01
+         LA    R1,PARMLST              Address of A(RPFCOMM)
+         LINK  EP=RPFBRO                   LINK TO BROWSE        @rpa01
+         RPFSA31                       Restore addressing mode   @rpa01
+         SR    R15,R15                 Return code 0
+         B     RETURN
+ERROR97  DS    0H                      LINK erret address
+         LA    R15,4                   Rc=4, Librarian not installed
+         B     RETURN                  Exit at once
+ERROR99  MVC   MSG2,ERR5TXT            Msg: Alloc error work DS
+         TPUT  SCR2TXT,SCR2LEN,FULLSCR WRITE SCREEN
+         LA    R0,297                  Length
+         LA    R1,COMMSCR              Area address
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LA    R15,12                  Rc=12, alloc workds failed, exit
+         B     RETURN
+UT5PUT   DS    0H
+         LR    R7,R14                  Save return register
+         RPFSA24                       Enter amode 24
+         PUT   RPFUT5,RECORD           Write record
+         RPFSA31                       Restore addressing mode   @rpa01
+         BR    R7                      Return
+EXIT     EQU   *
+         LA    R15,8                   Rc=8, Exit entered by user
+RETURN   DS    0H
+         LR    R3,R15                  Save return code
+         BAL   R14,FREE                Free all data sets
+         LR    R2,R13                  Our working storage
+         L     R13,4(,R13)             Load caller's save area
+         FREEMAIN R,LV=WORKL,A=(2)     Release working storage
+         LR    R15,R3                  Restore return code
+         RETURN (14,12),RC=(15)        Return
+*
+FREE     DS    0H
+         ST    R14,R14FREE             Save register 14
+         XC    RPFD18,RPFD18           Clear unallocation parm block
+         LA    R1,RPFD18               Point to unallocation parm blk
+         USING DAPB18,R1               Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'MASTLIB'   DDNAME to unallocate
+         MVC   DA18MNM(8),=CL8' '      Provide no member name
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm blk
+         MVC   DA18DDN,=CL8'RPFUT1'    DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm blk
+         MVC   DA18DDN,=CL8'RPFUT2'    DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm blk
+         MVC   DA18DDN,=CL8'RPFUT3'    DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm blk
+         MVC   DA18DDN,=CL8'RPFUT5'    DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm blk
+         MVC   DA18DDN,=CL8'RPFPRINT'  DDNAME to unallocate
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         L     R14,R14FREE             Restore register 14
+         BR    R14                     Return
+         TITLE 'Constants'
+ERR1TXT  DC    CL25'- Data set not in catalog'
+ERR2TXT  DC    CL25'---------- Invalid option'
+ERR3TXT  DC    CL25'--- Allocation error XXXX'
+ERR4TXT  DC    CL25'-- Data set not on volume'
+ERR5TXT  DC    CL25'-- Alloc. error work data'
+ERR6TXT  DC    CL25'----- Userid not in table'
+         PRINT NOGEN
+*
+MDLUT5   DCB   DSORG=PS,LRECL=80,BLKSIZE=3120,RECFM=FB,MACRF=PM,       X
+               DDNAME=RPFUT5
+MDLUT5L  EQU   *-MDLUT5
+         PRINT GEN
+*
+LIBPARM  DS    0H
+PARMLEN  DC    AL2(PARMEND-PARM)
+PARM     DC    C'NJTA,IEX=LBLOG,OEX=ASMINCL' IEX AND OEX ARE USERS
+PARMEND  EQU   *
+OPT      DC    C'-OPT NOLIST,NOEXEC'
+         DS    0H
+UT1DSNL  DC    AL2(8)                  \__ Real length of UT1DSN ___/
+UT1DSN   DC    CL44'&&&&RPFUT1'        /                            \
+UT2DSNL  DC    AL2(8)                  \__ Real length of UT2DSN ___/
+UT2DSN   DC    CL44'&&&&RPFUT2'        /                            \
+UT3DSNL  DC    AL2(8)                  \__ Real length of UT3DSN ___/
+UT3DSN   DC    CL44'&&&&RPFUT3'        /                            \
+UT5DSNL  DC    AL2(8)                  \__ Real length of UT5DSN ___/
+UT5DSN   DC    CL44'&&&&RPFUT5'        /                            \
+PRTDSNL  DC    AL2(10)                 \__ Real length of PRTDSN ___/
+PRTDSN   DC    CL44'&&&&RPFPRINT'      /                            \
+LIBRNAME DC    CL8'LIBRARIA'
+         TITLE 'DDNAME LIST FOR LIBRARIAN'
+DDNAMES  DS    0H
+         DC    AL2(DDNSTOP-DDNSTRT)
+DDNSTRT  EQU   *
+         DC    XL8'00'                  SYSLIN entry
+         DC    XL8'00'                  EMPTY entry (SYSLMOD member)
+         DC    XL8'00'                  EMPTY entry (SYSLMOD)
+         DC    XL8'00'                  SYSLIB
+         DC    CL8'RPFUT5'              SYSIN
+         DC    CL8'RPFPRINT'            SYSPRINT
+         DC    CL8'RPFPUNCH'            SYSPUNCH
+         DC    CL8'RPFUT1'              SYSAF01
+         DC    CL8'RPFUT2'              SYSAF02
+         DC    CL8'RPFUT3'              SYSAF03
+         DC    XL8'00'
+         DC    XL8'00'
+         DC    XL8'00'
+         DC    XL8'00'
+         DC    XL8'00'
+         DC    XL8'00'
+         DC    CL8'OSJOB'               OSJOB
+         DC    CL8'INDEX'               INDEX
+         DC    CL8'LIST'                LIST FILE
+         DC    CL8'MASTER'              INDEX
+DDNSTOP  EQU   *
+         LTORG ,                                                 @rpa01
+         DROP
+         TITLE 'LIBRARIAN update screen'
+SCREENS  CSECT
+SCR2TXTF DC    X'27'                 Escape character for TPUT FULLSCR
+SCR2TXT  DC    X'00C21100001DF8'     EW or EWA - r1,c1
+         DC    CL54'RPF LIBRARIAN update menu -------------------------X
+               ---'
+R1C56    DC    X'110000'               r01,c56+
+MSG2     DC    CL25'-------------------------' Message area init(-)
+R2C1     DC    X'110000',X'1DF8',C'Option ===>',X'1D4013'
+         DC    X'001DF0'
+*
+R4C4     DC    X'110000',AL3(WHITE),C'1  ',AL3(TURQ)
+         DC    CL13'ADD'
+         DC    AL3(GREEN),C'Add a LIBRARIAN module'
+*
+R5C4     DC    X'110000',AL3(WHITE),C'2  ',AL3(TURQ)
+         DC    CL13'REPLACE'
+         DC    AL3(GREEN),C'Replace a LIBRARIAN module'
+*
+R6C4     DC    X'110000',AL3(WHITE),C'3  ',AL3(TURQ)
+         DC    CL13'DELETE'
+         DC    AL3(GREEN),C'Delete a LIBRARIAN module'
+*
+R9C1     DC    X'114A401DF5',AL3(TURQ)
+S2DESC   DC    C'DESC= ',X'1DC9',AL3(RED)
+SCR2DESC DC    CL30' ',X'1DF0'         Description field
+*
+R10C1    DC    X'114B501DF5',AL3(TURQ)
+S2PGMR   DC    C'PGMR= ',X'1DC9',AL3(RED)
+SCR2PGMR DC    CL15' ',X'1DF0'         PGMR field
+*
+R11C1    DC    X'114C601DF5',AL3(TURQ)
+S2LANG   DC    C'LANG= ',X'1DC9'
+SCR2LANG DC    CL3' ',X'1DF0'          LANG field
+*
+R13C2    DC    X'110000',AL3(YELLOW)                  R13,C02
+         DC    C'Master File information:'
+*
+R15C1    DC    X'11D1601DF5',AL3(TURQ)                R15,C01
+S2MOD    DC    C'Module      ='
+         DC    X'1DC9'
+         DC    AL3(RED)
+SCR2MEM  DC    CL8' ',X'1DF0'
+*
+R16C1    DC    X'11D2F01DF5',AL3(TURQ)                R16,C01
+S2MSTR   DC    C'Master File ='
+         DC    X'1DC9'
+         DC    AL3(RED)
+SCR2DSN  DC    CL46' ',X'1DF0'         DSName of master file
+*
+R17C1    DC    X'11D4401DF5',AL3(TURQ)                R17,C01
+S2VOL    DC    C'Volume      ='
+         DC    X'1DC9'
+         DC    AL3(RED)
+SCR2VOL  DC    CL6' ',X'1DF0',AL3(TURQ)
+*
+RLASTC1  DC    X'110000',AL3(TURQ)
+         DC    C' Hit',AL3(WHITE),C' PF03/PF15',AL3(TURQ)
+         DC    C' to return.'
+SCR2LEN  EQU   *-SCR2TXT               Length of screen
+SCR2LENF EQU   *-SCR2TXTF              Length of screen TPUT FULLSCR
+SCREENSL EQU   *-SCREENS               Length of entire CSECT
+*
+         COPY  CALLTS
+*
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+*
+         TITLE 'Working storage'
+WORKAREA DSECT                         Our working storage
+SAVE     DS    18F                     Our save area
+DBW      DS    D                       Workfield RCTOSBA
+SBAR0R1  DS    D                       Workfield RCTOSBA
+R12TS    DS    F                       Save register 12 CALLTS
+R14FREE  DS    F                       Save register 14 FREE
+R14TS    DS    F                       Save register 14 CALLTS
+PARMLST  DS    F                       Address of RPFCOMM
+PARMFLD  DS    3F                      3 parameters for DSNPARS
+CAMLST   DS    4F                      For LOCATE and OBTAIN
+RPFDAPL  DS    5F                      DAIR parameter list
+ECB      DS    F                       An Event control block
+RPFD08   DS    CL84                    IKJDAIR entry 08, allocation
+RPFD18   DS    CL40                    IKJDAIR entry 18, unallocation
+         DS    0F
+BLDLLIB  DS    F                       BLDL librarian module
+BLDLNAME DS    CL8
+         DC    XL6'00'                 TTRKZC                      @rp1
+SCRN     DS    CL(SCREENSL)            Screen area in dynamic area
+RPFUT5   DS    CL(MDLUT5L)             RPFUT5 DCB
+*
+LOCAREA  DS    CL6
+LOCVOL   DS    CL6
+         DS    CL253
+DSCB1    DS    CL140
+*                                      'NOALLOC'
+BUFFER   DS    CL187                   Buffer, input area
+*
+OUTPBUF  DS    0CL109                  Formatted output area
+COMMAND  DS    C                       Option in screen
+MSTRFIL  DS    AL2                     \_ Real length of MSTRFILE __/
+MSTRFILE DS    CL44                    /  Contains Masterfile DSN   \
+MODULE   DS    CL8                     Contains LIB module after TGET
+MSTRVOL  DS    CL6                     Contains LIB volume
+DESC     DS    CL30                    Contains DESC field
+PGMR     DS    CL15                    Contains PGMR field
+LANG     DS    CL3                     Contains LANG field
+BUFMSTR  DS    CL46                    Unparsed Masterfile DSN
+*
+RECORD   DS    CL80
+WORKL    EQU   *-WORKAREA
+         TITLE 'DSECT''s'
+         CVT   DSECT=YES,LIST=NO
+         IKJCPPL
+         IKJDAPL                       DAIR parameter list
+         IKJDAP08                      IKJDAIR allocation parm block
+         IKJDAP18                      IKJDAIR unallocation parm block
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+*
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+         END

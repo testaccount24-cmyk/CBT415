@@ -1,0 +1,103 @@
+         MACRO
+&NAME    RPFSORT &TAB,&LEN1,&LEN2,&ENTRY,&START,&TYPE=C,&ORDER=A
+         LCLC  &L
+&L       SETC  'L&SYSNDX'
+.* This MACRO sorts a table in storage and used in the RPF
+.* modules of Skybird Systems.
+.* TAB = Address of the table in storage (the EDIT workspace).
+.* LEN1 = Lenthe of 1 entry in the table.
+.* LEN2 = Length of the sort field.
+.* ENTRY = Number of entries in the table (the EDIT workspace).
+.* START = Offset sort field in the table entry
+.* TYPE = Type of sort (C=chacacter, P=packed decimal)
+.* ORDER = A or D (A=ascending, D=descending order)
+         AIF   ('&TAB' EQ '').FOUTADR
+         AIF   ('&LEN1' EQ '').FOUTL1
+         AIF   ('&LEN2' EQ '').FOUTL2
+         AIF   ('&ENTRY' EQ '').FOUTENT
+         AIF   ('&ORDER' EQ 'A').TEST1
+         AIF   ('&ORDER' EQ 'D').TEST1
+.FOUTOR  MNOTE 14,'***** ORDER SHOULD BE A (ASCENDING) OR D (DESCENDING*
+               )'
+         AGO   .FOUT
+.TEST1   ANOP
+         AIF   ('&TYPE' EQ 'C').CHAR
+         AIF   ('&TYPE' EQ 'P').CHAR
+         MNOTE 14,'***** TYPE NOT ''C'' OR ''P'''
+.FOUT    MNOTE *,'***** NO MACRO EXPANSION.'
+         MEXIT
+.FOUTADR MNOTE 14,'***** WRONG TABLE ADDRESS.'
+         AGO   .FOUT
+.FOUTL1  MNOTE 14,'***** WRONG LENGTH 1 (TABLE ENTRY).'
+         AGO   .FOUT
+.FOUTL2  MNOTE 14,'PPPPP WRONG LENGTH 2 (LENGTH SORT FIELD)'.
+         AGO   .FOUT
+.FOUTENT MNOTE 14,'***** WRONG NUMBER OF ENTRIES.'
+         AGO   .FOUT
+.*
+.* OPERANDS ARE GOOD.
+.*
+.*
+.CHAR    ANOP
+         CNOP  0,4                     Align on fullword boundary
+&NAME    STM   3,4,SORTLA              Save registers 3 and 4
+         MNOTE 0,'**** DEFINE FIELD SORTLA (2 FULLWORDS) ****'
+         MNOTE 0,'**** DEFINE FIELD SORTLF (1 FULLWORD) *****'
+         MNOTE 0,'**** DEFINE FIELD SORTLB (1 FULLWORD) *****'
+         MNOTE 0,'**** DEFINE FIELD SORTLD (1 FULLWORD) *****'
+         AIF   ('&TAB'(1,1) EQ '(').TABREG1
+         LA    3,&TAB                  Start of table
+         AGO   .STORE3
+.TABREG1 ANOP
+         LR    3,&TAB(1)               Start of table
+.STORE3  ANOP
+         ST    3,SORTLB                Save start address table to sort
+         AIF   ('&ENTRY'(1,1) EQ '(').ENTRREG
+         MVC   SORTLD,*+10             Total length of table to sort
+         B     &L.E
+         DC    A((&ENTRY-1)*&LEN1)     # entries-1 * length of entry
+         AGO   .ADD3
+.ENTRREG ANOP
+         BCTR  &ENTRY(1),0
+         MH    &ENTRY(1),=H'&LEN1'     Total length of table to sort
+         ST    &ENTRY(1),SORTLD        # entries-1 * length of entry
+.ADD3    ANOP
+&L.E     L     4,SORTLD                Table length - length 1 entry
+         LA    3,0(3,4)                End address of sort
+         ST    3,SORTLF                Save for later use
+         AIF   ('&TAB'(1,1) EQ '(').TABREG2
+         LA    3,&TAB                  Start of table
+         AGO   .LOAD4
+.TABREG2 ANOP
+         LR    3,&TAB(1)               Start of table (EDIT workspace)
+.LOAD4   ANOP
+         LA    4,&LEN1.(,3)            Next entry in table
+         AIF   ('&TYPE' EQ 'P').PACKED
+&L.H     CLC   &START.(&LEN2,3),&START.(4)
+         AGO   .CONT
+.PACKED  ANOP
+&L.H     CP    &START.(&LEN2,3),&START.(&LEN2,4)
+.CONT    ANOP
+         AIF   ('&ORDER' EQ 'D').BR1
+         BH    &L.G
+         AGO   .BR2
+.BR1     ANOP
+         BL    &L.G
+.BR2     ANOP
+         LA    3,&LEN1.(,3)            Next entry
+         LA    4,&LEN1.(,4)                ,,
+         CL    3,SORTLF                Test against end of table
+         BE    &L.I                    Eq: end of sort
+         B     &L.H                    Not eq: compare
+&L.G     XC    0(&LEN1,3),0(4)         Swap
+         XC    0(&LEN1,4),0(3)             the
+         XC    0(&LEN1,3),0(4)                fields
+         SL    3,=F'&LEN1'             Previous
+         SL    4,=F'&LEN1'                     entry  (descending sort)
+         CL    3,SORTLB
+         BNL   &L.H
+         LA    3,&LEN1.(,3)            Next entry
+         LA    4,&LEN1.(,4)                ,,
+         B     &L.H
+&L.I     LM    3,4,SORTLA              Restore register 3 and 4
+         MEND

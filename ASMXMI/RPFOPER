@@ -1,0 +1,640 @@
+RPFOPER  TITLE 'DISPLAY RUNNING TASKS AND UCBS IN THE SYSTEM'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:       RPFOPER.                                       *
+*                                                                     *
+*        Attributes:   RENT, REUS.                                    *
+*                                                                     *
+*        Function:     Display active tasks in the system             *
+*                      You can display all the tasks,                 *
+*                      The time sharing users,                        *
+*                      The startable tasks,                           *
+*                      The jobs and ...                               *
+*                      The devices and volume serials and             *
+*                      You can display a task by ASID                 *
+*                      With HELP you get an overview of the           *
+*                      possible commands.                             *
+*                      END or E terminates the session.               *
+*                                                                     *
+*        Registers:    Register 12 is the base register.              *
+*                      Register 13 points to the working storage      *
+*                      within the 1st 72 bytes the save-area.         *
+*                      Register 11 points to the parm (maybe RPFCOMM) *
+*                                                                     *
+*        Notes:        Include SYS1.(A)MODGEN in SYSLIB of assembly   *
+*                                                                     *
+*                      Set &OS390 in member SYSVARS to 1 to use       *
+*                      the UCBSCAN macro in MVS/ESA 4 and above.      *
+*                                                                     *
+*                      Set &MVSXA in member SYSVARS to 1 to use       *
+*                      the IOSVSUCB routine to scan the UCB's for     *
+*                      MVS/XA to MVS/ESA 3.                           *
+*                                                                     *
+*                      Set &MVSXA and &OS390 to 0 to lookup the UCB's *
+*                      via the UCB lookup table in older operating    *
+*                      systems like MVS38J and MVS380.                *
+*                                                                     *
+*                      Set &SVS to 1 to bypass the J= and A= commands *
+*                                                                     *
+*        Change log:                                                  *
+*        Dec 19,2018 RPr: Include Amode 31 and Rmode 24          @rpa01
+*        Feb 04,2019 RPr: Use 4 bytes devic addresses in D UCB        *
+*        Jun 16,2019 RPr: Support RPFOPER for all operating systems.  *
+*        Apr 02,2020 RPr: Fix 'invalid command' loop if RPFOPER runs  *
+*                         stand alone.                                *
+*        Oct 01,2021 RPr: RPFOPER made re-entrant and re-usable.      *
+*        Jun 04,2022 RPr: D UCB=DDD and D UCB=DDDD both supported and *
+*                         type of DASD displayed (e.g. 3390).         *
+*        Oct 24,2022 RPr: Add MVS/XA support with IOSVSUCB routine.   *
+*                                                                     *
+*-------------------------------------------(C)-2025 Skybird Systems--*
+         SPACE 2
+RPFOPER  CSECT
+RPFOPER  AMODE 31                      *                         @rpa01
+RPFOPER  RMODE 24                      *                         @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFOPER,R12             Provide addressability
+         L     R11,0(,R1)              Pick-up parameter
+         GETMAIN R,LV=WORKL            Obtain dynamic working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(0,R13)             Forward pointer
+         LR    R13,R1                  New save area
+         B     START                   Branch around constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+         TITLE 'INITIALIZATION ROUTINE'
+START    DS    0H
+         USING WORKAREA,R13            Make working storage addressable
+         MVI   UCB1TXT,C' '            Blank the
+         MVC   UCB1TXT+1(79),UCB1TXT
+         MVC   UCB2TXT,UCB1TXT                  UCB
+         MVC   UCB3TXT,UCB1TXT                     fields
+         MVC   MSG3TXT,UCB1TXT         Blank msg3
+         MVI   SW1,0                   Init ..
+         MVI   SW2,0                        flags
+         MVI   SW3,0
+         MVC   MSG3JID,=CL7'JOBID= '
+         MVC   MSG3ASID,=CL8', ASID= '
+         MVC   MSG3DPR,=CL7'DPRTY: '
+         MVC   MSG6TXT(MSG6LEN),MSG6MDL Copy message to dynamic area
+START17  DS    0H
+*
+         AIF   (&SVS).NOLNO
+         STLINENO LINE=1,MODE=OFF      Clear screen, reset cursor
+.NOLNO   ANOP
+         LA    R1,MSG1TXT              Message
+         LA    R0,MSG1LEN              Length
+         TPUT  (1),(0),R               Write the 2 ...
+         LA    R1,MSG2TXT              Message
+         LA    R0,MSG2LEN              Length
+         TPUT  (1),(0),R                       ... headers
+GET1     DS    0H
+         LA    R1,BUFFER               Area address
+         LA    R0,L'BUFFER             Length
+         ICM   R1,8,=B'10000000'       Indicate TGET
+         TGET  (1),(0),R               Read the screen
+         CLI   BUFFER,X'6E'            Reshow code?
+         BE    GET1                    Yes: repeat initial message
+         OC    BUFFER(20),=CL20' '
+         CLC   BUFFER(3),=C'END'
+         BE    RETURN
+         CLC   BUFFER(6),=C'D VOL='    Display UCB of Volume serial?
+         BE    CHECK01                 Yes: go check it
+         CLC   BUFFER(6),=C'D UCB='    Display UCB from unit address?
+         BE    CHECK02                 Yes: go check it
+         CLC   BUFFER(4),=C'HELP'      Help needed?
+         BE    HELP00                  Yes: carry
+         CLI   BUFFER,C'E'             Alias of END
+         BE    RETURN
+         CLC   BUFFER(2),=C'K '        Clear screen?
+         AIF   (&SVS).SVS1
+         BNE   MAIN02
+         AGO   .NOSVS1
+.SVS1    ANOP
+         BNE   MAIN01
+.NOSVS1  ANOP
+         B     START17
+HELP00   DS    0H
+         LA    R3,MSG7#                # messages
+         LA    R7,MSG7TXT              First message
+HELP01   DS    0H
+         LR    R1,R7                   Duplicate area address
+         LA    R0,80                   Length
+         TPUT  (1),(0),R               Help text line by line
+         LA    R7,80(,R7)              Next message
+         BCT   R3,HELP01               Loop until all messages done
+         B     GET1
+CHECK01  DS    0H                      Check volume serial
+         MVC   VOLSER(6),BUFFER+6      Move volume serial
+         MVC   DEVADR,=CL6' '          Clear device address
+         B     FINDUCB                 Try to find UCB
+CHECK02  DS    0H                      Check device address
+         CLI   BUFFER+9,C' '           3 bytes UCB address?
+         BNE   CHECK02A                No: good
+         MVC   DEVADR+1(3),BUFFER+6    Move three bytes and .....
+         MVI   DEVADR,C'0'             ) prefix with a '0'
+         B     CHECK02B                Ready
+CHECK02A MVC   DEVADR,BUFFER+6         Move device address (4 bytes)
+CHECK02B MVC   VOLSER(6),=CL6' '       Clear volume serial field
+         B     FINDUCB                 Try to find UCB
+MAIN01   LA    R1,MSG5TXT              Message address
+         LA    R0,MSG5LEN              Length
+         TPUT  (1),(0),R               Msg: Invalid command entered
+         B     GET1
+MAIN02   DS    0H
+         MVI   SW1,X'00'
+*
+         AIF   (&SVS).NOSVS2
+         L     R3,16                   -> CVT
+         USING CVT,R3
+         L     R4,CVTASVT              -> ASVT
+         DROP  R3
+         USING ASVT,R4
+         L     R6,ASVTMAXU             Maximum of address spaces
+MAIN03   BAL   R9,ASCBROUT             Get ASCB info
+         CLI   SW2,X'FF'               ASCB valid?
+         BE    MAIN11                  No: next ASCB
+         CLC   BUFFER(5),=C'J=ALL'     All tasks except Initiators?
+         BNE   MAIN04                  No: branch
+         CLC   JOBID(8),=C'INIT    '   Is this ASID of an Initiator?
+         BNE   MAIN09                  No: carry
+         B     MAIN11                  No display of initiators
+MAIN04   CLC   BUFFER(2),=C'J='
+         BNE   MAIN05
+         CLC   BUFFER+2(8),JOBID
+         BNE   MAIN11
+         B     MAIN09
+MAIN05   CLC   BUFFER(5),=C'A=ALL'
+         BE    MAIN09
+         CLC   BUFFER(5),=C'A=STC'     Display started tasks only?
+         BNE   MAIN05A                 No: test TSO users
+         TM    SW3,X'01'               No-initiator ? (---> STC)
+         BNO   MAIN11                  No: next ASCB
+         TM    SW3,X'04'               TSO user?
+         BO    MAIN11
+         B     MAIN09                  Yes: print
+MAIN05A  CLC   BUFFER(5),=C'A=TSU'     Display TSO users only?
+         BNE   MAIN06                  No: test if JOBs
+         TM    SW3,X'04'               TSO user?      (---> TSU)
+         BNO   MAIN11                  No: next ASCB
+         B     MAIN09                  Yes: print
+MAIN06   CLC   BUFFER(5),=C'A=JOB'     Display JOBS only?
+         BNE   MAIN07
+         TM    SW3,X'02'               Initiator ? (---> JOB)
+         BNO   MAIN11                  No: next ASCB
+         B     MAIN09                  YES: PRINT
+MAIN07   CLC   BUFFER(2),=C'A='        Asks for an ASID with number?
+         BNE   MAIN01                  If not, issue an error message
+*---------------------------------------------------------------------*
+*
+* ASID is in hex, maybe with trailing blanks instead of leading zeroes.
+* If there are less than 4 characters entered, make it 4.
+*
+*---------------------------------------------------------------------*
+CLI0001  CLI   BUFFER+5,C' '           Trailing blank?
+         BNE   NOMORE                  No, finished shifting
+         MVC   WORK+1(3),BUFFER+2  First 3 or 4 byteS, so trailing not.
+         MVI   WORK,C'0'               Place a leading zero in front
+         MVC   BUFFER+2(4),WORK        And set back into buffer
+         B     CLI0001                 Loop until all shifted
+NOMORE   CLC   BUFFER+2(4),ASID        Is this the ASID we need?
+         BNE   MAIN11                  If not, go get next ASCB
+         B     MAIN09                  If it is, go display it
+MAIN09   BAL   R9,WRITE
+         MVI   SW1,X'FF'
+MAIN11   LA    R4,4(,R4)
+         BCT   R6,MAIN03               Loop until all done
+         CLC   BUFFER+2(3),=C'ALL'     A=ALL command given?
+         BE    MAIN13
+         CLI   SW1,X'FF'
+         BE    MAIN13
+         MVC   FUNCTION(10),BUFFER
+         LA    R1,MSG6TXT              Message address
+         LA    R0,MSG6LEN              Length
+         TPUT  (1),(0),R               Msg: xxx not found on ASCB chain
+MAIN13   B     GET1
+         TITLE 'ASCB SEARCH ROUTINE'
+ASCBROUT MVI   SW2,X'00'
+         USING ASCB,R3
+         L     R3,ASVTENTY             -> ASCB or zero
+         LTR   R3,R3                   Is ASCB free or assigned?
+         BM    ASCB03                  Branch if free
+         L     R5,ASCBJBNI             ->JOBNAME for initiated programs
+         MVI   SW3,X'02'               Set 'JOB' flag on
+         LTR   R5,R5                   No initiated JOB's on chain?
+         BNZ   ASCB01                  Process if present
+         L     R5,ASCBJBNS             ->JOBNAME for Start/Mount/Logon
+         MVI   SW3,X'01'               Set 'STC' flag on
+ASCB01   MVC   JOBID,0(R5)
+         MVC   BINWORK,36(R3)          ASID
+         SYCONVHX IN=BINWORK,OUT=ASID,L=2,RENT=YES convert to ASCII
+         MVI   ASID+4,C' '
+         MVC   DPRTY(1),ASCBDP         Dispatching prioriry
+         MVC   SWAPPED(1),ASCBRCTF     ASCBRCTF
+         TM    ASCBRCTF,ASCBTOFF       No Timing?               @rp9610
+         BZ    ASCB02
+         OI    SW3,X'80'               Turn on TIMING bit
+ASCB02   DS    0H
+         L     R2,ASCBOUCB             ASCB user control block  @rp9610
+         USING OUCB,R2
+         TM    OUCBSFL,OUCBNSW         Address space non-swap?
+         BZ    ASCB05                  No: carry
+         DROP  R2
+         OI    SW3,X'40'               Turn on non-swap flag
+         B     ASCB05
+ASCB03   MVI   SW2,X'FF'               Mark ASCB not usable
+         B     ASCB05A
+ASCB05   DS    0H
+         CLC   ASCBTSB,=F'0'           TSB pointer filled in?
+         BE    ASCB05A                 No, carry on
+         OI    SW3,X'04'               Set TSO flag on
+ASCB05A  BR    R9                      Return to caller
+         DROP  R3,R4                   ASCB and ASVT
+*
+         TITLE 'Display on terminal, entry via BAL R9,WRITE'
+WRITE    CLI   ASID,C'N'
+         BE    WRITE09
+         SYCONVHX IN=BINWORK,OUT=ASID,L=2,RENT=YES convert to ASCII
+         MVI   ASID+4,C' '
+         TM    SW3,X'02'               Initiator ? (---> JOB)
+         BZ    WRITE01
+         MVC   STATUS,=C'JOB'
+         B     WRITE05
+WRITE01  TM    SW3,X'01'               No-initiator ? (--->STC)
+         BZ    WRITE03
+         MVC   STATUS,=C'STC'          Default is's s STC
+         TM    SW3,X'04'               TSO user?
+         BNO   BRW05                   No: branch around
+         MVC   STATUS,=C'TSU'          Indicate a TSO user
+BRW05    B     WRITE05
+WRITE03  MVC   STATUS,=C'N/A'
+WRITE05  TM    SW3,X'80'               No timing?
+         BZ    WRITE07
+         MVC   MSG1,=C'N-TIMING'
+WRITE07  TM    SW3,X'40'               Non swappable?
+         BZ    WRITE09
+         MVC   MSG2,=C'N-SWAP'
+WRITE09  DS    0H
+         SYCONVHX IN=DPRTY,OUT=DOUBLE,L=1,RENT=YES
+         MVC   TXT3(2),DOUBLE
+         TM    SWAPPED,X'04'
+         BZ    NOTSWAPD
+         MVC   SWPDOUT(12),=CL12'Swapped out'
+         B     TPUTMSG3
+NOTSWAPD MVC   SWPDOUT(12),=CL12' '
+*
+TPUTMSG3 DS    0H
+         LA    R1,MSG3TXT              Message
+         LA    R0,MSG3LEN              Length
+         TPUT  (1),(0),R               Write detail line
+         XC    JOBID,JOBID
+         XC    ASID,ASID
+         XC    BINWORK,BINWORK
+         XC    STATUS,STATUS
+         XC    MSG1,MSG1
+         XC    MSG2,MSG2
+         XC    SW3,SW3
+         BR    R9
+*
+.NOSVS2  ANOP
+         TITLE 'RETURN TO CALLER'
+RETURN   DS    0H
+         LA    R1,MSG4TXT              Message
+         LA    R0,MSG4LEN              Length
+         TPUT  (1),(0),R               Msg: RPFOPER all functions ...
+         CLC   =C'RPFCOMM',0(R11)      Do we have RPFCOMM?
+         BNE   RETURN2                 No: we run stand alone
+*
+         AIF   (&SVS).NOFS
+         STFSMODE ON,NOEDIT=YES        Turn on Full screen with NO-edit
+.NOFS    ANOP
+RETURN2  DS    0H
+         LR    R3,R13                  Address working storage
+         L     R13,4(,R13)             Load caller's save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release this area
+         RETURN (14,12),RC=0
+         TITLE 'FIND UCB ROUTINE'
+FINDUCB  DS    0H
+         L     R3,CVTPTR(,0)           Get CVT address
+         USING CVT,R3                  Get addressability of CVT
+         USING UCBBLK,R4               Get addressability of UCB
+*
+         AIF   (NOT &OS390).NO390
+         XC    UCBWORK(100),UCBWORK    Clear UCB scan work area
+*---------------------------------------------------------------------*
+*                                                                     *
+*        We have an operating system of MVS/ESA 4 or higher.          *
+*        Run through the UCB table with the UCBSCAN macro until       *
+*        the requested device number or volume serial found.          *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+LOOKUP   DS    0H                      Find UCB
+         UCBSCAN COPY,WORKAREA=UCBWORK,UCBAREA=UCBAREA,                X
+               DYNAMIC=YES,DEVCLASS=ALL,RANGE=ALL,MF=(E,SCANLST)
+         LTR   R15,R15                 Last UCB found?
+         BNZ   LOOKERR                 Not zero: end of UCBs reached
+         LA    R4,UCBAREA              Load copy of UCB
+         UCBDEVN DEVN=MYNAME           Move the unit name         @4UCB
+         CLC   VOLSER,=CL6' '          Search in volser or dev. number
+         BE    DEVAD                   Branch if not on VOLSER
+         CLC   UCBVOLI,VOLSER          Is this the VOLSER we need?
+         BE    UCBFOUND                Yes: branch
+         B     LOOKUP                  Go get next UCB
+.NO390   ANOP
+         AIF   (NOT &MVSXA).NOXA
+*---------------------------------------------------------------------*
+*                                                                     *
+*        We are using the MVS/XA operation system.                    *
+*        Use the IOSVSUCB service routine to scan through the UCB's.  *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         XC    UCBWORK(100),UCBWORK    Clear UCB workarea        @MVSXA
+         MVI   DEVCLASS,0              Search all device classes @MVSXA
+         LA    R1,UCBWORK              Pickup address            @MVSXA
+         ST    R1,PARMWA               First parameter           @MVSXA
+         LA    R1,DEVCLASS             Pickup address            @MVSXA
+         ST    R1,PARMWA+4             Second parameter          @MVSXA
+         LA    R1,UCBADDR              Pickup address 3rd parm   @MVSXA
+         ST    R1,PARMWA+8             Third parameter           @MVSXA
+         OI    PARMWA+8,X'80'          and last parameter        @MVSXA
+LOOKUP   DS    0H                      Find UCB                  @MVSXA
+         LA    R1,PARMWA               3 word parameter list     @MVSXA
+         L     R15,CVTUCBSC            IOSVSUCB routine          @MVSXA
+         BALR  R14,R15                 Invoke IOSVSUCB           @MVSXA
+         LTR   R15,R15                 Search exhausted?         @MVSXA
+         BNZ   LOOKERR                 Yes: UCB not found        @MVSXA
+         L     R4,UCBADDR              Copy of UCB in R4         @MVSXA
+         MVC   MYNAME+1(3),UCBNAME     Device address            @MVSXA
+         MVI   MYNAME,C'0'             Make if 4 bytes           @MVSXA
+         CLC   VOLSER,=CL6' '          D VOL= command            @MVSXA
+         BE    DEVAD                   Branch if not on VOLSER   @MVSXA
+         CLC   UCBVOLI,VOLSER          Is this the VOLSER we need@MVSXA
+         BE    UCBFOUND                Yes: found                @MVSXA
+         B     LOOKUP                  Go get next UCB           @MVSXA
+.NOXA    ANOP
+         AIF   (&OS390).S390
+         AIF   (&MVSXA).XA
+*---------------------------------------------------------------------*
+*                                                                     *
+*        We are dealing with an operating system like MVS which       *
+*        does not support UCBSCAN. Run through the UCB Lookup table   *
+*        until the UCB of the requested unit address or volume        *
+*        serial is found.                                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         L     R2,CVTILK2              Point to start of Lookup table
+LOOKUP   DS    0H                      Find UCB
+         CLC   0(2,R2),=X'FFFF'        End of UCB lookup table?
+         BE    LOOKERR                 Yes: UCB not found
+         CLC   0(2,R2),=X'0000'        Null entry?
+         BE    NEXTUCB                 Yes: skip this entry
+         XR    R4,R4                   Clear register
+         ICM   R4,3,0(R2)              # halfwords in register 4
+         MVC   MYNAME+1(3),UCBNAME
+         MVI   MYNAME,C'0'             Make if 4 byte for future use
+         CLC   VOLSER,=CL6' '          Volume filled in?
+         BE    DEVAD                   No: compare with device addr.
+         CLC   SRTEVOLI,VOLSER         Is this the VOLSER we need?
+         BE    UCBFOUND                Yes: carry on
+         B     NEXTUCB                 Go get next UCB
+.S390    ANOP
+.XA      ANOP
+DEVAD    CLC   MYNAME,DEVADR           Device number found?
+         BE    UCBFOUND                Branch if yes
+NEXTUCB  DS    0H
+         LA    R2,2(,R2)               Next entry in LOOKUP table
+         B     LOOKUP                  Search for next UCB
+*
+UCBFOUND DS    0H                      Format the output before TPUT
+*
+* The UCB or VOLSER is found, display the UCB lines on the terminal
+* The result looks like below:
+*
+* AAAAAA:    XXXXXXXX XXXXXXXX XXXXXXXX XXXXXXXX    OFFLINE/ONLINE
+*            XXXXXXXX XXXXXXXX XXXXXXXX XXXXXXXX    DEV= DDDD
+* QQQQQQQQ   XXXXXXXX XXXXXXXX XXXXXXXX XXXXXXXX    VOL= VVVVVV
+*
+*  Where the fields mean the following:
+*  AAAAAA Is the storage address where we found this UCB (in hex).
+*    DDDD Is the device address in EBCDIC from the UCB.
+*  VVVVVV is the volume serial number from the ucb in EBCDIC
+*  XXXXXXXX Is the hexadecimal representation of the contents of
+*           the UCB.
+*  QQQQQQQQ Is the device type of this UCB.
+*
+         MVC   UCB2TXT+60(4),MYNAME    Device address to be displayed
+         MVC   UCB3TXT+60(6),UCBVOLI   VOLSER to buffer
+         TR    UCB3TXT+60(6),VALIDCH   Remove unprintable characters
+         MVC   UCB2TXT+55(4),=C'DEV='
+         MVC   UCB3TXT+55(4),=C'VOL='
+         MVC   UCB1TXT+55(7),=CL7'OFFLINE' DEFAULT
+         TM    UCBSTAT,UCBONLI         Device online?
+         BNO   OFFL                    No: offline
+         MVC   UCB1TXT+55(7),=C'ONLINE '   Device is online
+OFFL     DS    0H
+         LA    R1,DEVTYPE
+         L     R2,#DEVTYPS             There are '#DEVTYPS' devicetypes
+CLCDEVT  CLC   UCBTBYT3,0(R1)          Device type in table?
+         BE    MVCDEVT                 Yes: found
+         LA    R1,9(,R1)               Next entry in device type table
+         BCT   R2,CLCDEVT
+MVCDEVT  MVC   UCB3TXT(8),1(R1)        Move DEVTYPE description into
+         MVC   UCB3TXT+8(4),=CL4' '    And blank rest
+         CLC   =C'DASD',UCB3TXT        Do we have a DASD device?
+         BNE   NODASD                  No: carry
+         LA    R1,DASDTYPE             Dasd types (e.g. 3350 3330 etc.)
+         L     R2,DASD#                # entries in DASDTYPE table
+CLCDASD  CLC   UCBTBYT4,0(R1)          DASD type in table?
+         BE    MVCDASD                 Yes: Dasd type found, move
+         LA    R1,7(,R1)               Point to next entry in table
+         BCT   R2,CLCDASD              Test next entry
+         B     NODASD                  Branch if not found
+MVCDASD  MVC   UCB3TXT+5(6),1(R1)      Move type of DASD
+NODASD   ST    R4,WORK
+         SYCONVHX IN=WORK,OUT=UCB1TXT,L=4,RENT=YES
+         MVI   UCB1TXT+9,C':'
+         LR    R5,R4
+         SYCONVHX IN=(5),OUT=UCB1TXT+13,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB1TXT+22,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB1TXT+31,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB1TXT+40,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB2TXT+13,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB2TXT+22,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB2TXT+31,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB2TXT+40,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB3TXT+13,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB3TXT+22,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB3TXT+31,L=4,RENT=YES
+         LA    R5,4(,R5)               Next 4 bytes in UCB
+         SYCONVHX IN=(5),OUT=UCB3TXT+40,L=4,RENT=YES
+         LA    R2,UCB1TXT              Point to 1st msg
+         LA    R3,UCB1#                Number of messages
+TPUTU    DS    0H
+         LR    R1,R2                   Duplicate area address
+         LA    R0,80                   Length
+         TPUT  (1),(0),R               Write message
+         LA    R2,80(,R2)              Next message
+         BCT   R3,TPUTU                Loop until all done
+         B     GET1                    Read next command
+LOOKERR  DS    0H                      Issue error message
+         LA    R1,UCB9TXT              Message address
+         LA    R0,UCB9LEN              Length
+         TPUT  (1),(0),R               Msg: UCB not found
+         B     GET1                    Next command
+         DROP  R3,R4
+         TITLE 'Constants'
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+MSG1TXT  DC    CL79'RPFOPER V2.0.3  - Version &SYSDATE, &SYSTIME (C)-20X
+               24 Skybird Systems'
+MSG1LEN  EQU   *-MSG1TXT
+MSG2TXT  DC    CL79'RPFOPER: Enter function, ''HELP'' or ''END'''
+MSG2LEN  EQU   *-MSG2TXT
+MSG4TXT  DC    CL79'RPFOPER: All functions completed'
+MSG4LEN  EQU   *-MSG4TXT
+MSG5TXT  DC    CL79'RPFOPER: Invalid command entered'
+MSG5LEN  EQU   *-MSG5TXT
+MSG6MDL  EQU   *
+         DC    CL09'RPFOPER: '
+         DC    CL10' '
+         DC    CL60' - Not found on ASCB chain'
+MSG6LEN  EQU   *-MSG6MDL
+MSG7TXT  DC    CL80'RPFOPER: Available functions are:'
+         AIF   (&SVS).NOJOBS
+    DC    CL80'         J=JOBNAME    (Or J=ALL for all active tasks)'
+    DC    CL80'         A=ASID       (For specified ASID (in hex))  '
+    DC    CL80'         A=JOB        (For all batch jobs)           '
+    DC    CL80'         A=STC        (For all startable tasks)      '
+    DC    CL80'         A=TSU        (For all time sharing users)   '
+    DC    CL80'         A=ALL        (For JOB + STC + TSU)          '
+.NOJOBS  ANOP
+    DC    CL80'         D VOL=VVVVVV (Display UCB with vol VVVVVV)'
+    DC    CL80'         D UCB=DDD(D) (Display UCB with devadr DDDD)'
+    DC    CL80'         END          (Terminate this session)     '
+    DC    CL80'         HELP         (Display this screen)          '
+    DC    CL80'         K            (Clear screen)                 '
+MSG7#    EQU   (*-MSG7TXT)/80
+DEVTYPE  DC    X'04',CL8'CHAR.RDR'
+         DC    X'08',CL8'UNIT REC'
+         DC    X'10',CL8'DISPLAY '
+         DC    X'20',CL8'DASD'
+         DC    X'40',CL8'COMM.DEV'
+         DC    X'80',CL8'TAPE'
+DEVLAST  DC    X'FF',CL8'UNKNOWN'       UNKNOWN, should be last entry
+#DEVTYPS DC    A((DEVLAST-DEVTYPE)/9)   # VALID DEVICE TYPE
+*
+DASDTYPE DC    X'08',CL6'2314'         Type of DASD devices
+         DC    X'09',CL6'3330'
+         DC    X'0A',CL6'3340'
+         DC    X'0B',CL6'3350'
+         DC    X'0C',CL6'3375'
+         DC    X'0D',CL6'3330-1'
+         DC    X'0E',CL6'3380'
+         DC    X'0F',CL6'3390'
+DASD#    EQU   (*-DASDTYPE)/7
+         SPACE 2
+VALIDCH  DC    256C'.'            --------------------------------*
+         ORG   VALIDCH+C'A'       * This is a translate table to  *
+         DC    C'ABCDEFGHI'       * remove invalid characters     *
+         ORG   VALIDCH+C'J'       * from an EBCDIC text to be     *
+         DC    C'JKLMNOPQR'       * displayed. Do not change the  *
+         ORG   VALIDCH+C'S'       * table and/or the sequence of  *
+         DC    C'STUVWXYZ'        * the instructions              *
+         ORG   VALIDCH+C'0'       *                               *
+         DC    C'0123456789'      *                               *
+         ORG   VALIDCH+256        --------------------------------*
+UCB9TXT  DC    C'RPFOPER: UCB not found'
+UCB9LEN  EQU   *-UCB9TXT
+PTRN1    DC    X'402020202120'
+PTRN2    DC    X'4020202020202120'
+         LTORG
+         TITLE 'DSECTS'
+         CVT   DSECT=YES,LIST=NO
+UCBBLK   DSECT
+         IEFUCBOB LIST=NO
+         AIF   (&SVS).NOCBS
+         PRINT NOGEN
+         IHAASCB
+         IHAASVT
+         IRAOUCB
+.NOCBS   ANOP
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F
+DOUBLE   DS    D
+UCBWORK  DS    13D                 @MVSXA/@z/OS workarea
+UCBADDR  DS    F                   @MVSXA gotten UCB address
+PARMWA   DS    3F                  @MVSXA 3 word parm for IOSVSUCB
+WORK     DS    F                   What's in the name
+DEVCLASS DS    X                   @MVSXA DEVCLASS for IOSVSUCB
+DPRTY    DS    X
+SWAPPED  DS    X
+BUFFER   DS    CL80
+MSG3TXT  DS    0CL70
+MSG3JID  DC    CL7'JOBID= '
+JOBID    DS    CL8
+MSG3ASID DC    CL8', ASID= '
+ASID     DS    CL4
+         DS    CL1
+STATUS   DS    CL3
+         DS    CL1
+MSG1     DS    CL8
+         DS    CL1
+MSG2     DS    CL6
+         DS    CL1
+MSG3DPR  DC    CL7'DPRTY: '
+TXT3     DS    CL2
+         DS    C
+SWPDOUT  DS    CL12
+MSG3LEN  EQU   *-MSG3TXT
+MSG6TXT  EQU   *
+         DS    CL9
+FUNCTION DS    CL10
+         DS    CL60
+MSG6LN2  EQU   *-MSG6TXT
+BINWORK  DS    CL2
+         DC    X'00'
+SW1      DC    XL1'00'
+SW2      DC    XL1'00'
+SW3      DC    XL1'00'
+         AIF   (NOT &OS390).NOLST
+SCANLST  UCBSCAN MF=(L,SCANLST1,0D)
+.NOLST   ANOP
+*
+         SPACE 2
+VOLSER   DC    CL6' '              Volume serial D VOL=  command
+DEVADR   DC    CL4' '              Device address or device number
+UCB1TXT  DS    CL80
+UCB2TXT  DS    CL80
+UCB3TXT  DS    CL80
+UCB1#    EQU   (*-UCB1TXT)/80
+CNVHX01  DS    CL15                    Workarea SYCONVHX
+UCBAREA  DS    CL48                    Copied common segment of UCB
+MYNAME   DS    CL4                 UCB name gotten from UCBDEVN   @4UCB
+WORKL    EQU   *-WORKAREA
+         END

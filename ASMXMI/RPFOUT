@@ -1,0 +1,1398 @@
+         PUNCH ' SETCODE AC(1)'
+         TITLE 'RPF Output processor'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFOUT - Option 3.6                           *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFUTIL (option 6)                            *
+*                       RPFEDIT (primary command OUT)                 *
+*                                                                     *
+*        Function:      Present a menu for allocation an output       *
+*                       data set and process:                         *
+*                       L. List status of a job                       *
+*                       D. Purge a job (Delete from SPOOL)            *
+*                       P. Print output of a job in a data set        *
+*                       R. Requeue a job to another output class      *
+*                     ' '. Browse the output of a given Job           *
+*                                                                     *
+*                       The IEFSSREQ function will be used to process *
+*                                                                     *
+*        Subroutine:   RPFBRO - Browse the output listing             *
+*                                                                     *
+*        Registers:    Register 12 and 10 are the base registers      *
+*                      Register 11 points to the RPFCOMM control block*
+*                      Register 13 points to our working storage      *
+*                      Register 9  points to the screen area          *
+*                      Register 2  points to the SSOB                 *
+*                      Register 3  points to the SSIB                 *
+*                                                                     *
+*        Change log:                                                  *
+*        Jul 10,2002 RPr: Support PF3/PF15                            *
+*        Oct 20,2002 RPr: Increase status area from 8 to 16 jobs      *
+*        Dec 07,2002 RPr: Increase status area from 16 to 22 jobs     *
+*        Dec 14,2002 RPr: Status area increased to 100 jobs        @rp1
+*                         But max. 22 jobs displayed               @rp1
+*        Dec 16,2002 RPr: Jobs displayed in reverse order          @rp2
+*        Feb 08,2005 RPr: Limit max. records to display            @rp3
+*        Dec 18,2018 RPr: Make RPF suitable for MVS/XA and up    @rpa01
+*        Jan 01,2019 RPr: Protect FREEPOOL with RPFSA24/RPFSA31       *
+*        Apr 03,2019 RPr: support screens up to 62x160                *
+*                         Protect IEFSSREQ with RPFSA24/RPFSA31       *
+*        Jul 25,2019 RPr: Add DUNOVDSP and DUNOVSHQ to keep the       *
+*                         the job on the HOLD queue after display     *
+*                         Display all jobs with userid + maximum 3    *
+*                         jobname characters in STATUS (option 0)     *
+*        Aug 18,2019 RPr: Avoid msg Dupl.Jobname in CANCEL if the     *
+*                         jobname is unique                           *
+*        Sep 18,2019 RPr: Msg 'Unexpected return code' changed into   *
+*                         'Invalid CANCEL request' (the real reason). *
+*        Nov 10,2019 RPr: Change RECFM of output from FBA into FB     *
+*        Mar 19,2020 RPr: Fix the use of the DEL key in the screen    *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Sep 21,2020 RPr: =n or =n.n command (fast jump) supported.   *
+*        Dec 23,2020 RPr: Fix translation to caps of Output class.    *
+*        May 06,2021 RPr: Option 0,1,2,3,4 changed into options       *
+*                         L,D,P,R,'blank' to equalize with ISPF.      *
+*        Jun 05,2021 RPr: Check APF authorization to prevent ABEND047.*
+*        Aug 17,2021 RPr: SSOB storage GETMAIN'ed.                    *
+*        Nov 25,2021 RPr: LRECL from 133 to 255 to prevent ABEND001.  *
+*        Mar 22,2022 RPr: RPFOUT made re-entrant and re-usable.       *
+*        Nov 27,2022 RPr: Set and reset APF bit with the magic SVC    *
+*                         in MVS38J if running unauthorized.          *
+*        May 03,2023 RPr: Change RECFM of output from FB into VB      *
+*                         and change Option P into Print in data set. *
+*        Sep 16,2024 RPr: Display the jobs if duplicated jobs are     *
+*                         detected.                                   *
+*        Dec 04,2024 RPr: Display the status screen after a job has   *
+*                         been purged.                                *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+RPFOUT   CSECT
+RPFOUT   AMODE 31                      *                         @rpa01
+RPFOUT   RMODE 24                      *                         @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFOUT,R12,R10          Provide addressability
+         LA    R10,2048(,R12)          Setup ...
+         LA    R10,2048(,R10)                2nd base
+         L     R11,0(,R1)              Get PARM address
+         USING COMMAREA,R11            Address RPFCOMM Dsect
+         XC    COMMPRM,COMMPRM         Clear COMMPRM initially
+         GETMAIN R,LV=WORKL            Obtain working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1                  New save area address
+         USING WORKAREA,R13            Make working storage addressable
+         B     START                   Branch over constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         USING SSOB,R2                 Set SSOB addressability
+         USING SSIB,R3                 Set SSIB addressability
+         LA    R0,SCRN                 Output
+         LR    R9,R0                   Copy
+         LA    R1,SCREENSL             Length of ...
+         LR    R3,R1                             both operands
+         L     R2,=V(SCREENS)          Input
+         MVCL  R0,R2                   and move
+         USING SCREENS,R9              Make the screens addressable
+         MVI   SW,0                    Initialize switch
+         XC    REQBLK(20),REQBLK       Clear allocation request block
+         MVC   REQBLK(2),=X'1401'      Length + verb (01 or 02)
+         LA    R1,TXTPOINT             Allocate text unit list
+         ST    R1,TXT1                 And save in allocation req.blk
+         MVC   DALDSNM2(6),=X'00020001002C' DSName text unit
+         MVC   DALDDNM2(6),=X'005500010008' Return DDNAME text unit
+         MVC   DALSSREQ(6),=X'005C00010004' Subsystem request TU
+         MVC   DALSSJES,=C'JES2'
+         MVC   DUNOVDSP(7),=X'00050001000108' Override disposition TU
+         MVC   DUNOVSHQ(4),=X'00590000' Override HOLD text unit
+         LA    R1,DALDSNM2             Allocation
+         LA    R2,DALSSREQ             subsystem data set text units
+         LA    R3,DALDDNM2             Return DDNAME
+         LA    R14,1                   Last parameter in list
+         SLL   R14,31                  Promote to high-order
+         OR    R3,R14
+         STM   R1,R3,TXTPOINT          Populate ALLOC txt units
+         MVC   DUNDDNAM(6),=X'000100010008'    DDNAME text unit
+         LA    R1,DUNDDNAM
+         LA    R2,DUNOVSHQ
+         LA    R3,DUNOVDSP             Last parm with override disp.
+         LA    R14,1                   Last parameter in list
+         SLL   R14,31                  Promote to high-order
+         OR    R3,R14
+         STM   R1,R3,TXTUNALC          Populate unalloc txt units
+         LA    R1,REQBLK               Request block
+         LA    R14,1                   Last pointer
+         SLL   R14,31                  Promote to high-order
+         OR    R1,R14                  Combine
+         ST    R1,SVC99                Save in allocation request blk
+         MVC   FMAX,=A(200000)         Max 200,000 lines to browse
+         LA    R1,JFCB                 Job File Control Block
+         ST    R1,EXLST                Save in exit list
+         MVI   EXLST,X'87'             Last pointer JFCB exit
+         MVC   RPFPRINT,MODELPRT       Move model ...
+         MVC   OUTFILE,MODELOUT             DCB's to real DCB's
+         LA    R0,EXLST                Exit list (JFCB + DCB abend)
+         STCM  R0,B'0111',RPFPRINT+DCBEXLSA-IHADCB
+         LA    R14,1                   VL bit
+         SLL   R14,31                  Promote to high order
+         LA    R1,SSOBHEAD
+         OR    R1,R14
+         ST    R1,SSOBADR              Save its address
+         MVC   SCR1TXT(1),COMMCMD      Move EW/EWA in data stream
+         USING PSA,0
+         L     R1,PSATOLD              Point to current TCB
+         USING TCB,R1
+         ICM   R1,7,TCBJSTCA           Point to jobstep TCB
+         ICM   R1,7,TCBJSCBB           Point to JSCB
+         DROP  R0,R1                   PSA and TCB
+         USING IEZJSCB,R1
+         TM    JSCBOPTS,JSCBAUTH       Are we APF authorized?
+         BO    AUTH                    Yes: good, carry on
+         AIF   (&OS390 OR &MVSXA).NOAPFS
+         LA    R0,COMMAGIC             SVC number magic SVC
+         CVD   R0,DBW                  Make packed
+         UNPK  DBW2,DBW                Make zoned w/o changing sign
+         MVC   DBW2(3),=C'IGC'         SVC module start
+         LM    R0,R1,DBW2              Set module name in r0-r1 pair
+         STM   R14,R12,12(R13)         Save our registers
+         L     R3,CVTPTR(,0)           CVT
+         L     R15,CVTLPDSR-CVT(,R3)   Address of IEAVVMSR
+         BALR  R14,R15                 Find IGC00xxx in SVC table
+         B     SVCEXEC                 BR 14+0 is found
+         LM    R14,R12,12(R13)         BR 14+4 is not found
+         B     NOTAUTH                 No magic SVC found, RC=4
+*
+SVCEXEC  LM    R14,R12,12(R13)         Restore registers
+         LA    R1,1                    R1=1 = set APF
+         SR    R0,R0                   R0 should be zero
+         SVC   COMMAGIC                Become APF authorized
+         USING PSA,R0
+         L     R1,PSATOLD              Point to current TCB
+         L     R1,TCBJSCB-TCB(,R1)     Point to JSCB
+         TM    JSCBOPTS,JSCBAUTH       Are we APF authorized now?
+         BZ    NOTAUTH                 No: give rc=4 not APF authorized
+         OI    SW,$MAGAPF              APF bit set by magic SVC
+         B     AUTH                    Yes: we are APF authorized
+         DROP  R0                      PSA
+.NOAPFS  ANOP
+         B     NOTAUTH                 Not APF authorized
+AUTH     DS    0H
+         DROP  R1                      JSCB
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         LM    R4,R5,COMMSIZE          Pickup lines
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1TXT+3
+*
+         LA    R0,2                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R2C1+1
+*
+         LA    R0,3                    Parameter line (3)
+         LA    R1,2                    Parameter column (2+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R3C2+1             And Save
+*
+         LA    R3,R4C4                 Point to data area in screen
+         LA    R4,4                    First data line is line4
+         LA    R5,5                    Last line = line10 (5 options)
+SCR01    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,4                    Parameter column (4)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,R4C4L(,R3)           Next line in screen
+         BCT   R5,SCR01                And do complete screen
+*
+         LA    R0,10                   Parameter line (10)
+         LA    R1,3                    Parameter column (3+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R10C3+1            And Save
+*
+         LA    R0,10                   Parameter line (10)
+         LA    R1,31                   Parameter column (31+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R10C31+1           And Save
+*
+         LA    R0,10                   Parameter line (10)
+         LA    R1,54                   Parameter column (54+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R10C54+1           And Save
+*
+         LA    R0,12                   Parameter line (12)
+         LA    R1,2                    Parameter column (2+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R12C2+1            And Save
+*
+         LA    R3,R13C2                Point JOBS area in screen
+         LA    R4,13                   First data line is line13
+         LA    R5,11                   Last data line is line23
+SCR03    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,2                    Parameter column (2+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+         LR    R0,R4                   Parameter line
+         LA    R1,47                   Parameter column (47+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         LA    R1,R13C2L1(,R3)         Point after 1st job in line
+         STCM  R0,3,1(R1)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,R13C2L2(,R3)         Next line in screen
+         BCT   R5,SCR03                And do complete screen
+*
+         L     R0,COMMSIZE             Last line on screen
+         LA    R1,2                    Parameter column (2+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC2+1          And Save
+*
+*        end of screen setup           ------------------------------*
+*
+*
+         MVC   SCR1UID+32(8),COMMUSER  Userid into screen
+         MVC   SCR1JOBN(7),COMMUSER    First 7 pos. of jobname
+         MVC   SCR1CLS(1),COMOUTCL     Default output class <- RPFCOMM
+PUT1     DS    0H
+         NI    SW,255-$KEEP-$PURGE     Reset Print and Purge flag
+         XC    REQFLG,REQFLG           Reset Requeue flag
+         LA    R1,SCR1TXT              Screen address
+         LA    R0,SCR1LEN              Length
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write Output menu
+         MVI   MSG1,C'-'               Clear message
+         MVC   MSG1+1(L'MSG1-1),MSG1                 area
+         BAL   R14,CLEAR               Clear the screen areas
+         LA    R5,BUFFER               Output formatted buffer
+         LA    R3,INPBUF               Screen address
+         LR    R1,R3                   Duplicate area address
+         LA    R0,94                   Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+*
+*        Do a TGET ASIS to obtain the AID byte
+*        After the TGET ASIS, remove the SBA's from the output
+*
+         CLI   0(R3),X'F4'             PFK4 (Return) pressed?
+         BE    STOP                    Yes: set return indicator
+         CLI   0(R3),X'C4'             PFK16 (Return) pressed?
+         BE    STOP                    Yes: set return indicator
+         CLI   0(R3),X'F3'             PFK3 (END) pressed?
+         BE    RETURN                  Yes: exit
+         CLI   0(R3),X'C3'             PFK15 (END) pressed
+         BE    RETURN                  Yes: exit
+         LR    R4,R1                   Save input length
+         XR    R1,R1                   Init output length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   CONV099                 Branch if <= 0
+         LA    R3,3(,R3)
+         LA    R5,BUFFER               Output address
+*
+*        Input screen is pointed to by register 3
+*        Output screen is pointed to by register 5
+*        The next section will remove all the SBA's
+*
+CONV001  CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  MVC   0(1,R5),0(R3)           Move input byte
+         LA    R3,1(,R3)               Next byte input
+         LA    R1,1(,R1)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV099                 All done, end of routine
+CONV003  DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes input (the SBA)
+         BCTR  R4,0                    Minus 1 BCT
+         BCTR  R4,0                    Minus 1 BCT
+         LTR   R4,R4                   Register zero?
+         BNP   CONV099                 Yes: End of conversion
+         BCT   R4,CONV001              Test next byte
+CONV099  DS    0H
+*
+*        Check the desired operation
+*
+SCAN01   DS    0H
+         BAL   R14,BUFFIN              Get data from screen
+         B     *+4(R15)                Initiate branchlist
+         B     SCAN02                  Continue
+         B     PUT1                    Unexpected EOB
+SCAN02   DS    0H
+         LA    R1,CMD                  Point to CMD field
+         TRT   CMD,COMSKPSP            Find first non space (Load R1)
+         CLI   0(R1),C'='              "=n.n" command?
+         BNE   SCAN04                  No: test options of RPFOUT
+         OI    COMMFLG2,$COMRTRN       Set return indicator in RPFCOMM
+         MVC   CMAINOPT,1(R1)          Move option for RPFMAIN
+         B     RETURN                  End of RPFOUT
+SCAN04   DS    0H
+         CLI   0(R1),C'L'              Status Info?
+         BE    STATUS                  Status info routine
+         CLI   0(R1),C'D'              Purge output?
+         BNE   SCAN05                  No: test other options       .
+         OI    SW,$PURGE               Set delete flag
+         B     STATUS                  Yes: go to Delete output rout.
+SCAN05   CLI   0(R1),C'P'              Print output to data set?
+         BE    KEEP                    Yes: go to DISPLAY entry KEEP
+         CLI   0(R1),C'R'              Requeue?
+         BE    REQUEUE                 Yes: go to requeue output rout.
+         CLI   0(R1),C' '              Browse output?
+         BE    DISPLAY                 Yes: go to Output routine
+         MVC   MSG1,ERR1TXT            Msg: Invalid option
+         B     PUT1                    Ask again
+STOP     DS    0H
+         OI    COMMFLG2,$COMRTRN       Set return indicator in RPFCOMM
+         B     RETURN                  and exit
+         TITLE 'DISPLAY OUTPUT ROUTINE'
+*--------------------------------------------------------------------**
+*                                                                     *
+*        Routine:       Display output                                *
+*                                                                     *
+*        Function:      - Get Jobname/JOBID/Outputclass from buffer   *
+*                       - Make PSO subsystem request                  *
+*                       - Alloc SYSOUT data set                       *
+*                       - Allocate print data set and write the       *
+*                         obtained data sets frm IEFSSREQ to this file*
+*                       - Invoke the Browse processor RPFBRO if       *
+*                         option = 'blank'.                           *
+*                       - Unallate print data set with DISP=DELETE if *
+*                         option = 'blank' or with DISP=CATLG if      *
+*                         option = 'P'.                               *
+*                       - Purge job output if option = 'P'.           *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+KEEP     DS    0H
+         OI    SW,$KEEP                Print to data set and keep
+DISPLAY  DS    0H
+         USING INFMJFCB,R4             Set JFCB addressability
+         USING IHADCB,R5               Set input DCB addressability
+         MVI   FIRST,0                 Clear first data set flag
+         XC    MAX,MAX                 Clear # records to count    @rp3
+         L     R2,SSOBADR              SSOB
+         LA    R2,0(,R2)               Clear high order bit
+         LA    R6,SSOBGN               Address extension space
+         LA    R3,SSIBHEAD             Start SSIB space
+         XC    SSOBEGIN(SSOBHSIZ),SSOBEGIN Clear SSOB header
+         MVC   SSOBID,=CL4'SSOB'       Indicate control block name
+         MVC   SSOBLEN,=AL2(SSOBHSIZ)  Set SSOB header size
+         ST    R3,SSOBSSIB             Address of SSIB in SSOB
+         MVC   SSOBFUNC,=AL2(SSOBSOUT) Indicate PSO
+         ST    R6,SSOBINDV             Set address of extension
+         XC    0(SSSOSIZE,R6),0(R6)    Clear extension
+         MVC   SSSOLEN,=AL2(SSSOSIZE)  Extension size
+         OI    SSSOFLG1,SSSOHLD        Request is for Held data sets
+         OI    SSSOFLG1,SSSOSJBN       Request is for D/S named by
+*                                      Jobname specified in SSSOBJBN
+         OI    SSSOFLG1,SSSOSCLS       Request is mode for JOBCLASS
+         MVC   SSSOJOBN(L'JOBNAME),JOBNAME Set Jobname
+         MVI   SSSOJOBI,C' '           Blank deleted ...
+         MVC   SSSOJOBI+1(L'SSSOJOBI-1),SSSOJOBI     ... JOB id
+         CLI   JOBID,X'40'             JOB-ID present?
+         BE    DIS010                  No: Do not fill in
+         MVC   SSSOJOBI,JOBID          Add JOB-ID in SSOB
+         OI    SSSOFLG1,SSSOSJBI       Indicate JOBID selection
+DIS010   DS    0H
+         MVC   SSSOCLSL(L'CLASS),CLASS Set output class
+         MVC   SSSOCLAS(L'CLASS),CLASS Set output class
+         MVC   SSSOPGMN,=CL8' '        Indicate no user external writer
+         XC    0(SSIBSIZE,R3),0(R3)    Clear SSIB
+         MVC   SSIBID,=CL4'SSIB'       Move acronym in SSIB
+         MVC   SSIBLEN,=AL2(SSIBSIZE)  Set SSIB size
+         MVC   SSIBSSNM,=CL4'JES2'     Indicate subsystem JES2
+DIS015   DS    0H
+         L     R2,SSOBADR              SSOB
+         LA    R2,0(,R2)               Clear high order bit
+         BAL   R14,SSREQ               Execute IEFSSREQ
+         CLI   IEFRC,0                 Return code 0?
+         BNE   DIS999                  No: display retry screen
+         B     DITABLE(R15)            Check IEFSSREQ function rc
+DITABLE  DS    0H
+         B     DIS080                  Rc = 00 Everything OK
+         B     DIS110                  Rc = 04 No more data sets
+         B     DIS020                  Rc = 08 JOB not found
+         B     DIS030                  Rc = 0C Invalid search arguments
+         B     DIS040                  Rc = 10 Unable to process now
+         B     DIS050                  Rc = 14 Duplicate jobnames
+         B     DIS060                  Rc = 18 Invalid JOBN/JOBI
+         B     DIS070                  Rc = 1C Invalid destination
+DIS020   DS    0H
+         MVC   MSG1,ERR2TXT            Jobname not found
+         B     DIS999                  Rewrite screen
+DIS030   DS    0H
+         MVC   MSG1,ERR3TXT            Msg: Invalid syntax
+         B     DIS999                  Rewrite screen
+DIS040   DS    0H
+         MVC   MSG1,ERR4TXT            Unable to process now msg
+         B     DIS999                  Rewrite screen
+DIS050   DS    0H
+         MVC   MSG1,ERR5TXT            Msg: Dupl. Jobname, give ID
+         B     STATUS                  Give status and rewrite
+DIS060   DS    0H
+         MVC   MSG1,ERR6TXT            Msg: Jobname/Jobid invalid
+         B     DIS999                  Rewrite screen
+DIS070   DS    0H
+         MVC   MSG1,ERR7TXT            Msg: Invalid destination
+         B     DIS999                  Rewrite screen
+*
+*        Dynamic allocation of SYSOUT file
+*
+DIS080   DS    0H
+         MVC   DSN(L'SSSODSN),SSSODSN  DSNAME of subsystem data set
+         MVI   VERB,X'01'              DSNAME allocation
+         LA    R1,TXTPOINT             Text unit list
+         ST    R1,TXT1                 Text unit list allocation
+         LA    R1,SVC99                Request block
+         DYNALLOC                      Allocate subsystem data set
+         LTR   R15,R15                 Check completion
+         BZ    DIS085                  Allocation OK.
+DIS083   DS    0H
+         MVC   MSG1,ERRATXT            Msg: Alloc Subsys DS failed
+         B     DIS999                  Rewrite screen
+DIS085   DS    0H
+         L     R15,REQBLK+4            Load DYNALLOC error/info code
+         LTR   R15,R15                 Test info code
+         BNZ   DIS083                  Not zero: issue error message
+         XC    JFCB,JFCB               Clear JFCB
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         LA    R5,RPFPRINT             Get SYSOUT DCB address
+         LA    R4,JFCB                 Get JFCB address
+         RDJFCB (5),MF=(E,COMOPN)      Read Job File Control Block
+         MVC   JFCBDSNM(L'SSSODSN),SSSODSN Move subsystem data set
+         MVC   DCBDDNAM(L'DDN),DDN     Move DDNAME into DCB
+         LA    R15,255                 Maximum record length
+         STH   R15,JFCBLKSI
+         STH   R15,JFCLRECL
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (RPFPRINT,INPUT),TYPE=J,MF=(E,COMOPN)
+         CLI   FIRST,0                 Is this the 1st data set?   @rp3
+         BNE   DIS095                  No: read next data set      @rp3
+*                                      Yes: allocate output data set
+         MVI   PRTDSN,C' '             Blank DSNAME ...
+         MVC   PRTDSN+1(L'PRTDSN-1),PRTDSN          first
+         MVC   PRTDSN(8),COMMUSER      Move user id as HLQ
+         LA    R4,PRTDSN               Point to data set name
+         LA    R14,8                   User id = max 7 bytes
+         XR    R2,R2                   Count non blank bytes
+DIS087   DS    0H
+         CLI   0(R4),C' '              Blank found?
+         BE    DIS088                  Yes: end of test
+         LA    R4,1(,R4)               Next character of userid
+         LA    R2,1(,R2)               Count the bytes
+         BCT   R15,DIS087              Loop until length calc.
+DIS088   DS    0H
+         MVC   0(9,R4),=C'.RPFOUT.D'  2nd qualifier of OUTLIST data set
+         LA    R4,9(,R4)               Adjust pointer
+         TIME  DEC                     Get current time
+         SRL   R0,4                    Shift out fractions
+         ST    R0,TIMEWORK             Store time
+         ST    R1,DATEWORK               and date
+         UNPK  0(5,R4),DATEWORK        Set date (YYDDD) in DSNAME
+         OI    4(R4),X'F0'             Remove sign
+         MVC   5(2,R4),=C'.T'          Next qualifier with time
+         OI    TIMEWORK+3,X'0F'        Insert sign in time
+         UNPK  TIMEDISP(7),TIMEWORK    Unpack the time
+         MVC   7(6,R4),TIMEDISP+1      Time in data set name
+         MVC   13(8,R4),=C'.OUTLIST'   Low level qualifier
+         LA    R2,30(,R2)              Real length PRTDSN calculated
+         STCM  R2,3,PRTDSNL            and save for allocation
+*
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               IKJDAP08
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFPRINT'  DDNAME to allocate
+         LA    R14,PRTDSNL             Length + data set name
+         ST    R14,DA08PDSN            In allocation block
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08CAT                 CATLG
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name (SYSDA)
+         MVC   DA08SER,DA08MNM         No volume serial
+         MVI   DA08PQTY+3,25           25 cylinders primary
+         MVI   DA08SQTY+3,5            5 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         OI    DA08CTL,DA08RLSE        Release unused space
+         L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         LTR   R15,R15                 Allocation OK?
+         BZ    DIS090                  No: error
+         MVC   MSG1,ERR8TXT            Msg: Allocation err. SYSOUT
+         DROP  R1                      DAPB08
+         BAL   R14,CLSPRT              Close SPOOL data set
+         B     DIS999
+DIS090   DS    0H
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (OUTFILE,(OUTPUT)),MF=(E,COMOPN) OPEN output
+         MVI   FIRST,X'FF'             Set flag
+DIS095   DS    0H                                                  @rp3
+         L     R3,MAX                  Set max of records          @rp3
+         RPFSA24                       Switch to amode 24        @rpa01
+DIS100   DS    0H                                                @rpa01
+         MVI   OUTLINE,X'40'           Blank the ...
+         MVC   OUTLINE+1(L'OUTLINE-1),OUTLINE    record first
+         GET   RPFPRINT,OUTLINE        Get record
+         LA    R1,OUTLINE+250          Point to last byte
+         LA    R14,247                 Keep at least 4 bytes in record
+DIS102   DS    0H
+         CLI   0(R1),X'40'             Trailing blank?
+         BNE   DIS104                  No: all trailing blank skipped
+         BCTR  R1,0                    Previous byte in record
+         BCT   R14,DIS102        Loop until all trailing blanks skipped
+DIS104   DS    0H
+         LA    R14,OUTLINE             Start of data record
+         SR    R1,R14                  Calculate real length record
+         LA    R1,5(,R1)               +1 + RDW
+         XC    RDW,RDW                 Clear RDW
+         STCM  R1,3,RDW                Length in first halfword
+         PUT   OUTFILE,OUTREC          And write
+         LA    R3,1(,R3)               Count record                @rp3
+         C     R3,FMAX                 Max. records reached        @rp3
+         BL    DIS100                  No: Read next record        @rp3
+         RPFSA31                       Restore addressing mode
+         BAL   R14,CLSPRT              Close SPOOL data set
+DIS110   DS    0H
+         CLI   FIRST,X'00'             Was there any data?
+         BE    DIS150                  No: set error message
+         B     DIS170                  If not: link to RPFBRO
+DIS130   DS    0H                      Eodad RPFPRINT              @rp3
+         RPFSA31                       Restore addressing mode   @rpa01
+         ST    R3,MAX                  Save reg.3                  @rp3
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         BAL   R14,CLSPRT              Close SPOOL data set
+         MVI   VERB,X'02'              02 = Unallocation
+         MVC   DDNUN,DDN               Move return DDNAME to text unit
+         LA    R1,TXTUNALC             Unallocation text units
+         ST    R1,TXT1                 Save pointer in request block
+         LA    R1,SVC99                Request block
+         DYNALLOC                      Free the subsysten ds
+         B     DIS015                  Get next data set from spool@rp3
+DIS150   DS    0H
+         MVC   MSG1,ERRKTXT            Msg: No held output
+         B     DIS999                  Rewrite screen
+DIS170   DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE OUTFILE,MF=(E,COMCLS)
+         RPFSA24                       Enter AMODE 24
+         FREEPOOL OUTFILE
+         TM    SW,$KEEP                Print in a data set?
+         BNZ   DIS172                  Yes: skip BROWSE
+         MVC   COMMPRM(8),=CL8'RPFPRINT'
+         ST    R11,PARMLST             Save address of RPFCOMM
+         LA    R1,PARMLST
+         LINK  EP=RPFBRO               Link to browse
+DIS172   DS    0H
+         RPFSA31                       Restore addressing mode   @rpa01
+         XC    RPFD18,RPFD18           Clear parameter block
+         LA    R1,RPFD18               Point to unallocation parm block
+         USING DAPB18,R1               IKJDAP18
+         MVI   DA18CD+1,X'18'          Entry code 0018 (unallocate)
+         MVC   DA18DDN,=CL8'RPFPRINT'  DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         TM    SW,$KEEP                Keep data set?
+         BNZ   DIS175                  Yes: do not override disposition
+         OI    DA18DPS2,DA18DEL        No: delete data set
+DIS175   L     R15,=V(CALLTS)          Invoke IKJDAIR
+         CALL  (15)
+         DROP  R1                      DAPB18
+         TM    SW,$KEEP                KEEP data set
+         BNO   DIS180                  No: continue
+         MVC   SCR1DS(15),=CL15'Output kept in '
+         MVC   SCR1DS+15(44),PRTDSN    Data set name in msg
+         MVI   SCR1DS+59,C' '          and blank last position
+         OI    SW,$PURGE               Mark job to be purged
+         B     STATUS                  Purge job output
+DIS180   DS    0H
+         CLI   CMAINOPT,C' '           =n(.n) cmd entered in Browse@rp1
+         BNE   RETURN                  Yes: end of routine         @rp1
+DIS999   B     PUT1                    Rewrite screen
+         DROP  R4,R5
+CLSPRT   DS    0H
+         ST    R14,R14CLS              Remember register 14
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFPRINT,MF=(E,COMCLS)  End of file RPFPRINT DCB
+         RPFSA24                       Enter AMODE24
+         FREEPOOL RPFPRINT             Free the buffers
+         RPFSA31                       Restore addressing mode
+         L     R14,R14CLS              Restore register 14
+         BR    R14                     Return
+         TITLE 'RETURN ROUTINE'
+NOTAUTH  DS    0H
+         LA    R15,4                   Rc = 4, not APF authorized
+         B     RETURN8                 Return to caller
+RETURN   DS    0H
+         XR    R15,R15                 Clear return code
+RETURN8  DS    0H
+         LR    R2,R15                  Save return code
+         AIF   (&OS390 OR &MVSXA).NOAPFRS
+         TM    SW,$MAGAPF              APF bit set by magic SVC?
+         BNO   RETURN9                 No: continue
+         SR    R1,R1                   R1=0 = reset APF
+         SR    R0,R0                   R0 should be zero
+         SVC   COMMAGIC                Become APF unauthorized
+         NI    SW,255-$MAGAPF          Reset flag
+.NOAPFRS ANOP
+RETURN9  DS    0H
+         LR    R3,R13                  Our working storage
+         L     R13,4(,R13)             Callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release working storage
+         LR    R15,R2                  Restore return code
+         RETURN (14,12),RC=(15)        Return
+         TITLE 'Display STATUS and DELETE routine'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:       Display status                                *
+*                                                                     *
+*        Function:      - Get Jobname/JOBID/Outputclass from buffer   *
+*                       - Make STATUS Subsystem Request               *
+*                       - Set status onto screen                      *
+*                       - Display screen.                             *
+*                         (Max size = 22 jobnames)                    *
+*                                                                     *
+*                       If flag $DELETE = on:                         *
+*                       - Get Jobname/JOBID/Outputclass from buffer   *
+*                       - Make CANCEL Subsystem Request               *
+*                       - Set 'Output deleted' onto screen            *
+*                       - Display screen.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+STATUS   DS    0H
+         L     R2,SSOBADR              SSOB
+         LA    R2,0(,R2)               Clear high order bit
+         LA    R6,SSOBGN               Address extension space
+         LA    R3,SSIBHEAD             Start SSIB space
+         XC    SSOBEGIN(SSOBHSIZ),SSOBEGIN Clear SSOB header
+         MVC   SSOBID,=CL4'SSOB'       Move acronym in SSOB
+         MVC   SSOBLEN,=AL2(SSOBHSIZ)  Set SSOB header size
+         ST    R3,SSOBSSIB             Set address of SSIB
+         TM    SW,$PURGE               Purge request?
+         BNO   STA000                  No: issue STATUS request
+         MVC   SSOBFUNC,=AL2(SSOBCANC) Indicate status info in function
+         ST    R6,SSOBINDV             Set address of SSOB extension
+         XC    0(SSCSIZE,R6),0(R6)     Clear SSOB extension
+         MVC   SSCSLEN,=AL2(SSCSIZE)   Size of extension
+         OI    SSCSFLGS,SSCSCOUT       Indicate CANCEL Jobs output
+         MVC   SSCSJOBN(L'SSCSJOBN),JOBNAME  Set Jobname
+         B     STA007                  Execute IEFSSREQ
+*
+STA000   MVC   SSOBFUNC,=AL2(SSOBSTAT) Indicate status verb in SSOB
+         ST    R6,SSOBINDV             Set address of extension
+         XC    0(SSCSIZE,R6),0(R6)     Clear extension
+         MVC   SSCSLEN,=AL2(SSCSIZE)   Extension size
+         OI    SSCSFLGS,SSCSUSID       USERID is in Jobname field
+         MVI   SSCSJOBN,C' '           Blank jobname ...
+         MVC   SSCSJOBN+1(L'SSCSJOBN-1),SSCSJOBN       in SSOB
+         LA    R6,JOBNAME              Adrress of Jobname in buffer
+         XR    R8,R8                   Initial length = 0
+STA002   DS    0H
+         CLI   0(R6),C' '              End of jobname found?
+         BE    STA005                  Yes: all done
+         LA    R6,1(,R6)               Next position
+         LA    R8,1(,R8)               Length +/+ 1
+         CH    R8,=H'8'                Max length?
+         BL    STA002                  No: test again
+STA005   DS    0H
+         STC   R8,STAJOBL              Save length
+         CLC   JOBNAME,COMMUSER        Is Jobname equal UserID?
+         BE    *+6                     Yes: do not decrease
+         BCTR  R8,0                    Length userid -/- 1
+         STC   R8,SSCSULEN             Store user id length
+         BCTR  R8,0                    Length -/- 1 for execute
+         EX    R8,STAMOVE              Move Job Id
+         B     STA007                  Go to indicate Job ID
+STAMOVE  MVC   SSCSJOBN(0),JOBNAME     << executed >>
+STA007   DS    0H
+         MVC   SSCSJOBI,JOBID          Indicate Job ID
+         CLI   SSCSJOBI,C' '           Jobid filled in?            @rp2
+         BE    *+10                    No: skip                    @rp2
+         MVC   SSCSJOBN(L'SSCSJOBN),JOBNAME  Else set complete job @rp2
+*+10                                                               @rp2
+         MVC   SSCSDIMP,=H'1600'       Area length (16*100)        @rp1
+         XC    0(SSIBSIZE,R3),0(R3)    Clear SSIB
+         MVC   SSIBID,=CL4'SSIB'       Move acronym in SSIB
+         MVC   SSIBLEN,=AL2(SSIBSIZE)  Set SSIB size
+         MVC   SSIBSSNM,=CL4'JES2'     JES2 is the subsystem
+         BAL   R14,SSREQ               Execute IEFSSREQ
+         CLI   IEFRC,0                 Return code 0?
+         BNE   STA9999                 No: display retry screen
+         B     STTABLE(R15)            Check IEFSSREQ function rc
+STTABLE  DS    0H
+         B     STA030                  Rc = 00 Everything OK
+         B     STA040                  Rc = 04 Jobname not found
+         B     STA042                  Rc = 08 Invalid jobn/jobid
+         B     STA044                  Rc = 0C Dupl jobn without jobid
+         B     STA010                  Rc = 10 Status area too small
+         B     STA020                  Rc = 14 Job on outputq not canc
+         B     STA046                  Rc = 18 Invalid syntax
+         B     STA020                  Rc = 1C Invalid cancel request
+STA010   DS    0H
+         MVC   MSG1,ERRCTXT            Msg: Status area too small
+         B     STA999                  Rewrite screen
+STA020   DS    0H
+         MVC   MSG1,ERRDTXT            Msg: Invalid CANCEL request
+         B     STA999                  Rewrite screen
+STA030   DS    0H
+         CLC   SSOBFUNC,=AL2(SSOBCANC) CANCEL request?
+         BNE   STA032                  No: carry
+         MVI   SCR1JOBX,C' '           Blank deleted ...
+         MVC   SCR1JOBX+1(L'SCR1JOBX-1),SCR1JOBX     ... JOB id
+         TM    SW,$KEEP                Printed in a data set?
+         BNZ   STA999                  Yes: no message
+         MVC   MSG1,ERRITXT            Msg: Output deleted
+         B     STA999
+STA032   LH    R6,SSCSDIMR             Length Status area
+         LA    R4,23                   Max. 22 jobs on screen      @rp1
+         XR    R8,R8                   Clear register 8
+         MVC   WORK(7),SSCSJOBN        Get user id
+         MVI   WORK+7,C' '             and blank last character
+         XR    R5,R5                   Clear register 1
+         IC    R5,SSCSULEN             Get user id length
+         LA    R5,WORK(R5)             Get work address indexed by R1
+         LA    R2,0(R2,R6)             Point to last ...           @rp2
+         SL    R2,=A(L'SSCSARAY)             valid entry           @rp2
+         SRL   R6,4                    Divide by length status ar. @rp2
+         LTR   R6,R6                   Giving # status areas
+         BNZ   STA060                  If there are ...
+STA040   DS    0H
+         MVC   MSG1,ERR2TXT            Msg: Jobname not found
+         B     STA999                  Rewrite screen
+STA042   DS    0H
+         MVC   MSG1,ERR6TXT            Msg: Jobname/Jobid invalid
+         B     STA999                  Rewrite screen
+STA044   DS    0H
+         MVC   MSG1,ERR5TXT            Msg: Dupl. Jobname, give ID
+         B     STA999                  Give status and rewrite
+STA046   DS    0H
+         MVC   MSG1,ERR3TXT            Msg: Invalid syntax
+         B     STA999                  Rewrite screen
+STA060   DS    0H
+         MVC   0(1,R5),SSCSUJOB        Last character jobname
+*
+*        The next statements until JBNAMEOK are valid if usermod
+*        ZP60016 has been applied otherwise SSCSUJOB+1 and SSCSUJOB+2
+*        contains blanks.
+*        ZP60016 make it possible to give a status of userid + max
+*        3 characters.
+*
+         CLI   STAJOBL,6               User id length 6?
+         BH    JBNAMEOK                >6: Jobname = OK
+         MVC   1(1,R5),SSCSUJOB+1      Move 2nd jobname character
+         BE    JBNAMEOK
+         MVC   2(1,R5),SSCSUJOB+2      Move 3rd jobname character
+JBNAMEOK DS    0H
+         XR    R1,R1
+         IC    R1,STAJOBL              Length of jobname
+         BCTR  R1,0                    Minus 1 for EX
+         EX    R1,JOBCMP               Compare jobnames
+         BE    STA070                  Yes: process
+         SL    R2,=A(L'SSCSARAY)       Previous Status entry       @rp2
+         BCT   R6,STA060               And process it if possible
+         LTR   R8,R8                   Something found to display?
+         BZ    STA040                  No: display error message
+         B     STA999                  Else display screen
+JOBCMP   CLC   WORK(0),JOBNAME         Jobnames equal?
+STA070   DS    0H
+         LTR   R8,R8                   First time something found?
+         BNZ   STA080                  No: bypass init setting
+         LA    R7,SCR1JOB0             Start address status display
+         MVC   SCR1STA,=CL12'Job status :'
+STA080   DS    0H
+         BCT   R4,STA085               Is there room to display?   @rp1
+         MVC   MSG1,ERRLTXT            Status truncated            @rp1
+         B     STA999                  Rewrite screen              @rp1
+STA085   DS    0H                                                  @rp1
+         MVC   0(8,R7),WORK            Set JOBNAME into screen
+         MVI   8(R7),C'/'              Set separator
+         MVC   9(8,R7),SSCSARID        and Job ID
+         TM    SSCSFLG1,SSCSJACT
+         BNO   STA090
+         MVC   18(15,R7),=CL15'Executing'
+         B     STA120
+STA090   DS    0H
+         TM    SSCSFLG1,SSCSEXCQ
+         BNO   STA100
+         MVC   18(15,R7),=CL15'On Input Queue'
+         B     STA120
+STA100   DS    0H
+         TM    SSCSFLG1,SSCSHOLD
+         BO    STA110
+         MVC   18(15,R7),=CL15'On Output Queue'
+         B     STA120
+STA110   DS    0H
+         MVC   18(15,R7),=CL15'On HOLD Queue'
+STA120   DS    0H
+         LA    R7,R13C2L1(,R7)         Next Status entry on screen
+         LA    R8,1(,R8)               Indicate next line
+         SL    R2,=A(L'SSCSARAY)       Previous status area        @rp2
+         BCT   R6,STA060               Test next entry
+STA999   TM    SW,$KEEP                Was there a job printed?
+         BO    STA9999                 Display screen
+         TM    SW,$PURGE               Was there a job purged?
+         BNO   STA9999                 No:
+         NI    SW,255-$PURGE           Reset flag
+         MVI   JOBID,C' '              and blank ...
+         MVC   JOBID+1(L'JOBID-1),JOBID             Job number
+         BAL   R14,CLEAR               Clear the screen areas
+         STIMER WAIT,BINTVL=HALFSEC    Wait for the purge of the job
+         B     STATUS                  Create again a status screen
+STA9999  B     PUT1                    Display screen
+HALFSEC  DC    F'50'
+         TITLE 'Print output routine'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:       Print output                                  *
+*                                                                     *
+*        Function:      - Get Jobname/JOBID/Outputclass from buffer   *
+*                       - Make PSO Subsystem Request                  *
+*                       - Release SYSOUT data set                     *
+*                       - Give message and display screen again       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+PRINT    DS    0H
+         L     R2,SSOBADR              SSOB
+         LA    R2,0(,R2)               Clear high order bit
+         LA    R6,SSOBGN               Address extension space
+         LA    R3,SSIBHEAD             Start SSIB space
+         XC    SSOBEGIN(SSOBHSIZ),SSOBEGIN Clear SSOB header
+         MVC   SSOBID,=CL4'SSOB'       Acronym of SSOB
+         MVC   SSOBLEN,=AL2(SSOBHSIZ)  Set SSOB header size
+         ST    R3,SSOBSSIB             Set address of SSIB in SSOB
+         MVC   SSOBFUNC,=AL2(SSOBSOUT) Indicate PSO
+         ST    R6,SSOBINDV             Set address of extension
+         XC    0(SSSOSIZE,R6),0(R6)    Clear extension
+         MVC   SSSOLEN,=AL2(SSSOSIZE)  Size of extension
+         OI    SSSOFLG1,SSSOHLD        Request is for Held data sets
+         OI    SSSOFLG1,SSSOSJBN       Request is form data sets named
+*                                      by jobname specified in SSSOBJBN
+         TM    REQFLG,X'FF'            Requeue requested?
+         BO    PRT010                  Yes: do not release held ds
+         OI    SSSOUFLG,SSSORLSE       Release all Held data sets
+PRT010   DS    0H
+         OI    SSSOUFLG,SSSOSETC       Use SSSOCLAS as disposition
+         OI    SSSOFLG2,SSSOCTRL       First and last request
+         MVC   SSSOJOBN(L'JOBNAME),JOBNAME SET JOBNAME
+         CLI   JOBID,X'40'             JOB-ID Filled in?
+         BE    PRT015                  No: do IEFSSREQ
+         MVC   SSSOJOBI,JOBID          Specify JOB-ID in SSOB
+         OI    SSSOFLG1,SSSOSJBI       Indicate Job ID selection
+PRT015   DS    0H
+         MVC   SSSOCLAS(L'CLASS),CLASS Set Output class
+         MVC   SSSOCLSL(L'CLASS),CLASS Set Output class
+         MVC   SSSOPGMN,=CL8' '        Indicate no user writer
+         XC    0(SSIBSIZE,R3),0(R3)    Clear SSIB
+         MVC   SSIBID,=CL4'SSIB'       Indicate control block name
+         MVC   SSIBLEN,=AL2(SSIBSIZE)  Set SSIB size
+         MVC   SSIBSSNM,=CL4'JES2'     Indicate subsystem JES2
+         BAL   R14,SSREQ               Execute IEFSSREQ
+         CLI   IEFRC,0                 Return code 0?
+         BNE   PRT999                  No: display retry screen
+         B     PRTABLE(R15)            Check IEFSSREQ function rc
+PRTABLE  DS    0H
+         B     PRT032                  Rc = 00 No errors
+         B     PRT110                  Rc = 04 No more data sets
+         B     PRT020                  Rc = 08 Job not found
+         B     PRT022                  Rc = 0C Invalid search arguments
+         B     PRT024                  Rc = 10 Unable to process now
+         B     PRT026                  Rc = 14 Duplicate jobnames
+         B     PRT028                  Rc = 18 Invalid JOBN/JOBI
+         B     PRT030                  Rc = 1C Invalid destination
+PRT020   DS    0H
+         MVC   MSG1,ERR2TXT            Jobname not found
+         B     PRT999                  Rewrite screen
+PRT022   DS    0H
+         MVC   MSG1,ERR3TXT            Msg: Invalid syntax
+         B     PRT999                  Rewrite screen
+PRT024   DS    0H
+         MVC   MSG1,ERR4TXT            Unable to process now msg
+         B     PRT999                  Rewrite screen
+PRT026   DS    0H
+         MVC   MSG1,ERR5TXT            Msg: Dupl. Jobname, give ID
+         B     STATUS                  Give status and rewrite
+PRT028   DS    0H
+         MVC   MSG1,ERR6TXT            Msg: Jobname/Jobid invalid
+         B     PRT999                  Rewrite screen
+PRT030   DS    0H
+         MVC   MSG1,ERR7TXT            Msg: Invalid destination
+         B     PRT999                  Rewrite screen
+PRT032   DS    0H
+         TM    REQFLG,X'FF'            Requeue requested?
+         BO    PRT040
+         MVC   MSG1,ERRFTXT            Msg: List made in sysout=x
+         MVC   MSG1+24(1),CLASS        Set SYSOUT class into message
+         B     PRT999                  And rewrite screen
+PRT040   DS    0H
+         XC    REQFLG,REQFLG           Requeue flag off
+         MVC   MSG1,ERRGTXT            Msg: Output requeued cls=x
+         MVC   MSG1+24(1),CLASS        Set SYSOUT class into message
+         B     PRT999                  Rewrite screen
+PRT110   DS    0H
+         MVC   MSG1,ERRKTXT            Msg: No held output
+         B     PRT999                  And re-write screen
+PRT170   DS    0H
+PRT999   B     PUT1                    Write screen
+         TITLE 'REQUEUE ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:       REQUEUE                                       *
+*                                                                     *
+*        Function:      - Set requeue flag and go to PRINT routine    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+REQUEUE  DS    0H
+         OI    REQFLG,X'FF'            Set requeue flag
+         B     PRINT                   And go to print routine
+         TITLE 'TEST RETURN CODE IEFSSREQ'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:       SSREQ                                         *
+*                                                                     *
+*        Function:      - Execute the subsystem request and           *
+*                         Test return code and set error message      *
+*                         Input: SSOBADR
+*                         Output: register 15, the IEFSSREQ result    *
+*                                 IEFRC the IEFSSREQ return code      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+SSREQ    DS    0H
+         ST    R14,R14SSREQ            Save register 14
+         MVI   IEFRC,0                 Default return code 0 IEFSSREQ
+         RPFSA24                       Enter Amode 24
+         MODESET MODE=SUP              Away into supervisor state
+         LA    R1,SSOBADR              Address of SSOB
+         IEFSSREQ                      Invoke subsystem
+         LR    R6,R15                  Save return code
+         MODESET MODE=PROB             Back into problem state
+         RPFSA31                       Restore addressing mode
+         L     R14,R14SSREQ            Restore register 14
+         L     R15,SSOBRETN            Get request result
+         LTR   R6,R6                   Is return code IEFSSREQ 0?
+         BZR   R14                     Yes: OK, return
+         STC   R6,IEFRC                Save returncode SSREQ
+         MVC   MSG1,ERRHTXT            Msg: Error IEFSSREQ, Rc= xx
+         UNPK  DBW(3),IEFRC(2)         Expand each byte
+         NC    DBW(2),=X'0F0F'         Clear hi order nibbles
+         TR    DBW(2),=C'0123456789ABCDEF' Make readable HEX
+         MVC   MSG1+23(2),DBW          Move to user field
+         BR    R14                     And write error msg and retry
+         TITLE 'Make screen empty'
+CLEAR    MVI   SCR1DS,X'40'            Clear 2nd
+         MVC   SCR1DS+1(L'SCR1DS-1),SCR1DS      message area
+         MVI   SCR1STA,X'40'           CLEAR STATUS AREA
+         MVC   SCR1STA+1(L'SCR1STA-1),SCR1STA
+         MVI   SCR1JOB0,X'40'
+         MVC   SCR1JOB0+1(L'SCR1JOB0-1),SCR1JOB0
+         MVC   SCR1JOB1,SCR1JOB0       Copy blanks
+         MVC   SCR1JOB2,SCR1JOB0
+         MVC   SCR1JOB3,SCR1JOB0
+         MVC   SCR1JOB4,SCR1JOB0
+         MVC   SCR1JOB5,SCR1JOB0
+         MVC   SCR1JOB6,SCR1JOB0
+         MVC   SCR1JOB7,SCR1JOB0
+         MVC   SCR1JOB8,SCR1JOB0
+         MVC   SCR1JOB9,SCR1JOB0
+         MVC   SCR1JOBA,SCR1JOB0
+         MVC   SCR1JOBB,SCR1JOB0
+         MVC   SCR1JOBC,SCR1JOB0
+         MVC   SCR1JOBD,SCR1JOB0
+         MVC   SCR1JOBE,SCR1JOB0
+         MVC   SCR1JOBF,SCR1JOB0
+         MVC   SCR1JOBG,SCR1JOB0
+         MVC   SCR1JOBH,SCR1JOB0
+         MVC   SCR1JOBI,SCR1JOB0
+         MVC   SCR1JOBJ,SCR1JOB0
+         MVC   SCR1JOBK,SCR1JOB0
+         MVC   SCR1JOBL,SCR1JOB0
+         BR    R14
+         TITLE 'GET BUFFER ROUTINE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:       BUFFIN                                        *
+*                                                                     *
+*        Function:      - Get Jobname/JOBID/Outputclass from buffer   *
+*                         Register 1 contains the buffer length       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+BUFFIN   DS    0H
+         ST    R14,R14BUFF             Save line register
+         LA    R6,BUFFER               Buffer address
+         LR    R8,R1                   Buffer length
+         LTR   R1,R1                   No length?
+         BZ    BUFF070                 Yes: set rc=4, EOB
+         MVI   JOBNAME,C' '            Clear
+         MVC   JOBNAME+1(7),JOBNAME         Jobname
+         MVC   JOBID,JOBNAME           Clear Job ID
+         MVI   CLASS,C' '              Clear output class
+         LA    R7,CMD                  Pickup command
+BUFF010  DS    0H
+         CLC   S1JOBN,0(R6)            Jobname found?
+         BE    BUFF020                 Yes: save jobname
+         MVC   0(1,R7),0(R6)           Move 1 byte of option
+         OI    0(R7),X'40'             Xlate to upper
+         LA    R6,1(,R6)               Next buffer position
+         LA    R7,1(,R7)               Next byte option
+         BCT   R8,BUFF010              And check end of buffer
+         B     BUFF070                 End of buffer, Clear key pressed
+BUFF020  DS    0H
+         LA    R6,L'S1JOBN(,R6)        Point after 'JOB name'
+         SH    R8,=AL2(L'S1JOBN)       Decrease length
+         MVC   SCR1CMD,=CL5' '         Set option in screen
+         LA    R7,JOBNAME              Point to jobname
+BUFF030  DS    0H
+         CLC   S1JOBX,0(R6)            Job Identifier found?
+         BE    BUFF040                 If so, save it
+         MVC   0(1,R7),0(R6)           Move 1 byte of Jobname
+         OI    0(R7),X'40'             Xlate to upper
+         LA    R6,1(,R6)               Next buffer position
+         LA    R7,1(,R7)               Next byte JOB name
+         BCT   R8,BUFF030              And check EOB
+         B     BUFF070                 End of buffer, Clear key pressed
+BUFF040  DS    0H
+         MVC   SCR1JOBN,JOBNAME        Set Jobname in screen
+         LA    R6,L'S1JOBX(,R6)        Point after 'JOBID..'
+         SH    R8,=AL2(L'S1JOBX)       Decrease length with 'Jobid..'
+         LA    R7,JOBID                Point to job number (Job ID)
+BUFF050  DS    0H
+         CLC   S1CLS,0(R6)             JOB output CLASS found?
+         BE    BUFF060                 Yes: save it
+         MVC   0(1,R7),0(R6)           Move 1 byte of Job ID
+         OI    0(R7),X'40'             Xlate to upper
+         LA    R6,1(,R6)               Next buffer position
+         LA    R7,1(,R7)               Next byte JOB id
+         BCT   R8,BUFF050              And check EOB
+BUFF060  DS    0H
+         MVC   SCR1JOBX,JOBID          Set Job ID into screen
+         MVC   CLASS,L'S1CLS(R6)       Save Job-Output-Class
+         OI    CLASS,X'40'             Xlate to upper
+         MVC   SCR1CLS,CLASS           Set Job-Output-Class in screen
+         XR    R15,R15                 Rc = 0
+         B     BUFF099                 Return
+BUFF070  DS    0H
+         LA    R15,4                   Rc = 4, unexpected EOB
+BUFF099  DS    0H
+         L     R14,R14BUFF             Get return address
+         BR    R14                     And return
+         TITLE 'Constants'
+MODELPRT DCB   DSORG=PS,MACRF=GM,EODAD=DIS130,EXLST=*-*,BUFNO=2
+MDLPRTL  EQU   *-MODELPRT
+MODELOUT DCB   DSORG=PS,MACRF=PM,DDNAME=RPFPRINT,LRECL=255,            X
+               BLKSIZE=6100,RECFM=VB
+MDLOUTL  EQU   *-MODELOUT
+*
+ERR1TXT  DC    CL25'---------- Invalid option'
+ERR2TXT  DC    CL25'------- Jobname not found'
+ERR3TXT  DC    CL25'---------- Invalid syntax'
+ERR4TXT  DC    CL25'--- Unable to process now'
+ERR5TXT  DC    CL25'-- Dupl. jobname, give ID'
+ERR6TXT  DC    CL25'--- Jobname/jobid invalid'
+ERR7TXT  DC    CL25'----- Invalid destination'
+ERR8TXT  DC    CL25'- Allocation error SYSOUT'
+ERRATXT  DC    CL25'- Alloc Subsyst.DS failed'
+ERRCTXT  DC    CL25'--- Status area too small'
+ERRDTXT  DC    CL25'-- Invalid CANCEL request'
+ERRFTXT  DC    CL25' Listing made in sysout=x'
+ERRGTXT  DC    CL25'- Output requeued class=x'
+ERRHTXT  DC    CL25'-- Error IEFSSREQ, Rc= xx'
+ERRITXT  DC    CL25'---------- Output deleted'
+ERRKTXT  DC    CL25'---------- No held output'
+ERRLTXT  DC    CL25'-- Last 22 jobs displayed'
+         LTORG ,
+         DROP
+*
+         COPY  CALLTS
+*
+         TITLE 'Output processor panel'
+SCREENS  CSECT
+SCR1TXTF DC    X'27'                 Escape character for TPUT FULLSCR
+SCR1TXT  DC    X'00C21100001DF8'     EW or EWA - r1,c1+
+SCR1UID  DC    CL54'RPF Output processor, User ID =         -----------C
+               ---'
+MSG1     DC    CL25'-------------------------'
+*
+R2C1     DC    X'1100001DF8',C'Option =>',X'1DC913'
+SCR1CMD  DC    CL5' ',X'1DF0'
+R3C2     DC    X'110000',AL3(WHITE)    r3,c2+
+SCR1DS   DC    CL60' '
+R4C4     DC    X'110000',AL3(WHITE),C'L     ',AL3(GREEN)
+         DC    CL27'List job status'
+R4C4L    EQU   *-R4C4
+         DC    X'110000',AL3(WHITE),C'D     ',AL3(GREEN)
+         DC    CL27'Purge output (delete)'
+         DC    X'110000',AL3(WHITE),C'P     ',AL3(GREEN)
+         DC    CL27'Print output to a data set'
+         DC    X'110000',AL3(WHITE),C'R     ',AL3(GREEN)
+         DC    CL27'Re-queue output'
+         DC    X'110000',AL3(WHITE),C'blank ',AL3(GREEN)
+         DC    CL27'Browse/View output'
+*
+R10C3    DC    X'1100001DF5',AL3(TURQ) r10,c3+
+S1JOBN   DC    C'Jobname ===>',X'1DC9',AL3(RED)
+SCR1JOBN DC    CL8' ',X'1DF0'
+R10C31   DC    X'1100001DF5',AL3(TURQ) r11,c31+
+S1JOBX   DC    C'Jobid   ===>',X'1DC9',AL3(RED)
+SCR1JOBX DC    CL8' ',X'1DF0'
+R10C54   DC    X'1100001DF5',AL3(TURQ) r10,c54+
+S1CLS    DC    C'Class   ===>',X'1DC9',AL3(RED)
+SCR1CLS  DC    CL1' ',X'1DF0',AL3(YELLOW)
+*
+R12C2    DC    X'110000'               r12,c2+
+SCR1STA  DC    CL12' ',AL3(TURQ)
+R13C2    DC    X'110000'               r13,c2+
+SCR1JOB0 DC    CL33' '
+R13C2L1  EQU   *-R13C2
+         DC    X'110000'               r13,c47+
+SCR1JOB1 DC    CL33' '
+R13C2L2  EQU   *-R13C2
+         DC    X'110000'               r14,c1+
+SCR1JOB2 DC    CL33' '
+         DC    X'110000'               r14,c47+
+SCR1JOB3 DC    CL33' '
+         DC    X'110000'               r15,c2+
+SCR1JOB4 DC    CL33' '
+         DC    X'110000'               r15,c47+
+SCR1JOB5 DC    CL33' '
+         DC    X'110000'               r16,c2+
+SCR1JOB6 DC    CL33' '
+         DC    X'110000'               r16,c47+
+SCR1JOB7 DC    CL33' '
+         DC    X'110000'               r17,c2+
+SCR1JOB8 DC    CL33' '
+         DC    X'110000'               r17,c47+
+SCR1JOB9 DC    CL33' '
+         DC    X'110000'               r18,c2+
+SCR1JOBA DC    CL33' '
+         DC    X'110000'               r18,c47+
+SCR1JOBB DC    CL33' '
+         DC    X'110000'               r19,c2+
+SCR1JOBC DC    CL33' '
+         DC    X'110000'               r19,c47+
+SCR1JOBD DC    CL33' '
+         DC    X'110000'               r20,c2+
+SCR1JOBE DC    CL33' '
+         DC    X'110000'               r20,c47+
+SCR1JOBF DC    CL33' '
+         DC    X'110000'               r21,c2+
+SCR1JOBG DC    CL33' '
+         DC    X'110000'               r21,c47+
+SCR1JOBH DC    CL33' '
+         DC    X'110000'               r22,c2+
+SCR1JOBI DC    CL33' '
+         DC    X'110000'               r22,c47+
+SCR1JOBJ DC    CL33' '
+         DC    X'110000'               r23,c02+
+SCR1JOBK DC    CL33' '
+         DC    X'110000'               r23,c47+
+SCR1JOBL DC    CL33' '
+*
+RLASTC2  DC    X'110000'               Row last, c2+
+         DC    AL3(TURQ),C'Hit ',AL3(WHITE),C'PF03/15 ',AL3(TURQ)
+         DC    C'to return'
+*
+SCR1LEN  EQU   *-SCR1TXT
+SCR1LENF EQU   *-SCR1TXTF
+SCREENSL EQU   *-SCREENS
+         DROP
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area
+TIMEWORK DS    F
+DATEWORK DS    F
+SSOBADR  DS    F                       SSOB parm address
+R12TS    DS    F                       Save register 12 CALLTS
+R14BUFF  DS    F                       Save register 14 BUFFIN
+R14CLS   DS    F                       Save register 14 CLSPRT
+R14SSREQ DS    F                       Save register 14 IEFSSRQ
+R14TS    DS    F                       Save register 14 CALLTS
+MAX      DS    F                       Current max. records displ. @rp3
+FMAX     DS    F                       Current max. records displ. @rp3
+PARMLST  DS    F                       To contain address of RPFCOMM
+RPFDAPL  DS    5F                      Dair parameter list
+ECB      DS    F                       An event control block
+RPFD08   DS    CL84                    Allocation parm block
+RPFD18   DS    CL40                    Unallocation parm block
+DBW      DS    D                       Workfield RCTOSBA
+DBW2     DS    D                       Workfield Magic SVC
+SBAR0R1  DS    D                       Workfield RCTOSBA
+BUFFER   DC    CL64' '                 Formatted buffer (w/o SBA's)
+INPBUF   DC    CL94' '                 Input buffer
+OUTREC   DS    0CL255
+RDW      DS    CL4
+OUTLINE  DS    CL251                   To contain record
+CMD      DC    C'     '                Option in menu
+WORK     DC    CL8' '
+JOBNAME  DC    CL8' '
+JOBID    DC    CL8' '
+CLASS    DC    C' '
+STAJOBL  DS    X                       Saved length of SSCSJOBN
+IEFRC    DS    C                       Return code IEFSSREQ
+REQFLG   DS    X                       Requeue flag
+FIRST    DS    X                       First spool data set flag
+SW       DS    X                       Flags
+$MAGAPF  EQU   128                     APF bit set by magic SVC
+$KEEP    EQU   64                      Print output to data set
+$PURGE   EQU   32                      Purge output
+TIMEDISP DS    CL7                     0hhmmss in EBCDIC
+SSIBHEAD DS    CL36                    SSIB
+         DS    0F
+RPFPRINT DS    CL(MDLPRTL)
+OUTFILE  DS    CL(MDLOUTL)
+         DS    0F
+PRTDSNL  DS    AL2                     Real length DSN
+PRTDSN   DS    CL44
+*
+SVC99    DS    0F
+         DC    A(REQBLK+X'80000000')   Request block pointer
+*
+*        DYNALLOC request block
+*
+         SPACE 3
+         DS    0F                      Fullword boundary
+REQBLK   DS    0H
+         DC    X'14'                   Length request block (fixed)
+VERB     DC    X'01'                   01 - DSN alloc or 02 - Unalloc
+         DC    XL2'0000'               FLAGS
+DALERR   DC    F'0'                    DALERROR and DALINFO
+TXT1     DC    A(TXTPOINT)             Text pointer address list
+         DC    F'0'                    Reserved
+         DC    F'0'                    Flags
+*
+*        TEXT POINTER LIST
+*
+         SPACE 3
+         DS    0F
+TXTPOINT DS    0H
+         DC    A(DALDSNM2)
+         DC    A(DALSSREQ)
+LASTTXT  DS    0H
+         DC    A(DALDDNM2+X'80000000') Last parm with Return DDNAME
+*
+TXTUNALC DS    0H
+         DC    A(DUNDDNAM)
+         DC    A(DUNOVSHQ)
+LASTTXT2 DS    0H
+         DC    A(DUNOVDSP+X'80000000') Last parm with override disp.
+*
+*        DYNALLOC text units
+*
+DALSSREQ DC    X'005C00010004'         Subsystem request text unit
+DALSSJES DC    CL4'JES2'
+*
+DUNOVDSP DC    X'000500010001'         Override DISP text unit
+         DC    X'08'                   Keep
+         DS    0H
+DUNOVSHQ DC    X'00590000'             Override HOLD
+         SPACE 3
+*
+DALDSNM2 DC    X'00020001002C'         DSNAME text unit
+DSN      DS    CL44
+*
+DALDDNM2 DC    X'005500010008'         Return DDNAME text unit
+DDN      DC    CL8' '
+*
+DUNDDNAM DC    X'000100010008'         DDNAME text unit
+DDNUN    DC    CL8' '
+*
+EXLST    DS    F
+JFCB     DS    CL176
+SCRN     DS    CL(SCREENSL)            Copy of SCREENS
+SSOBHEAD DS    CL20                    SSOB header
+SOEXT    DS    CL1592                  PSO extension               @rp1
+         ORG   *-1592                                              @rp1
+CSEXT    DS    CL1724                  STATUS/CANCEL extension     @rp1
+WORKL    EQU   *-WORKAREA
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+         TITLE 'Other DSECT''s'
+         IHAPSA
+         IKJTCB DSECT=YES,LIST=NO
+         IEZJSCB
+         IEFJSSOB (SO,CS),CONTIG=YES
+         IEFJSSIB
+         IEFJESCT
+         PRINT NOGEN
+         DCBD  DSORG=PS
+         PRINT GEN
+JFCBD    DSECT
+         IEFJFCBN LIST=YES
+         CVT   DSECT=YES,LIST=NO
+         IKJCPPL
+         IKJDAPL
+         IKJDACB
+         IKJDAP08                      IKJDAIR allocation parm block
+         IKJDAP18                      IKJDAIR unallocation parm block
+         TITLE 'EQUATES'
+SSSIZE   EQU   SSOBHSIZ+SSSOSIZE+SSIBSIZE
+WORKSIZE EQU   SSSIZE
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2                       Address of SSOB
+R3       EQU   3                       Address of SSIB
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9                       Address of screen area
+R10      EQU   10                      Base register 2
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12                      Base register 1
+R13      EQU   13                      Save area + working storage
+R14      EQU   14
+R15      EQU   15
+         END

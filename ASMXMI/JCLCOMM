@@ -1,0 +1,255 @@
+         MACRO
+&NAME    JCLCOMM
+.*********************************************************************
+.*                                                                   *
+.*       This macro is the common area between RPFJCL1 and RPFJCL2   *
+.*       This macro belongs to the RPF JCL syntax checker            *
+.*       By   : G.Leemreize/Rob Prins                                *
+.*       D.D. : Apr 04,1983                                          *
+.*                                                                   *
+.*********************************************************************
+&NAME    COM
+         SPACE 3
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Error codes                                                  *
+*        The numbers corresponds with the the numbers in the          *
+*        MESSTXT table in RPFJCL1                                     *
+*                                                                     *
+*---------------------------------------------------------------------*
+         SPACE 3
+ERRSLASH EQU   00                      No // detected
+ERRNAME  EQU   01                      NAME too long
+ERROPER  EQU   02                      Unknown operation
+         SPACE 2
+ERRNOJOB EQU   03                      No JOB card
+ERRNJOBN EQU   04                      No JOBNAME
+ERRJACC  EQU   05                      Error in Accounting (JOB)
+ERRJPRN  EQU   06                      Error in programmers name (JOB)
+ERRJADDR EQU   07                      Error in ADDRSPC parameter
+ERRJCLAS EQU   08                      Error in CLASS parameter
+ERRJCOND EQU   09                      Error in COND parameter
+ERRJGROU EQU   10                      GROUP specified, RACF installed?
+ERRJMSGC EQU   11                      ERROR in MSGCLASS parameter
+ERRJMSGL EQU   12                      Error in MSGLEVEL parameter
+ERRJNOTI EQU   13                      Error in NOTIFY parameter
+ERRJPASS EQU   14                      PASSWORD specified, RACF inst?
+ERRJPERF EQU   15                      Error in PERFORM parameter
+ERRPRTY  EQU   16                      PRTY parameter not allowed
+ERRJRD   EQU   17                      RD not allowed
+ERRJREGN EQU   18                      Error in REGION parameter
+ERRJREST EQU   19                      Error in RESTART parameter
+ERRJTIME EQU   20                      Error in TIME parameter
+ERRJTYPR EQU   21                      Error in TYPRUN parameter
+ERRJUSER EQU   22                      USER specified, RACF installed?
+         SPACE 2
+ERRNOCON EQU   23                      No continuation
+ERRJDOUB EQU   24                      DOUBLE parameter IN JOBCARD
+ERRJKEY  EQU   25                      Unknown keyword parameter JOB.
+         SPACE 2
+ERREPOS1 EQU   26                      Error in POS. parameter EXEC
+ERREACCT EQU   27                      Error in ACCT parameter
+ERREADDR EQU   28                      Error in ADDRSPC parameter
+ERRECOND EQU   29                      Error in COND parameter
+ERREDPRT EQU   30                      DPRTY IS not allowed
+ERREDYNM EQU   31                      Error in DYNAM parameter
+ERREPARM EQU   32                      Error in PARM
+ERREPERF EQU   33                      Error in PERFORM parameter
+ERRERD   EQU   34                      RD not allowed
+ERREREGN EQU   35                      Error in REGION parameter
+ERRETIME EQU   36                      Error in TIME parameter
+ERREKEY  EQU   37                      Unknown keyword parameter EXEC
+ERREDOUB EQU   38                      Double keyword parameter EXEC
+         SPACE 2
+ERRSTAR  EQU   39                      Error in DD *
+ERRDPOS  EQU   40                      Error in POS. parameter
+ERRDDATA EQU   41                      Error in DD DATA
+ERRDUMMY EQU   42                      Error in DD DUMMY
+ERRDYNAM EQU   43                      Error in DD DYNAM
+ERRDAMP  EQU   44                      Error in AMP parameter
+ERRDBURS EQU   45                      BURST not allowed
+ERRDCHAR EQU   46                      CHARS not allowed
+ERRDCHKP EQU   47                      CHKPT not allowed
+ERRDCOP  EQU   48                      Error in COPIES parameter
+ERRDDCB  EQU   49                      Error in DCB parameter
+ERRDDNM  EQU   50                      Error in DDNAME parameter
+ERRDDEST EQU   51                      Error in DEST parameter
+ERRDDISP EQU   52                      Error in DISP parameter
+ERRDDLM  EQU   53                      Error in DLM parameter
+ERRDDSID EQU   54                      DSID not allowed
+ERRDDSN  EQU   55                      Error in DSNAME parameter
+ERRDFCB  EQU   56                      Error in FCB parameter
+ERRDFLAS EQU   57                      FLASH not allowed
+ERRDFREE EQU   58                      Error in FREE parameter
+ERRDHOLD EQU   59                      Error in HOLD parameter
+ERRDLABL EQU   60                      Error in LABEL parameter
+ERRDMODI EQU   61                      MODIFY not allowed
+ERRDMSVG EQU   62                      MSVGP not allowed
+ERRDOUTL EQU   63                      Error in OUTLIM parameter
+ERRDPROT EQU   64                      PROTECT specified, RACF inst.?
+ERRDQNAM EQU   65                      Error in QNAME parameter
+ERRDSPAC EQU   66                      Error in SPACE parameter
+ERRDSUBS EQU   67                      SUBSYS not allowed
+ERRDSYST EQU   68                      Error in SYSOUT parameter
+ERRDTERM EQU   69                      Error in TERM parameter
+ERRDUCS  EQU   70                      Error in UCS parameter
+ERRDUNIT EQU   71                      Error in UNIT parameter
+ERRDVOL  EQU   72                      Error in VOLUME parameter
+ERRDKEY  EQU   73                      Unknown keyword parameter
+ERRDDOUB EQU   74                      Double keyword parameter
+ERRPAREN EQU   75                      Unbalanced parenthesis
+ERRAPOS  EQU   76                      Unbalanced apostrophes
+ERSYSUID EQU   77                      Warning &SYSUID in NOTIFY
+ERR999   EQU   78                      Error in program
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Parameter flags for the JOB card                             *
+*                                                                     *
+*---------------------------------------------------------------------*
+         SPACE 3
+JFLAGS   EQU   *
+FJPOS1   DS    C                       POSITIONAL parameter 1
+FJPOS2   DS    C                       POSITIONAL parameter 2
+FJADDRSP DS    C                       ADDRSPC parameter
+FJCLASS  DS    C                       CLASS parameter
+FJCOND   DS    C                       COND parameter
+FJGROUP  DS    C                       GROUP parameter
+FJMSGCLS DS    C                       MSGCLASS parameter
+FJMSGLVL DS    C                       MSGLEVEL parameter
+FJNOTIFY DS    C                       NOTIFY parameter
+FJPASSW  DS    C                       PASSWORD parameter
+FJPERFRM DS    C                       PERFORM parameter
+FJTIME   DS    C                       TIME parameter
+FJRD     DS    C                       RD parameter
+FJREGION DS    C                       REGION parameter
+FJRESTRT DS    C                       RESTART parameter
+FJTYPRUN DS    C                       TYPRUN parameter
+FJUSER   DS    C                       USER parameter
+FJLEN    EQU   *-JFLAGS
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Parameter flags for the EXEC card                            *
+*                                                                     *
+*---------------------------------------------------------------------*
+         SPACE 3
+EFLAGS   EQU   *
+FEACCT   DS    C                       ACCT parameter
+FEADDRSP DS    C                       ADDRSPC parameter
+FECOND   DS    C                       COND parameter
+FEDPRTY  DS    C                       COND parameter
+FEDYNAM  DS    C                       DYNAMNBR parameter
+FEPARM   DS    C                       PARM= parameter
+FERD     DS    C                       RD parameter
+FEPERFRM DS    C                       PERFORM parameter
+FEREGION DS    C                       REGION parameter
+FETIME   DS    C                       TIME parameter
+FELEN    EQU   *-EFLAGS
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Parameter flags for the DD card                              *
+*                                                                     *
+*---------------------------------------------------------------------*
+         SPACE 3
+DFLAGS   EQU   *
+FDAMP    DS    C                       AMP parameter
+FDBURST  DS    C                       BURST parameter
+FDCHARS  DS    C                       CHARS parameter
+FDCHKPT  DS    C                       CHKPT parameter
+FDCOPIES DS    C                       COPIES parameter
+FDDCB    DS    C                       DCB parameter
+DCBBFALN DS    C                       DCB BFALN parameter
+DCBBFTEK DS    C                       DCB BFTEK parameter
+DCBBLKSZ DS    C                       DCB BLKSIZE parameter
+DCBBUFIN DS    C                       DCB BUFIN parameter
+DCBBUFL  DS    C                       DCB BUFL parameter
+DCBBUFMX DS    C                       DCB BUFMAX parameter
+DCBBUFNO DS    C                       DCB BUFNO parameter
+DCBBUFOF DS    C                       DCB BUFOFF parameter
+DCBBUFUT DS    C                       DCB BUFOUT parameter
+DCBBUFSZ DS    C                       DCB BUFSIZE parameter
+DCBCODE  DS    C                       DCB CODE parameter
+DCBCPRI  DS    C                       DCB CPRI parameter
+DCBCYLOF DS    C                       DCB CYLOFL parameter
+DCBDEN   DS    C                       DCB DEN parameter
+DCBDIAGN DS    C                       DCB DIAGNS parameter
+DCBDSORG DS    C                       DCB DSORG parameter
+DCBEROPT DS    C                       DCB EROPT parameter
+DCBFRID  DS    C                       DCB FRID parameter
+DCBFUNC  DS    C                       DCB FUNC parameter
+DCBGNCP  DS    C                       DCB GNCP parameter
+DCBINTVL DS    C                       DCB INTVL parameter
+DCBKEYLN DS    C                       DCB KEYLEN parameter
+DCBLIMCT DS    C                       DCB LIMCT parameter
+DCBLRECL DS    C                       DCB LRECL parameter
+DCBMODE  DS    C                       DCB MODE parameter
+DCBNCP   DS    C                       DCB NCP parameter
+DCBNTM   DS    C                       DCB NTM parameter
+DCBOPTCD DS    C                       DCB OPTCD parameter
+DCBPCI   DS    C                       DCB PCI parameter
+DCBPRTSP DS    C                       DCB PRTSP parameter
+DCBRECFM DS    C                       DCB RECFM parameter
+DCBRESER DS    C                       DCB RESERVE parameter
+DCBRKP   DS    C                       DCB BRKP parameter
+DCBSTACK DS    C                       DCB STACK parameter
+DCBTHRES DS    C                       DCB THRESH parameter
+DCBTRTCH DS    C                       DCB TRTCH parameter
+FDDNAME  DS    C                       DDNAME parameter
+FDDEST   DS    C                       DEST parameter
+FDDISP   DS    C                       DISP parameter
+FDDLM    DS    C                       DLM parameter
+FDDSID   DS    C                       DSID parameter
+FDDSN    DS    C                       DSN parameter
+FDFCB    DS    C                       FCB parameter
+FDFLASH  DS    C                       FLASH parameter
+FDFREE   DS    C                       FREE parameter
+FDHOLD   DS    C                       HOLD parameter
+FDLABEL  DS    C                       LABEL parameter
+FDMODIFY DS    C                       MODIFY parameter
+FDMSVGP  DS    C                       MSVGP parameter
+FDOUTLIM DS    C                       OUTLIM parameter
+FDPROTEC DS    C                       PROTECT parameter
+FDQNAME  DS    C                       QNAME parameter
+FDSPACE  DS    C                       SPACE parameter
+FDSUBSYS DS    C                       SUBSYS parameter
+FDSYSUT  DS    C                       SYSOUT parameter
+FDTERM   DS    C                       TERM parameter
+FDUCS    DS    C                       UCS parameter
+FDUNIT   DS    C                       UNIT parameter
+FDVOLUME DS    C                       VOLUME parameter
+FDLEN    EQU   *-DFLAGS
+         EJECT
+*---------------------------------------------------------------------*
+*                                                                     *
+*        General data areas                                           *
+*                                                                     *
+*---------------------------------------------------------------------*
+         SPACE 3
+ZERO     DS    P
+ONE      DS    P
+AREALEN  EQU   2000*(6+2)              Length of message area
+MAXERR   EQU   2000                    Maximum number of errors
+STARTLNE DS    A                       BEGIN LINE POINTER
+ENDLINE  DS    A                       END OF LINE POINTER
+STATNBR  DS    F                       # statements
+ERRNBR   DS    F                       # errors
+STARTERR DS    A                       Start addres area with error msg
+CURRERR  DS    A                       Pointer to current error in area
+LINENBR  DS    CL6                     Line number
+CONTFLAG DS    C                       Comment continuation
+FIRSTFLG DS    C                       FIRST RECORD
+DATAFLAG DS    C                       INSTREAM DATA
+DLM      DS    CL2                     DD DATA delimiter
+CARDFLAG DS    C                       SORT CARD
+BRFLAG   DS    P                       Brackets flag
+*                                      Add 1 if '(' found and subtract
+*                                      1 if ')' found
+QTFLAG   DS    C                       QUOTES FLAG
+PROCFLAG DS    C                       INSTREAM PROCEDURE
+EPROCFLG DS    C                       EXEC PROC
+WORKDOUB DS    D                       Work fields
+WORKFULL DS    F
+WORKHALF DS    H
+WORKBYTE DS    C
+         SPACE 3
+COMLEN   EQU   *-COMMON                Length JCLCOMM area
+         MEND

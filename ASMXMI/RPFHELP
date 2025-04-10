@@ -1,0 +1,506 @@
+RPFHELP  TITLE 'THE RPF HELP PROCESSOR'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:     RPFHELP                                          *
+*                                                                     *
+*        Attributes: RENT, REUS.                                      *
+*                                                                     *
+*        Called by:  RPFMAIN (option 7 or PF01/PF13 key)              *
+*                    RPFEDIT (primary command HELP)                   *
+*                                                                     *
+*        Function:   Display 5 categories HELP information:           *
+*                    1. RPF Introduction            (member RPFHELP1) *
+*                    2. RPF Commands                (member RPFHELP2) *
+*                    3. RPF Return codes            (member RPFHELP3) *
+*                    4. RPF Messages                (member RPFHELP4) *
+*                    5. RPF Release notes           (member RPFHELP5) *
+*                                                                     *
+*        Subroutine: RPFBRO, browse the RPFHELPx members              *
+*                                                                     *
+*                   All these members are in a card image             *
+*                   partitioned data set. This data set should be     *
+*                   allocated in the TSO LOGON procedure in the       *
+*                   //SYSHELP concatenation.                          *
+*                                                                     *
+*                   The associated member in the HELP library will    *
+*                   be read and written on a sequential card image    *
+*                   temporary data set.                               *
+*                   Finally RPFBRO will be linked to browse the       *
+*                   HELP member.                                      *
+*                                                                     *
+*        Registers: Register 12 is the base register                  *
+*                   Register 11 points always to RPFCOMM              *
+*                   Register 13 points to the working storage within  *
+*                               the first 72 bytes the save area.     *
+*                   Register 9  points to the HELP menu.              *
+*                                                                     *
+*        Change log:                                                  *
+*        Dec 08,2002 Rpr: Add 7 color support in screen               *
+*        Feb 15,2003 RPr: Extend command area and =n/=n.n cmd added@rp1
+*        Dec 18,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Mar 26,2019 Rpr: Support added for all kinds of 3270 screens *
+*                         up to 62 lines x 160 columns (3290)         *
+*        Apr 01,2020 RPr: Options 0,6,7,8,9 deleted                   *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Jan 28,2021 RPr: Test if RPFHELP is allocated removed.       *
+*                         And DYNALLOC of RPFHELP moved to RPFINIT.   *
+*        May 22,2021 RPr: Process the //SYSHELP concatenation for     *
+*                         reading the HELP members.                   *
+*        Aug 12,2021 RPr: RPFHELP made re-entrant and re-usable       *
+*        Mar 08,2022 RPr: Test RETURN indicator after Browse.         *
+*                                                                     *
+*-------------------------------------------(C)-2025 Skybird Systems--*
+         SPACE 2
+RPFHELP  CSECT
+RPFHELP  AMODE 31                      *                         @rpa01
+RPFHELP  RMODE 24                      *                         @rpa01
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFHELP,R12             Provide addressability
+         L     R11,0(,R1)              Address of RPFCOMM
+         USING COMMAREA,R11            Make RPFCOMM addressable
+         GETMAIN R,LV=WORKL            Allocate working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(0,R13)             Forward pointer
+         LR    R13,R1                  Working storage with save area
+         USING WORKAREA,R13            Make working storage addressable
+         B     START
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         MVC   BLDLLIST(4),=X'0001000E'  1 entry of 14 bytes
+         MVC   HELPMEMB(8),=CL8'RPFHELPX'  Member to BLDL
+         MVC   SYSHELP,MDLHELP         Copy ...
+         MVC   TEMPDCB,MDLTEMP                 model DCB's
+         MVI   BUFFER,C' '             Clear TGET buffer ...
+         MVC   BUFFER+1(9),BUFFER      ... + overflow area
+         LA    R0,SCRWORK              HELP menu in WORKAREA
+         LA    R1,SCR1LENF             Length of the menu
+         LR    R3,R1                   Length 1 = length 2
+         L     R2,=V(SCR1)             Input
+         MVCL  R0,R2                   Copy the HELP menu
+         LA    R9,SCRWORK              Point to HELP menu in WORKAREA
+         USING SCR1,R9                 Make the HELP menu addressable
+         MVC   SCR1UID(7),COMMUSER     User id into screen
+         MVC   SCR1TXT(1),COMMCMD      Move EW/EWA in data stream
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         LM    R4,R5,COMMSIZE          Pickup lines
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1TXT+3
+*
+         LA    R0,2                    Row 2
+         LA    R1,1                    Column 1
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R2C1+1
+*
+         LA    R0,3                    Row 3
+         LA    R1,62                   Column 62
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SC1R3C62+1
+*
+         L     R0,COMMSIZE             Row last
+         LA    R1,2                    Column 2
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC2+1
+*
+         LA    R3,R4C4                 Point to data area in screen
+         LA    R4,4                    First data line is line4
+         LA    R5,6                    Last data line is line with optX
+SCR03    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,4                    Parameter column (4)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+*
+         LA    R4,2(,R4)               Incr. line number + 1 blank line
+         LA    R3,R4C4L(,R3)           Next line in screen
+         BCT   R5,SCR03                And do complete screen
+*
+*        end of screen setup           ------------------------------*
+*
+PUT1     DS    0H
+         XC    COMMPRM,COMMPRM         Clear COMMPRM in RPFCOMM
+         CLI   COMHLPPT,C' '           Option already sel. in RPFMAIN?
+         BE    PUT1O                   No branch
+         MVC   BUFFER(1),COMHLPPT      Move option
+         MVI   COMHLPPT,C' '           Reset the option
+         OI    COMMFLG2,$COMRTRN       Set return indicator in RPFCOMM
+         B     FUNC1                   Scan the option directly
+PUT1O    DS    0H
+         LA    R1,SCR1TXT              Screen address
+         LA    R0,SCR1LEN              Length
+         L     R15,=V(TPUTS)           TPUT routine
+         BALR  R14,R15                 Write HELP menu
+         LA    R5,BUFFER               Output formatted buffer
+         L     R3,COMMSCR              Load screen address
+         LR    R1,R3                   Duplicate area address
+         LA    R0,40                   Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LR    R4,R1                   Save length
+*
+*        Do a TGET ASIS to obtain the AID byte
+*        After the TGET ASIS remove the SBA's from the output
+*
+         CLI   0(R3),X'F3'             PFK3 (end) pressed?
+         BE    RETURN                  Yes: terminate RPFHELP
+         CLI   0(R3),X'C3'             PFK15 (end) pressed?
+         BE    RETURN                  Yes: terminate RPFHELP
+         XR    R2,R2                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   CONV099                 <= 0: end of routine
+         LA    R3,3(,R3)
+         LA    R5,BUFFER               Output address
+*
+*        Input screen is pointed to by R3
+*        Output screen is pointed to by R5
+*        The next section (to CONV099) will remove all the SBA's
+*        In the section CONV100 through CONV101, will be checked
+*        if data is entered. If so, place the options in pos.1 of
+*        the buffer.
+*
+CONV001  DS    0H
+         CLI   0(R3),COMMSBA           Set buffer address (SBA)?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  MVC   0(1,R5),0(R3)           Move input byte
+         OI    0(R5),X'40'             Xlate to upper
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Test next byte
+         B     CONV099                 End of routine
+CONV003  LA    R3,3(,R3)               Skip 3 bytes input
+         SH    R4,=H'2'                Minus 2 BCT
+         BNP   CONV099                 <=0: terminate conversion
+         BCT   R4,CONV001              Test next byte
+CONV099  DS    0H
+         LR    R1,R2                   Output length in register 1
+         LTR   R1,R1                   Nothing received
+         BZ    PUT1
+         LA    R1,5                    Max length of BUFFER
+         LA    R2,BUFFER               Address of receive buffer
+CONV100  DS    0H
+         CLI   0(R2),X'40'             Blank?
+         BNE   CONV101                 No: option found in BUFFER
+         LA    R2,1(,R2)               Next byte in BUFFER
+         BCT   R1,CONV100              Loop until option found
+         B     PUT1                    No options entered, redisplay
+CONV101  DS    0H
+         MVC   BUFFER,0(R2)            Move option(s) to start buffer
+         CLI   BUFFER,X'6E'            Reshow code ?
+         BE    PUT1                    Yes: review screen
+         MVI   MSG1,C'-'
+         MVC   MSG1+1(L'MSG1-1),MSG1
+         CLI   BUFFER,C'?'
+         BE    PUT1
+FUNC1    CLI   BUFFER,C'1'             RPF introduction?
+         BNE   FUNC2
+         MVI   HELPMEMB+7,C'1'         Member=RPFHELP1
+         B     BROWSE
+FUNC2    CLI   BUFFER,C'2'             RPF commands?
+         BNE   FUNC3
+         MVI   HELPMEMB+7,C'2'         Member=RPFHELP2
+         B     BROWSE
+FUNC3    CLI   BUFFER,C'3'             RPF codes?
+         BNE   FUNC4
+         MVI   HELPMEMB+7,C'3'         Member=RPFHELP3
+         B     BROWSE
+FUNC4    CLI   BUFFER,C'4'             RPF messages?
+         BNE   FUNC5
+         MVI   HELPMEMB+7,C'4'         Member=RPFHELP4
+         B     BROWSE
+FUNC5    CLI   BUFFER,C'5'             RPF history?
+         BNE   FUNCX
+         MVI   HELPMEMB+7,C'5'         Member=RPFHELP5
+         B     BROWSE
+FUNCX    CLI   BUFFER,C'X'             Exit?
+         BE    RETURN
+FUNC#    CLI   BUFFER,C'='             '=' selected ?              @rp1
+         BNE   ERR1                    No: invalid option          @rp1
+         MVC   CMAINOPT,BUFFER+1       Move option after '='       @rp1
+         OI    COMMFLG2,$COMRTRN       Set return indicator        @rp1
+         B     RETURN                  Exit                        @rp1
+ERR1     DS    0H
+         MVC   MSG1,ERR1TXT            Msg: Invalid option
+         NI    COMMFLG2,255-$COMRTRN   Reset return indicator
+         B     PUT1
+*---------------------------------------------------------------------*
+*
+*        GETMAIN a buffer with length = BLKSIZE of HELP data set
+*        Try to find the RPFHELPx member in the SYSHELP concatenation
+*        Allocate a card image temporary data set.
+*        Read the member RPFHELPx from the SYSLIB concatenation.
+*        Invoke RPFBRO to browse this temporary data set.
+*        Free and delete the temporary data set.
+*        FREEMAIN the buffer.
+*
+*-------------------------------------------(C)-2025 Skybird Systems--*
+BROWSE   DS    0H
+         RPFSA24                       Enter AMODE 24
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         LA    R2,SYSHELP              DCB address
+         USING IHADCB,R2               Provide addressavility
+         OPEN  ((2)),MF=(E,COMOPN)     Open the DCB
+         BLDL  (2),BLDLLIST            Try to find member
+         LTR   R15,R15                 BLDL ok ?
+         BNZ   BROWSER2                No: error
+         FIND  (2),TTRC,C              Find beginning RPFHELPx member
+         LH    R3,DCBBLKSI             Block size
+         GETMAIN R,LV=(3)              Getmain BLKSIZE
+         ST    R1,AREA1                Save for later use
+         ST    R3,AREALEN              Save length
+         LA    R14,RPFD08              DAIR allocation parm block
+         USING DAPB08,R14              Address it
+         XC    RPFD08,RPFD08           and clean
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFHELP'   DDNAME to allocate
+         MVC   DA08PDSN,=A(DSNL)       Temporary data set name
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name
+         MVI   DA08SER,X'40'           No volume serial
+         MVC   DA08SER+1(7),DA08SER                    provided
+         MVI   DA08PQTY+3,X'01'        2 tracks primary
+         MVI   DA08SQTY+3,X'01'        2 tracks secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         DROP  R14                     RPFD08
+         LA    R1,RPFD08               Allocation parameter block
+         BAL   R5,CALLTS               Invoke IKJDAIR
+         LTR   R15,R15                 Allocation OK?
+         BNZ   BROWSER3                No: inform user
+         MVI   COMOPN,X'80'            This is the only and last DCB
+         OPEN  (TEMPDCB,(OUTPUT)),MF=(E,COMOPN) Open the output
+READBLK  DS    0H
+         L     R8,AREA1                Area address
+         LA    R2,SYSHELP              DCB address
+         READ  DECBU,SF,(2),(8),'S',MF=E read a block
+         CHECK DECBU                   and wait for completion
+         LH    R3,DCBBLKSI             BLKSIZE at time of read
+         DROP  R2                      DCBD
+         L     R1,DECBU+16             Status area address
+         SH    R3,14(R1)               Subtract residual count
+         XR    R2,R2                   Clear even register
+         D     R2,=F'80'               Divide by record length
+WRITEREC DS    0H
+         PUT   TEMPDCB,(8)             Write record
+         LA    R8,80(,R8)              Point to next logical record
+         BCT   R3,WRITEREC             Loop until all recs of blk done
+         B     READBLK                 Read next block from SYSHELP
+READEOF  DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE TEMPDCB,MF=(E,COMCLS)   Close output
+         FREEPOOL TEMPDCB              and get rid of the QSAM buffers
+         MVC   COMMPRM(8),=CL8'RPFHELP' move DDNAME
+         ST    R11,PRMCOMM             A of A(RPFCOMM)
+         LA    R1,PRMCOMM              Parameter for RPFBRO
+         LINK  EP=RPFBRO
+         XC    RPFD18,RPFD18           Clear parm block
+         LA    R14,RPFD18              Point to unallocation parm blk
+         USING DAPB18,R14              Address this DSECT
+         MVI   DA18CD+1,X'18'          Entry code 18 (unallocation)
+         MVC   DA18DDN,=CL8'RPFHELP'   DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         LA    R1,RPFD18               Unallocation parameter block
+         BAL   R5,CALLTS               Unallocate
+         DROP  R14                     RPFD18
+         B     BROWSE9
+BROWSER2 DS    0H
+         MVC   MSG1,ERR4TXT            Msg: No member RPFHELPx
+         MVC   MSG1+17(8),HELPMEMB     Move member name
+         NI    COMMFLG2,255-$COMRTRN   Reset return indicator - RPFCOMM
+         B     BROWSE9
+BROWSER3 DS    0H
+         MVC   MSG1,ERR2TXT            Msg: Alloc. error work data
+         NI    COMMFLG2,255-$COMRTRN   Reset return indicator - RPFCOMM
+BROWSE9  DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE SYSHELP,MF=(E,COMCLS)   Close data set
+         L     R2,AREA1                Buffer of SYSHELP
+         L     R3,AREALEN              Length
+         FREEMAIN R,A=(2),LV=(3)
+         RPFSA31                       Restore addressing mode
+         TM    COMMFLG2,$COMRTRN       Return flag set (=n.n option)?
+         BNO   PUT1                    No: display HELP panel
+RETURN   DS    0H
+         LR    R3,R13                  Copy address working storag
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release working storage
+         RETURN (14,12),RC=0           Return to RPFMAIN
+*
+         TITLE 'Call IKJDAIR, entry = BAL R5,CALLTS'
+CALLTS   DS    0H
+         LR    R15,R1                  Save address
+         LA    R1,RPFDAPL
+         L     R2,COMMCPPL             Pickup our CPPL
+         USING CPPL,R2
+         USING DAPL,R1
+         MVC   DAPLUPT(4),CPPLUPT
+         MVC   DAPLECT(4),CPPLECT
+         XC    ECB,ECB                 Clear Event control block
+         LA    R0,ECB
+         ST    R0,DAPLECB              Set A(ECB) in DAPL
+         MVC   DAPLPSCB(4),CPPLPSCB
+         ST    R15,DAPLDAPB
+         CALLTSSR EP=IKJDAIR,MF=(E,RPFDAPL)
+         BR    R5                      Return
+         DROP  R1,R2                   DAPL and CPPL
+*
+         LTORG ,
+         DROP  ,
+         TITLE 'Constants'
+ERR1TXT  DC    CL25'---------- Invalid option'
+ERR2TXT  DC    CL25'-- Alloc. error work data'
+ERR4TXT  DC    CL25'------ No member XXXXXXXX'  +17
+DSNL     DC    AL2(9)                  Real length DSN
+DSN      DC    CL44'&&&&RPFHELP'      Data set name temporary data set
+         PRINT NOGEN
+MDLHELP  DCB   DSORG=PO,DDNAME=SYSHELP,MACRF=R,EODAD=READEOF
+MDLHELPL EQU   *-MDLHELP
+MDLTEMP  DCB   DSORG=PS,DDNAME=RPFHELP,MACRF=PM,RECFM=FB,LRECL=80,     X
+               BLKSIZE=3200
+MDLTEMPL EQU   *-MDLTEMP
+         PRINT GEN
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+*
+         TITLE 'HELP menu'
+SCR1     CSECT
+SCR1TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR1TXT  DC    X'F5C21100001DF8'       EW or EWA r1,c1+
+SCR1LNE  DC    CL79'------------------------------ RPF Help menu ------C
+               ----------------------------'
+         ORG   SCR1LNE+54
+MSG1     DS    CL25
+         ORG   ,
+SC1R2C1  DC    X'110000',X'1DF8',C'Option  ===>',X'1DC113'         @rp1
+         DC    C'     ',X'1DF0'                                    @rp1
+SC1R3C62 DC    X'110000',AL3(GREEN),C'User ID - ',AL3(TURQ) r03,c62+
+SCR1UID  DS    CL7
+R4C4     DC    X'110000',AL3(WHITE),C'1  '   r4,c4+
+         DC    AL3(TURQ)
+         DC    CL13'INTRO'
+         DC    AL3(GREEN)
+         DC    CL35'Introduction to RPF'
+R4C4L    EQU   *-R4C4
+         DC    X'110000',AL3(WHITE),C'2  '   r6,c4+
+         DC    AL3(TURQ)
+         DC    CL13'COMMANDS'
+         DC    AL3(GREEN)
+         DC    CL35'Explanation of all RPF commands'
+         DC    X'110000',AL3(WHITE),C'3  '
+         DC    AL3(TURQ)
+         DC    CL13'CODES'
+         DC    AL3(GREEN)
+         DC    CL35'Explanation of all RPF return codes'
+         DC    X'110000',AL3(WHITE),C'4  '
+         DC    AL3(TURQ)
+         DC    CL13'MESSAGES'
+         DC    AL3(GREEN)
+         DC    CL35'Display all RPF messages'
+         DC    X'110000',AL3(WHITE),C'5  '
+         DC    AL3(TURQ)
+         DC    CL13'HISTORY'
+         DC    AL3(GREEN)
+         DC    CL35'Display RPF release notes'
+         DC    X'110000',AL3(WHITE),C'X  '
+         DC    AL3(TURQ)
+         DC    CL13'EXIT'
+         DC    AL3(GREEN)
+         DC    CL35'Return'
+RLASTC2  DC    X'110000',AL3(TURQ)     R last, c2
+         DC    C'Hit ',AL3(WHITE),C'PF03/15 ',AL3(TURQ)
+         DC    C'to return'
+SCR1LEN  EQU   *-SCR1TXT
+SCR1LENF EQU   *-SCR1TXTF
+*
+WORKAREA DSECT
+SAVE     DS    18F                     Should be the first field
+DBW      DS    D                       Used in RCTOSBA
+SBAR0R1  DS    D                       Used in RCTOSBA
+PRMCOMM  DS    F                       To contain address of RPFCOMM
+BUFFER   DS    CL5                     \___ Buffer + overflow area ___/
+         DS    CL5                     /                              \
+AREA1    DS    F                       Address of GETMAIN'd area
+AREALEN  DS    F                       Length of GETMAIN'd area
+RPFDAPL  DS    5F                      DAIR parameter list
+ECB      DS    F                       An ECB
+RPFD08   DS    CL84                    IKJDAIR allocation parm block
+RPFD18   DS    CL40                    IKJDAIR unallocation parm block
+*
+BLDLLIST DS    0F
+         DC    AL2(1)                  1 entry to BLDL
+         DC    AL2(14)                 Length of entry
+HELPMEMB DC    CL8'RPFHELPX'           Member name
+TTRC     DS    XL4                     TTR + K byte
+         DS    CL2                     Rest of entry
+*
+SYSHELP  DS    CL(MDLHELPL)            Copy of MDLHELP DCB
+TEMPDCB  DS    CL(MDLTEMPL)            Copy of MDLTEMP DCB
+*
+DECBU    READ  DECB2,SF,0,0,'S',MF=L
+DECBLEN  EQU   *-DECBU
+*
+SCRWORK  DS    CL(SCR1LENF)            Copy of HELP menu
+WORKL    EQU   *-WORKAREA              Length of our working storage
+*
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+         TITLE 'Other DSECTs'
+         CVT   DSECT=YES,LIST=NO
+         IKJCPPL
+         IKJDAPL
+         IKJDAP08
+         IKJDAP18
+         PRINT NOGEN
+         DCBD  DSORG=PS,DEVD=DA
+         END

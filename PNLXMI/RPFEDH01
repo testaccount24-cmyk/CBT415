@@ -1,0 +1,47 @@
+)ATTR
+ + TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(GREEN)
+ % TYPE(TEXT)   INTENS(HIGH) SKIP(ON)    COLOR(WHITE)
+ ¬ TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(YELLOW)
+ _ TYPE(INPUT)  INTENS(LOW)  JUST(LEFT)  COLOR(TURQ)
+ # TYPE(INPUT)  INTENS(LOW)  JUST(ASIS)
+ ~ TYPE(INPUT)  INTENS(HIGH) JUST(LEFT)
+ ! TYPE(INPUT)  INTENS(HIGH) JUST(RIGHT)
+ { TYPE(OUTPUT) INTENS(LOW)  JUST(LEFT)
+ } TYPE(OUTPUT) INTENS(LOW)  JUST(RIGHT)
+ Ý TYPE(OUTPUT) INTENS(HIGH) JUST(LEFT)
+ ¨ TYPE(OUTPUT) INTENS(HIGH) JUST(RIGHT)
+ ¢ TYPE(TEXT)  INTENS(HIGH) COLOR(YELLOW)
+)BODY EXPAND(\\)
+%TUTORIAL -----------------  RPFED - HELP PANEL  ----------\-\------ TUTORIAL
+%OPTION  ===>_ZCMD                                                             +
+%
+%                         RPFED command processor
++
++The most used RPF EDIT primary commands are:
+¢1. %DOWN     -+1 page forward.        ¢16.%UNNUM    -+Remove line numbers.
+¢2. %UP       -+1 page backward.       ¢17.%BOTTOM   -+Scroll to last page.
+¢3. %LEFT     -+Scroll to left.        ¢18.%TOP      -+Scroll to first page.
+¢4. %RIGHT    -+Scroll to right.       ¢19.%PFK      -+Alter/display PFK's.
+¢6. %F str    -+Search string 'str'.   ¢20.%C /x/y/A -+Change char. strings.
+¢7. %COLS     -+Toggle scale line.     ¢21.%SUB      -+Submit data.
+¢8. %PROF     -+Toggle profile line.   ¢22.%TSO      -+Enter TSO panel.
+¢9. %COBOL ON -+Align on Cobol mode.   ¢23.%I mm,n   -+Insert n lines after mm.
+¢10.%COBOL OFF-+Go to standard mode.   ¢24.%DEL n,m  -+Delete lines n thru m.
+¢11.%CAPS ON  -+Translate to capitals. ¢25.%SAVE     -+Save data in data set.
+¢12.%CAPS OFF -+Leave in ASIS mode.    ¢26.%CAN(CEL) -+Terminate without SAVE.
+¢13.%NULLS ON -+Trailing blanks - nulls¢27.%END      -+Terminate (and Save)
+¢14.%NULLS OFF-+Trailing nulls - blanks
+¢15.%RENUM    -+Renumber data
++
++
++
++Enter%END+command to return.
+)INIT
+&ZHTOP = RPFEDH00
+)PROC
+  &ZSEL = TRANS(TRUNC(&ZCMD,'.')
+              ' ',' '
+                X,'EXIT'
+                *,'?' )
+  &ZTRAIL = .TRAIL
+)END

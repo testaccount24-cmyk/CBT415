@@ -1,0 +1,805 @@
+RPFCHNG  TITLE 'CHANGE CHAR STRINGS IN THE EDIT WORKSPACE'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFCHNG                                       *
+*                                                                     *
+*        Called by:     RPFEDIT                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Function:      Change character string in the Edit workspace *
+*                       Input is a 'C' command issued by RPFEDIT      *
+*                                                                     *
+*                       The address of the 'C' command is located     *
+*                       In field 'COMMPRM' in RPFCOMM.                *
+*                                                                     *
+*                       The format of the change command =            *
+*                       1:  C /string2/string2/ Change only character *
+*                       Strings on the current line (COMMFSCR).       *
+*                       2:  C /string1/string2/A Change character     *
+*                       strings from the current line until the end   *
+*                       of the workspace.                             *
+*                       3:  C /string1/string2/nnn,mmm                *
+*                       Change strings in linerange nnn - mmm.        *
+*                       4:  C //string2/nnn,mmm                       *
+*                       Change a null string into string2 = insert    *
+*                       'string2' at the start of the EDIT boundaries *
+*                       5:  C /string1//nnn,mmm                       *
+*                       Change string1 into a null string = delete    *
+*                       'string2'.                                    *
+*                       6:  C /P'.'/string2/nnn,mmm                   *
+*                       Change invalid strings.                       *
+*                                                                     *
+*                       'string1' and/or 'string2' can be also a      *
+*                       HEX string. HEX strings are specified with    *
+*                       X'hhhh..'  (hhhhh) are characters from 0-9    *
+*                       or 'a-f' (or 'A-F') and is always an even     *
+*                       number of HEX characters.                     *
+*                       Example: X'404040' are three blanks.          *
+*                                                                     *
+*                       The delimiter (in this example "/") can be    *
+*                       any character with exception of the blank.    *
+*                       If the change is successful, field 'COMMPRM'  *
+*                       contains a message (MSG4TXT) with the number  *
+*                       of changes made.                              *
+*                                                                     *
+*        Note:          If RPFCHNG is invoked by RPFEDIT in 'NUM'     *
+*                       mode max 247 bytes will be searched In 'NONUM'*
+*                       mode, max 255 bytes will be searched.         *
+*                       The length of search is dependend of the Edit *
+*                       boundaries (BNDS cmd in RPFEDIT).             *
+*                                                                     *
+*        Registers:     Register 12 is the base register.             *
+*                       Register 13 points to the working storage.    *
+*                       Register 11 is the address of RPFCOMM         *
+*                                                                     *
+*        Return codes set in register 15:                             *
+*                                                                     *
+*                       00 Execution allright: strings changed,       *
+*                          message with # changes in COMMPRM.         *
+*                       04 Errors detected: error message in          *
+*                          'COMMPRM' field of RPFCOMM.                *
+*                                                                     *
+*        Change log:                                                  *
+*        Feb 15,2005 Rpr: Check end of command to prevent line-1 or   *
+*                         Line-2 invalid message                   @rp1
+*        Dec 17,2018 RPr: make RPF suitable for MVS/380 and up   @rpa01
+*        Apr 15,2019 Rpr: Support LRECL up to 255 instead of          *
+*                         record length of 80 only                    *
+*        May 05,2019 Rpr: Support change HEX strings with             *
+*                         C /X'aa'/X'bb'/A (or nnn-mmm)               *
+*        Jun 30,2019 Rpr: Line numbers in last 8 positions if         *
+*                         Numbered and independent of LRECL           *
+*        Jan 05,2020 RPr: Loop fixed in 'C //string2'/ command        *
+*                         C /P'.'/string2/ change invalid strings     *
+*                         support added.                              *
+*        Jan 09,2020 RPr: Set flag $CHLINE in workspace line if       *
+*                         changes are made.                           *
+*        Jun 09,2022 RPr: Loop fixed if 'C /<blanks>//' given.        *
+*        May 12,2023 RPr: Remove translate X'00' into C' ' to avoid   *
+*                         destruction of data with invalid characters.*
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFCHNG  CSECT
+RPFCHNG  AMODE 31                      *                         @rpa01
+RPFCHNG  RMODE ANY                     *                         @rpa01
+         SAVE (14,12),,*               Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFCHNG,R12             and make RPFCHNG addressable
+         L     R11,0(,R1)              Pick up RPFCOMM
+         USING COMMAREA,R11            Address RPFCOMM
+         GETMAIN R,LV=WORKL
+         ST    R1,8(,R13)              Forward pointer
+         ST    R13,4(,R1)              Backward pointer
+         LR    R13,R1                  Address of save + working storg
+         USING WORKAREA,R13            Address our working storage
+         B     START                   Branch over constants
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         MVI   DLMCHAR+1,C'0'
+         MVC   ERRJTXT,ERRJXTXT        Move message to dynamic area
+         MVC   ERRPTXT,ERRPXTXT        Move message to dynamic area
+         MVC   MSG4TXT,MSG4XTXT        Move message to dynamic area
+         MVI   CHBLANKS,C' '           Blank CHBLANKS in ....
+         MVC   CHBLANKS+1(L'CHBLANKS-1),CHBLANKS ... working storage
+         MVI   SW01,0                  Clear switch
+         ZAP   CHCNTR,=P'0'            Init changes made counter
+         MVC   FIRSTLNE,COMMFSCR       Default from current line to
+         MVC   LASTLNE,COMMLAST        the end of the workspace
+         ICM   R6,15,COMMPRM           Address 'C' command
+         MVC   DLMCHAR,2(R6)           Move delimiter
+         CLI   DLMCHAR,X'40'           Is the delimiter a blank?
+         BE    TXT055                  Yes: invalid
+         CLI   DLMCHAR,X'00'           Is the delimiter NULL char str?
+         BE    TXT055                  Yes: invalid
+         LA    R4,45                   Length of subcommand BUFFER
+*                                      .. minus 3
+         XR    R5,R5                   Clear register 5
+         LA    R6,3(,R6)               Point after delimiter
+         ST    R6,OLDSTRNG             Save address
+         LA    R1,UPD003               Branch address first string
+UPD001   DS    0H
+         CLC   0(1,R6),DLMCHAR         End of character string?
+         BER   R1                      Yes: good to UPD003 or UPD005
+         LA    R5,1(,R5)               Increase length
+         LA    R6,1(,R6)               Test next position
+         BCT   R4,UPD001               Try again
+         B     TXT055                  Invalid character string
+UPD003   DS    0H
+         LA    R1,UPD005               Change branch address to use
+*                                      same routine for string2
+         LR    R7,R5                   Save length old character str.
+         LA    R4,45                   Search max 45 times
+*                                      = Length command = L('C /')
+         SR    R4,R7                   Subtract length of 1st string
+         BCTR  R4,0                    Minus length of delimiter (1)
+         LA    R6,1(,R6)               Point to new character string
+         ST    R6,NEWSTRNG             Save A(New string)
+         XR    R5,R5                   Clear register 5
+         B     UPD001                  Test length new string
+UPD005   DS    0H
+         LA    R6,1(,R6)               Point after last delimiter
+         CLI   0(R6),C'A'              'C /str1/str2/A' command?
+         BE    UPDALL                  Yes: mark change all
+         CLI   0(R6),X'81'             'c /str1/str2/a' command (Asis)?
+         BE    UPDALL                  Yes: mark change all
+         CLI   0(R6),X'40'             Blank?
+         BE    UPDCURR                 Update current line
+         CLI   0(R6),X'00'             NULL ?
+         BE    UPDCURR                 Yes: update current line
+TXT006   STM   R5,R7,SAVE57            Save work registers
+         LR    R3,R6                   Start address for scan
+         BAL   R14,LINE                Try to find Line number(s)
+         B     TXT007(R15)             Initiate branchlist
+TXT007   B     TXT012                  No errors
+         B     TXT073                  Invalid lines
+         B     TXT073                  Lines not numeric, also invalid
+TXT012   CLC   LN2FLD,C0000            LN2 entered?
+         BNE   TXT013                  Yes: skip
+         MVC   LN2FLD,LN1FLD           No: LN2 = LN1
+TXT013   CLI   LN1FLD,C'*'             * - current line?
+         BE    TXT014                  Yes: current line
+         CLC   LN1FLD,C0000            LN1 entered?
+         BNE   TXT015                  Yes: skip
+TXT014   L     R3,COMMFSCR             Default current line
+         MVC   LN1FLD+2(6),OFFSETN2(R3) Line number into LN1FLD
+         MVC   LN1FLD(2),=C'00'        Insert leading zeroes
+         CLC   LN2FLD,C0000            LN2 entered?
+         BNE   TXT015                  Yes: skip
+         L     R3,COMMFSCR             Default current line
+         MVC   LN2FLD+2(6),OFFSETN2(R3) Line number into LN2FLD
+         MVC   LN2FLD(2),=C'00'        Leading zeroes
+TXT015   DS    0H
+         MVI   ERRPTXT+14,C'1'         Move Line-ID into message
+         LA    R1,LN1FLD+2             Parm for SRCHLINE routine
+         L     R15,EPSRCH              Entry point SRCHLINE routine
+*
+*        SRCHLINE is a CSECT in RPFEDIT
+*
+         BALR  R14,R15                 Execute
+         LTR   R15,R15                 Line found?
+         BNZ   TXT085                  No: issue error message
+         LR    R7,R1                   A(found line)
+         MVI   ERRPTXT+14,C'2'         Move line-id 2 into message
+         LA    R1,LN2FLD+2             Parm for SRCHLINE routine
+         L     R15,EPSRCH              Entry point SRCHLINE routine
+         BALR  R14,R15                 Execute
+         LTR   R15,R15                 Line found?
+         BNZ   TXT085                  No: issue error message
+         LR    R8,R1                   A(found line)
+         ST    R7,FIRSTLNE             First line to scan
+         ST    R8,LASTLNE              Last line to scan
+         LM    R5,R7,SAVE57            Restore work registers
+UPDALL   DS    0H
+         OI    SW01,$CHALL             'C /str1/str2/A' or
+*                                      'C /str1/str2/nnn,mmm given
+UPDCURR  DS    0H
+         ST    R7,LSTRNG1              Save length old character string
+         ST    R5,LSTRNG2              SAVE length new character string
+         L     R1,OLDSTRNG             Point to Old string
+         L     R0,LSTRNG1              Pickup length
+         LA    R15,HEXTEST             Test if HEX
+         BALR  R14,R15                 Execure HEXTEST
+         B     UPD019(R15)             Branchlist
+UPD019   DS    0H
+         B     UPD020                  Rc = 0, string converted to HEX
+         B     UPD021                  Rc = 4, no HEX string
+         B     UPD020A                 Rc = 8, P'.' found
+         B     TXT055                  Rc = 12, invalid string
+UPD020   DS    0H
+         ST    R1,OLDSTRNG             Save string address
+         ST    R0,LSTRNG1              Save length STRING1
+         B     UPD021                  Branch
+UPD020A  DS    0H
+         OI    SW01,$INVCH             Mark change invalid character
+         LA    R0,1                    Set length
+         ST    R0,LSTRNG1                        to 1
+UPD021   DS    0H
+         L     R1,NEWSTRNG             Point to new string
+         L     R0,LSTRNG2              Pickup length
+         O     R0,=X'80000000'         Mark scan new string
+         LA    R15,HEXTEST             Test if HEX
+         BALR  R14,R15                 Execure HEXTEST
+         B     UPD022(R15)             Branchlist
+UPD022   DS    0H
+         B     UPDCONT                 Rc = 0, string converted to HEX
+         B     UPD023                  Rc = 4, no HEX string
+         B     UPD023                  Rc = 8, P'.' in new string
+*                                      is treated as a normal string
+         B     TXT055                  Rc = 12, invalid string
+UPDCONT  DS    0H
+         ST    R1,NEWSTRNG             Save string address
+         ST    R0,LSTRNG2              Save length STRING2
+UPD023   DS    0H
+*
+*        Test if the command C /<blank(s)>// is given. This will
+*        result in a loop, because blanks will be shifted in.
+*
+         ICM   R9,15,LSTRNG1           Length old character string
+         BZ    UPD024                  Branch if length old string = 0
+         ICM   R1,15,LSTRNG2           Length new character string
+         BNZ   UPD025                  Not zero: OK, else test if
+*                                      C /<blank(s)>// is given.
+         BCTR  R9,0                    Length1 minus 1 for EX
+         L     R8,OLDSTRNG             A(Old string)
+         EX    R9,COMPBLNK             Compare if old string = blank
+         BE    TXT055                  Yes: invalid character string
+         B     UPD025                  No: try to change
+UPD024   DS    0H                      Try to find character string
+         ICM   R1,15,LSTRNG2           Length new character string
+         BZ    TXT055                  0: invalid (both lengths zero)
+UPD025   DS    0H                      Try to find character string
+         CLC   LSTRNG1,COMBNDSL        Character string > BNDS?
+         BH    TXT079                  Yes: invalid
+         CLC   LSTRNG2,COMBNDSL        Character string > BNDS?
+         BH    TXT079                  Yes: invalid
+         L     R9,FIRSTLNE             First line to change
+         ST    R9,SAVELST              Save that address
+UPD026   DS    0H                      Try to find character string
+         USING WORKSPCE,R9             Address workspace line
+         LA    R9,WORKDATA             Point to data portion workspace
+         DROP  R9
+         AL    R9,COMBNDS              Add Boundaries offset
+         L     R5,LSTRNG2              Length new string
+         ICM   R7,15,LSTRNG1           Length old string
+         BZ    UPD029                  Yes: branch
+         L     R4,COMBNDSL             Length of boundary
+         SL    R4,LSTRNG1              Minus length of old string
+         LA    R4,1(,R4)               Include last position
+         BCTR  R7,0                    Minus 1 for EX
+UPD027   DS    0H                      Find old char string and replace
+         L     R8,OLDSTRNG             Pick address of Old string
+         TM    SW01,$INVCH             Change P'.'?
+         BNO   UPD027A                 No: do a compare
+*
+*        Do a TRT of the input against the invalid character translate
+*        table in RPFCOMM. Match is found if the character is invalid.
+*
+         EX    R7,COMPINV              Else do a TRT
+         BNZ   UPD029                  Yes: invalid character found
+         B     UPD028                  No: test next character in data
+UPD027A  DS    0H                      Find Old char string and replace
+*
+*        Do a normal compare with the old string pointed to by R8
+*
+         EX    R7,COMPARE              Test if old string present
+         BE    UPD029                  Yes: replace into new string
+UPD028   DS    0H
+         LA    R9,1(,R9)               Next character
+         BCT   R4,UPD027               Try again
+         B     UPDNEXT                 Try next line if available
+COMPBLNK CLC   0(0,R8),CHBLANKS        << executed >>
+COMPARE  CLC   0(0,R9),0(R8)           << executed >>
+COMPINV  TRT   0(0,R9),COMTRTST        << executed >>
+UPD029   DS    0H
+         L     R1,SAVELST              Load start line in workspace
+         USING WORKSPCE,R1             Address workspace line
+         OI    WORKFLGS,$CHLINE        Mark workspace line changed
+         CLC   =CL3'ON',COMMNUM        Do we have numbered data?
+         BNE   UPD030                  No: good
+         TM    COMMFLG1,$COMCOB        COBOL data (line # in col 1-6)?
+         BO    UPD030                  Yes: do not alter col 79-80
+         TM    COMMFLG4,$COMVB         Variable data (line# in col 1-8)
+         BO    UPD029A                 Yes: do not alter col 79-80
+         L     R14,COMMRECL            LRECL of data set or member
+         LA    R15,WORKDATA            Point to data portion
+         LA    R14,0(R14,R15)          Point after record
+         BCTR  R14,0                   Point to
+         BCTR  R14,0                           last 2 bytes
+         MVC   0(2,R14),COMMEMM        Move EBCDIC ISPF mm
+         B     UPD030
+UPD029A  DS    0H
+         MVC   WORKDATA+6(2),COMMEMM   Move ISPF mm into column 7-8
+UPD030   DS    0H
+         DROP  R1
+         ST    R9,SAVER9               Save position in line
+         L     R7,LSTRNG1              Length of string1
+         L     R5,LSTRNG2              Length of string2
+         SR    R7,R5                   Different length.
+         BZ    UPD035                  Branch if lengths are equal
+         BH    UPD031                  Old string > new string
+*---------------------------------------------------------------------*
+*        New string longer   ---
+*---------------------------------------------------------------------*
+         L     R3,SAVER9               Restore postition
+         AL    R3,LSTRNG1              Add length of old string
+         ST    R3,SAVER3               Save end of old string in line.
+         LPR   R5,R7                   Make result positive
+         L     R4,SAVELST              Load 1st position changed line
+         USING WORKSPCE,R4             Address workspace line
+         L     R14,COMMRECL            Record length of source data
+         BCTR  R14,0                   Minus 1 for EX
+         EX    R14,CHNGEX1             Move data portion
+         B     *+10                    Branch over EX instruction
+CHNGEX1  MVC   CARD(0),WORKDATA        << executed >>
+         LA    R4,WORKDATA             Point to data portion in workspc
+         DROP  R4
+         AL    R4,COMBNDS              Add Boundaries offset
+         AL    R4,COMBNDSL             Last position in line.
+         SR    R4,R3                   Length of remaining data.
+         L     R8,LSTRNG1              Load length of old string
+         AR    R8,R4                   Len rem.data including old str.
+         C     R8,LSTRNG2              Fits the new strng in the line?
+         BL    UPDNEXT                 No: do not replace
+         SR    R4,R5
+         AR    R3,R5
+         L     R5,SAVELST              Restore first position of line
+         USING WORKSPCE,R5             Address workspace line
+         LA    R5,WORKDATA             Point to data portion of line
+         DROP  R5                      Kill addressability
+         AL    R5,COMBNDS              Add Boundaries offset
+         SR    R3,R5                   Calculate Offset
+         LR    R5,R3                   And save
+         LA    R3,CARD
+         AL    R3,COMBNDS              Add boundary offset to address
+         AR    R3,R5
+         L     R5,SAVER3
+         BCTR  R4,0
+         CH    R4,=H'0'                Negative?
+         BL    UPD035                  Yes: do not shift remaining data
+         EX    R4,MOVE2                No: shift remaining data
+         L     R4,SAVELST              Restore change line in workspace
+         USING WORKSPCE,R4             Address workspace line
+         L     R14,COMMRECL            LRECL of source data
+         BCTR  R14,0                   Minus 1 for EX
+         EX    R14,CHNGEX2             Restore changed line
+         B     UPD035                  REPLACE.
+CHNGEX2  MVC   WORKDATA(0),CARD        << executed >>
+         DROP  R4
+*---------------------------------------------------------------------*
+*        Old string longer   ---
+*---------------------------------------------------------------------*
+UPD031   DS    0H
+         L     R3,SAVER9               Restore position in data
+         AL    R3,LSTRNG1              Add length of old string
+         L     R4,SAVELST              Load 1st position to change line
+         USING WORKSPCE,R4             Address the line
+         LA    R4,WORKDATA             Point to data portion of line
+         DROP  R4                      Kill addressability
+         AL    R4,COMBNDS              Add boundary offset
+         AL    R4,COMBNDSL             Last position in line
+         ST    R3,SAVER3               1st char after 'old string'
+         SR    R4,R3                   Length of remaining data in line
+         BCTR  R4,0                    Minus 1 for EX
+         MVI   CARD,C' '               Clear
+         MVC   CARD+1(254),CARD             work
+         MVC   CARD+255(8),CARD                  -area
+         C     R4,=F'0'                Last character of 1st string
+*                                      in last position of data portion
+         BL    UPD033                  Yes: do not move remaining data
+         EX    R4,MOVE3
+UPD033   SR    R3,R7
+         AR    R4,R7                   Subst. blanks in rem. data
+         EX    R4,MOVE4                Shift remaining data to left
+UPD035   DS    0H                      Replace Old str with New string
+         L     R6,NEWSTRNG             Restore A(New string)
+         ICM   R5,15,LSTRNG2           Length new string in R5
+         BZ    UPD037                  New string has a zero length
+         BCTR  R5,0                    Minus 1 for EX
+         EX    R5,MOVE1                Move new character string
+UPD037   AP    CHCNTR,=P'1'            Add CHANGE counter
+         AL    R9,LSTRNG2              Add length of new str to addr.
+         L     R5,LSTRNG2              Length of new string
+         ICM   R7,15,LSTRNG1           Length of old string
+         BZ    UPDNEXT                 Zero: change next line
+         BCTR  R7,0                    Minus 1 for EX
+         LA    R9,0(,R9)               Clear high order bit
+*
+*        Register 2 must point after the changed string.
+*        The old character string can appear more than 1 time in
+*        a line. They must be changed all.
+*
+         L     R4,SAVELST              Load start address of line
+         LA    R4,8(,R4)               Point to data portion
+         AL    R4,COMBNDS              Add boundaries offset
+         AL    R4,COMBNDSL             Add length of line
+         SR    R4,R9                   Calc rest of length of line
+         SL    R4,LSTRNG1              Minus length old string
+         A     R4,=F'1'                Including last pos
+         BP    UPD027                  Search next string in same line
+UPDNEXT  TM    SW01,$CHALL             Change ALL command?
+         BNO   UPDEND                  No: change only current line
+         L     R9,SAVELST              Load start line in workspace
+         L     R1,COMWRKEN             Length of entry in workspace
+         LA    R9,0(R1,R9)             Next line in workspace
+         C     R9,LASTLNE              Last record reached?
+         BH    UPDEND                  Yes: end of update
+         ST    R9,SAVELST              Save new current line
+         B     UPD026                  Examine next line
+MOVE1    MVC   0(0,R9),0(R6)           << executed >>
+MOVE2    MVC   0(0,R3),0(R5)           << executed >>
+MOVE3    MVC   CARD(0),0(R3)           << executed >>
+MOVE4    MVC   0(0,R3),CARD            << executed >>
+TXT053   DS    0H
+         MVC   COMMPRM,ERRVTXT         Msg: Text not found
+         B     RETURN4
+TXT055   DS    0H
+         MVC   COMMPRM,ERRWTXT         Msg: Invalid char. string
+         B     RETURN4
+TXT073   DS    0H
+         MVC   COMMPRM,ERRJTXT         Msg: Line-x invalid
+         B     RETURN4
+TXT079   DS    0H
+         MVC   COMMPRM,ERRETXT         Msg: Boundary too small
+         B     RETURN4
+TXT085   DS    0H
+         MVC   COMMPRM,ERRPTXT         Msg: Line-x not found
+RETURN4  DS    0H
+         LA    R15,4                   Rc = 4, errors detected
+         B     RETURN
+UPDEND   DS    0H                      End of routine
+         CP    CHCNTR,=P'0'            No: changes made?
+         BE    TXT053                  Yes: Text not found
+         UNPK  MSG4TXT+5(5),CHCNTR     Change counter into message
+         OI    MSG4TXT+9,X'F0'         Clear sign
+         MVC   COMMPRM,MSG4TXT         Msg: xxx changes made in
+*                                      COMMPRM in RPFCOMM
+         XR    R15,R15                 Rc = 00 - changes made
+RETURN   DS    0H
+         LR    R2,R15                  Save return code
+         LR    R3,R13                  A(WORKAREA)
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)
+         LR    R15,R2                  Restore return code
+         RETURN (14,12),RC=(15)        Return to caller
+*---------------------------------------------------------------------*
+*                                                                     *
+*        N U M T S T - SUBROUTINE, Numeric test of a 8 character field*
+*                                                                     *
+*                    Input:  NUMFLD, field contains characters to test*
+*                    Output: NUMFLD, remains unchanged                *
+*                            Reg.15, return code 00 - numeric         *
+*                                                08 - not numeric     *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+NUMTST   DS    0H                      Save register 14
+         LA    R1,8                    Length to test
+         LA    R4,NUMFLD               NUMFLD to be tested
+NUMTST01 CLI   0(R4),X'F0'             < 0?
+         BL    NUMTST03                Yes: not numeric
+         CLI   0(R4),X'F9'             >9?
+         BH    NUMTST03                Yes: not numeric
+         LA    R4,1(,R4)               Point to next character
+         BCT   R1,NUMTST01             Loop until all characters tested
+         XR    R15,R15                 Rc = 0 - numeric
+         B     NUMTST99                Go to exit
+NUMTST03 LA    R15,8                   Rc = 8 - not numeric
+NUMTST99 BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        S H I F T - Subroutine, chop off trailing space and replace  *
+*                    them with leading character(s) specified in      *
+*                    FILLCHAR                                         *
+*                                                                     *
+*                    Input:  NUMFLD, field to be shifted, max 8 chars *
+*                            FILLCHAR, fill character.                *
+*                    Output: NUMFLD, Trailing spaces replaced with    *
+*                                    leading FILLCHAR(s)              *
+*                            REG.15, RC = 00 - No errors              *
+*                                    RC = 04 - All spaces             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SHIFT    DS    0H
+         LA    R1,8                    Maximum 8 characters to scan
+         XR    R15,R15                 Rc = 0 (default)
+SHIFT01  CLI   NUMFLD+7,X'40'          Is last character a space?
+         BNE   SHIFT99                 No: good, finished
+         MVC   WRKFLD+1(7),NUMFLD      Move chars 1-7 into WRKFLD+1
+*                                      and chop off trailing space
+         MVC   WRKFLD(1),FILLCHAR      Insert leading zero
+         MVC   NUMFLD,WRKFLD           Restore NUMFLD
+         BCT   R1,SHIFT01              Loop until all done
+         LA    R15,4                   Rc = 4 - all spaces
+SHIFT99  DS    0H
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        S C A N - SUBROUTINE, Scan command area for ' ' or ',' and   *
+*                              put preceding characters in NUMFLD.    *
+*                                                                     *
+*                  Input:  REG.3,  Points to 1st character to scan    *
+*                  Output: NUMFLD, Characters preceding ' ' or ','    *
+*                          REG.3,  Points to last character scanned   *
+*                          REG.15, Return code 00 - Characters found  *
+*                                              08 - Characters not fnd*
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+SCAN     DS    0H
+         LA    R15,8                   Rc = 08, initial:
+         LA    R4,9                    Scan max 9 characters
+         LA    R5,NUMFLD               Point to NUMFLD
+         MVI   NUMFLD,C' '             Clear ...
+         MVC   NUMFLD+1(L'NUMFLD-1),NUMFLD   NUMFLD
+         ICM   R1,15,COMMPRM           Point to 'C' cmd of RPFEDIT @rp1
+         LA    R1,48(,R1)              Add length of command field @rp1
+SCAN01   DS    0H
+         CR    R3,R1                   End of Command field?       @RP1
+         BNL   SCAN03                  Yes: command complete       @RP1
+         CLI   0(R3),X'40'             Space?
+         BE    SCAN03                  Yes: end of scan
+         CLI   0(R3),X'6B'             Comma?
+         BE    SCAN03                  Yes: end of scan
+         CLI   0(R3),X'00'             Null?
+         BE    SCAN03                  Yes: end of scan
+         MVC   0(1,R5),0(R3)           Move 1 character into NUMFLD
+         LA    R3,1(,R3)               Next character to scan
+         LA    R5,1(,R5)               Next character in NUMFLD
+         BCT   R4,SCAN01               Scan max 9 times
+         B     SCAN99                  Exit: no characters found
+SCAN03   XR    R15,R15                 Rc= 0, scan successful
+SCAN99   DS    0H
+         BR    R14                     Return
+*---------------------------------------------------------------------*
+*                                                                     *
+*        L I N E - Scan input buffer for line numbers                 *
+*                                                                     *
+*                  Input:  Register 3, start address to scan          *
+*                  Output: LN1FLD, LINE-1                             *
+*                          LN2FLD, LINE-2                             *
+*                          REG.15, Rc= 0000 - all lines valid,        *
+*                                  RC= 0004 - invalid line found,     *
+*                                  RC= 0008 - lines not numeric.      *
+*                          ERRJTXT, error indicating line number      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+LINE     ST    R14,R14LINE             Save register 14
+         MVI   ERRJTXT+16,C'1'         Move line-ID in error message
+         BAL   R14,SCAN                Scan for LN1FLD
+         LTR   R15,R15                 Rc= 0?
+         BNZ   LINE73                  No: LN1 invalid
+         CLI   NUMFLD,C'*'             * - current line?
+         BE    LINE04                  Yes: skip NUMTST
+         MVI   FILLCHAR,X'F0'          '0' into FILLCHAR
+         BAL   R14,SHIFT               Chop off trailing spaces and
+*                                      replace by leading zero(es)
+         LTR   R15,R15                 Rc <> 0, all spaces
+         BNZ   LINE03                  Yes: no line specified
+         CLC   NUMFLD,C0000            Line-1 zero?
+         BE    LINE73
+LINE03   BAL   R14,NUMTST              Numeric test
+         LTR   R15,R15                 Rc= 0?
+         BNZ   LINE75                  No: LN1 not numeric
+LINE04   MVC   LN1FLD,NUMFLD           Save NUMFLD into LN1FLD
+         LA    R3,1(,R3)               Point to LN2
+         MVI   ERRJTXT+16,C'2'         Move line-id 2 into error msg
+         BAL   R14,SCAN                Scan for LN2FLD
+         LTR   R15,R15                 Rc= 0?
+         BNZ   LINE73                  No: LN2 invalid
+         MVI   FILLCHAR,X'F0'          FILLCHAR set to '0'
+         BAL   R14,SHIFT               Chop off trailing spaces and
+*                                      replace by leading zero(es)
+         LTR   R15,R15                 Rc <> 0, all spaces
+         BNZ   LINE05                  Yes: no line specified
+         CLC   NUMFLD,C0000            Line-2 zero?
+         BE    LINE73
+LINE05   BAL   R14,NUMTST              Run the numeric test
+         LTR   R15,R15                 Rc= 0?
+         BNZ   LINE75                  No: LN2 not numeric
+         MVC   LN2FLD,NUMFLD           Save LN2 into LN1FLD
+         XR    R15,R15                 Rc= 0000 - scan successful
+         B     LINE99                  Exit
+LINE73   LA    R15,4                   Rc= 0004 - invalid line(s) found
+         B     LINE99                  Exit
+LINE75   LA    R15,8                   Rc= 0008 - line(s) not numeric
+         B     LINE99                  Exit
+LINE99   L     R14,R14LINE             Restore register 14
+         BR    R14                     Return
+         TITLE 'Working storage'
+C0000    DC    C'00000000'
+ERRETXT  DC    CL25'------ Boundary too small'
+ERRJXTXT DC    CL25'---------- Line-x invalid'
+ERRPXTXT DC    CL25'-------- Line-x not found'
+ERRVTXT  DC    CL25'---------- Text not found'
+ERRWTXT  DC    CL25' Invalid character string'
+MSG4XTXT DC    CL25'---- xxxxx change(s) made'
+         TITLE 'Check if a string is a HEX string'
+*---------------------------------------------------------------------*
+*
+*        Routine:   HEXTEST
+*
+*        Function:  Change if a given string is HEX string and
+*                   translate the "EBCDIC HEX characters" into a real
+*                   hexadecimal string.
+*                   A HEX string contains X'hh....'.
+*                   'hh' = 0-9, A-F and are always an even number of
+*                          hex characters.
+*
+*        Input:     Register 1, address of string to be tested.
+*                   Register 0, length of string to be tested.
+*                               If hi-order contains x'80' the new
+*                               string will be tested and the answer
+*                               is set in HEXSTR2, otherwise
+*                               HEXSTR1 will be used.
+*
+*        Output:    Register 1, address of unmodified string of not
+*                               a HEX string or translated string if
+*                               string is a hexadecimal string.
+*                   Register 0, In this case register 0 contains the
+*                               length
+*
+*        Return codes in register 15:
+*                   00 - HEX string found, reg. 0 contains the length
+*                   04 - string is not a hexadecimal string
+*                   08 - String P'.'  found
+*                   12 - Invalid HEX string found
+*
+*------------------------------------------ (C)-2025 Skybird Systems -*
+HEXTEST  DS    0H
+         STM   R2,R14,SAVETST          Save registers
+         LR    R8,R1                   Pickup A(STRING)
+         STCM  R0,B'1000',HEXFLG       Save high order byte
+         ICM   R0,B'1000',=X'00'       And clear
+         LR    R3,R0                   Pickup length (R0)
+         CLC   0(3,R8),=C'P''.'''      P'.' picture string found?
+         BE    HEXP001                 Yes: P'.' is an invalid char.
+         CLC   0(3,R8),=C'p''.'''      p'.' picture string found?
+         BE    HEXP001                 Yes: p'.' is an invalid char.
+         CLC   0(2,R8),=C'X'''         Does it start with X' (Hex)?
+         BE    HEXT001                 Yes: process hex change
+         CLC   0(2,R8),=C'x'''         Does it start with x' (Hex)?
+         BE    HEXT001                 Yes: process hex change
+         B     HEXRC4                  No: a normal string
+HEXP001  DS    0H
+*
+*        P'.' = a picture of all invalid (unprintable strings) chars
+*        The length should be four, otherwise no picture string
+*
+         CH    R3,=H'4'                Is the length 4?
+         BE    HEXRC8                  Yes: set return code 8
+         B     HEXRC4                  Else a normal string
+HEXT001  DS    0H
+         LA    R8,2(,R8)               Point after X'
+         C     R3,=F'5'                At least 5? (X'hh' = 5)
+         BL    HEXRC12                 No: invalid string
+         BCTR  R3,0                    Minus L of 'X'
+         BCTR  R3,0                    Minus L of quote
+         XR    R4,R4                   Clear length register
+         LA    R5,HEXSTR1              Point to output field
+         TM    HEXFLG,X'80'            New string?
+         BNO   HEXT003                 No: Old string to be converted.
+         LA    R5,HEXSTR2              Point to output field
+HEXT003  DS    0H
+         CLI   0(R8),C''''             Does it end with a quote?
+         BE    HEXT005                 Yes: conversion finished
+*
+*        Test the validity of the string and convert the zoned
+*        HEX values to binary HEX values and recalculate the length.
+*        (input length - 3 (X' + ') / 2).
+*        The number of hex digits is always an even number
+*
+         C     R3,=F'1'                1 EBCDIC character left?
+         BE    HEXRC12                 Yes: error, odd string
+         CLI   1(R8),C''''             1 HEX character?
+         BE    HEXRC12                 Yes: Odd HEX string
+         TRT   0(2,R8),TRTHEX          String should contain:
+*                                      0-9, a-f, A-F
+         BNZ   HEXRC12                 No: invalid character string
+         MVC   HEXFLD,0(R8)            Move string to field to xlate
+         TR    HEXFLD,TRHEX            Replace F0-F9 by 00-09 and
+*                                      C1-C6 (A-F) by 0A - 0F
+*                                      HEX strings set
+         PACK  PACKFLD,HEXFLD(3)       Convert to real hex
+         MVC   0(1,R5),PACKFLD         and chop off last byte
+         LA    R8,2(,R8)               Point to next byte input
+         LA    R5,1(,R5)               Point to next byte output
+         LA    R4,1(,R4)               Increase output length
+         BCTR  R3,0                    Decrease length
+         BCT   R3,HEXT003              Loop.
+         B     HEXRC12                 Error: no ending quote
+HEXT005  DS    0H
+         LR    R0,R4                   Pickup length
+         LA    R1,HEXSTR1              Load the answer
+         TM    HEXFLG,X'80'            New string?
+         BNO   HEXT007                 No: old string converted
+         LA    R1,HEXSTR2              Load the answer
+HEXT007  DS    0H
+         XR    R15,R15                 Rc = 0, successfully converted
+         B     HEX999                  Return
+HEXRC4   DS    0H
+         LA    R15,4                   Not a HEX string
+         B     HEX999                  Return
+HEXRC8   DS    0H
+         LA    R15,8                   P'.' found
+         B     HEX999                  Return
+HEXRC12  DS    0H
+         LA    R15,12                  Invalid HEX string
+HEX999   DS    0H
+         LM    R2,R14,SAVETST          Restore registers 2-14
+         BR    R14                     Return
+*
+TRTHEX   DC    256X'FF'                Test table a-f, A-F and 0-9
+         ORG   TRTHEX+X'81'
+         DC    X'000000000000'         Lower case A-F
+         ORG   TRTHEX+C'A'
+         DC    X'000000000000'         Upper case A-F
+         ORG   TRTHEX+C'0'
+         DC    X'00000000000000000000' 0-9
+         ORG   ,
+TRHEX    DC    256AL1(*-TRHEX)         Translate table A-F and 0-9
+         ORG   TRHEX+X'81'
+         DC    X'0A0B0C0D0E0F'         Lower case A-F
+         ORG   TRHEX+C'A'
+         DC    X'0A0B0C0D0E0F'         Upper case A-F
+         ORG   TRHEX+C'0'
+         DC    X'00010203040506070809' 0-9
+         ORG   ,
+         LTORG ,
+         DROP ,
+WORKAREA DSECT
+SAVE     DS    18F                     Our save area
+FIRSTLNE DS    F
+LASTLNE  DS    F
+R14LINE  DS    F                       Save area register 14 LINE
+SAVE57   DS    3F                      Save area register 5-7
+MAXLINES DS    F
+CHBLANKS DS    CL44                    Blank field, initialize!
+FILLCHAR DS    CL1                     Fill character SHIFT routine
+NUMFLD   DS    CL8                     Work field NUMTST/SHIFT
+WRKFLD   DS    CL8                     Work field NUMTST/SHIFT
+LN1FLD   DS    CL8                     Line-1 COPY/LINE
+LN2FLD   DS    CL8                     Line-2 COPY/LINE
+CARD     DS    CL263                   Workfield (Max LRECL + 8)
+SAVELST  DS    F                       Save start of current line
+LSTRNG1  DS    F                       Length of old character string
+LSTRNG2  DS    F                       length of new character string
+SAVER9   DS    F                       Save field register 9
+SAVER3   DS    F                       Save field register 3
+OLDSTRNG DS    F                       Address of old string
+NEWSTRNG DS    F                       Address of new string
+DLMCHAR  DS    C                       Delimiter
+         DC    C'0'
+CHCNTR   DS    PL3
+ERRJTXT  DC    CL25'---------- Line-x invalid'  +16
+ERRPTXT  DC    CL25'-------- Line-x not found'  +14
+MSG4TXT  DC    CL25'---- xxxxx change(s) made'  +5
+SW01     DC    X'00'
+$CHALL   EQU   128
+$INVCH   EQU   64                      P'.' Invalid character
+SAVETST  DS    13F
+HEXSTR1  DS    CL44
+HEXSTR2  DS    CL44
+PACKFLD  DC    PL2'0'
+HEXFLD   DS    CL2                     Work field for HEX to BIN
+HEXFLG   DS    X                       Hi-order byte R0
+WORKL    EQU   *-WORKAREA              Length
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+OFFSETN2 EQU   0
+         END

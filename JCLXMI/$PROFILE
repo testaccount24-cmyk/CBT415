@@ -1,0 +1,15 @@
+//PROFILE  JOB 01,RPF,CLASS=A,MSGCLASS=X,REGION=512K,NOTIFY=A0611
+//*********************************************************************
+//*
+//* Last update: 2025/02/13 11:57
+//*
+//* DESC: Install RPF profile data set. Each TSO user has his own
+//*       profile data set.
+//*       Run this job only if IBM's ISPF or Wally's ISPF is
+//*       not installed and RPF V2 is installed for the first time.
+//*
+//*********************************************************************
+//PROFILE EXEC PGM=IEFBR14
+//PROFILE  DD  DSN='userid'.ISP.PROF,UNIT=SYSDA,
+//             SPACE=(CYL,(1,,5)),DISP=(NEW,CATLG),
+//             DCB=(RECFM=FB,LRECL=80,BKSIZE=multiple of 80)

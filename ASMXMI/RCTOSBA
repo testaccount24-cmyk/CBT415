@@ -1,0 +1,55 @@
+         MACRO
+&NAME    RCTOSBA &REGW=13,&REGC=11,&RENT=NO
+         TITLE 'SBA row/column to SBA routine'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        RCTOSBA - Convert binary offset into screen                  *
+*                  to a 2-byte code suitable for use                  *
+*                  in 3270 orders such as SBA                         *
+*                  R0 contains binary row number                      *
+*                  R1 contains binary column number                   *
+*                  Upon return the binary SBA will be set in R0       *
+*                                                                     *
+*        NOTE:     IF RENT = YES,                                     *
+*                  Declare doublewords DBW and SBAR0R1                *
+*---------------------------------------------------------------------*
+RCTOSBA  CSECT
+         USING *,15
+         USING COMMAREA,&REGC          Address RPFCOMM Dsect
+         AIF   ('&RENT' NE 'YES').NOWRK
+         USING WORKAREA,&REGW          Address WORKAREA Dsect
+.NOWRK   ANOP
+         BCTR  R0,0                    Line = line -1
+         BCTR  R1,0                    Column = Column - 1
+         STM   R0,R1,SBAR0R1           Save parameters
+         LR    R1,R0                   # lines - 1
+         XR    R0,R0
+         M     R0,COMMCOLS             * line length
+         A     R1,SBAR0R1+4            + columns
+         STH   R1,DBW                  Save input number
+         LH    R0,DBW                  Pickup 12 or 14 bit address
+         L     R1,COMMCOLS             Width of screen
+         MH    R1,COMMSIZE+2           Calculate total size
+         CH    R1,=H'4095'             More than 4095 characters?
+         BHR   R14                     Yes: always a 14 bit address
+         LH    R1,DBW                  Prepare for >12-bit address
+         SLL   R1,2                    No, shift left 2 bits
+         STCM  R1,2,DBW                Save high 6 (of 12) bits
+         NI    DBW,X'3F'               Extract 6 high bits
+         NI    DBW+1,X'3F'             Extract 6 low bits
+         TR    DBW(2),SBATAB           Get 12-bit address code
+         ICM   R0,3,DBW                Load the answer
+         BR    R14                     Return
+SBATAB   DC    X'40C1C2C3C4C5C6C7C8C94A4B4C4D4E4F'
+         ENTRY SBATAB
+         DC    X'50D1D2D3D4D5D6D7D8D95A5B5C5D5E5F'
+         DC    X'6061E2E3E4E5E6E7E8E96A6B6C6D6E6F'
+         DC    X'F0F1F2F3F4F5F6F7F8F97A7B7C7D7E7F'
+SBALEN   EQU   *-SBATAB
+         AIF   ('&RENT' EQ 'YES').NODECL
+SBAR0R1  DS    D
+DBW      DS    D
+.NODECL  ANOP
+         LTORG ,
+         DROP  ,
+         MEND

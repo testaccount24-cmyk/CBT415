@@ -1,0 +1,35 @@
+)ATTR
+ + TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(GREEN)
+ @ TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(TURQ)
+ % TYPE(TEXT)   INTENS(HIGH) SKIP(ON)    COLOR(WHITE)
+ ¬ TYPE(TEXT)   INTENS(LOW)  SKIP(ON)    COLOR(YELLOW)
+ _ TYPE(INPUT)  INTENS(LOW)  JUST(LEFT)  COLOR(TURQ)
+ # TYPE(INPUT)  INTENS(LOW)  JUST(ASIS)
+ ~ TYPE(INPUT)  INTENS(HIGH) JUST(LEFT)
+ ! TYPE(INPUT)  INTENS(HIGH) JUST(RIGHT)
+ { TYPE(OUTPUT) INTENS(LOW)  JUST(LEFT)
+ } TYPE(OUTPUT) INTENS(LOW)  JUST(RIGHT)
+ Ý TYPE(OUTPUT) INTENS(HIGH) JUST(LEFT)
+ ¨ TYPE(OUTPUT) INTENS(HIGH) JUST(RIGHT)
+)BODY WIDTH(&ZSCREENW) EXPAND(//)
+%                           ISPF foreground menu         / /
+%Option  ===>_ZCMD
+                                                        / /+USERID  @: &ZUSER  +
+%   1 @ASSEMBLER   + RPF foreground assembler and link  / /+TIME    @: &ZTIME  +
+%   X @EXIT        + Exit foreground menu
+%
++Enter%END+command to return.
+%
+)INIT
+  .HELP = ISP00000
+  &ZPRIM = NO         /* Not a primary option menu         */
+  &ZHTOP = ISP00000   /* TUTORIAL TABLE OF CONTENTS        */
+  &ZHINDEX = ISP91000 /* TUTORIAL INDEX - 1ST PAGE isptutor*/
+)PROC
+  &ZSEL = TRANS(TRUNC(&ZCMD,'.')
+                1,'CMD(RPFASM00) NEWAPPL(ISR)'
+              ' ',' '
+                X,'EXIT'
+                *,'?' )
+  &ZTRAIL = .TRAIL
+)END

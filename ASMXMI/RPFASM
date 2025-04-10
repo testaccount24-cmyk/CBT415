@@ -1,0 +1,2360 @@
+RPFASM   TITLE 'RPF foreground Assembly and Link Edit'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Module:        RPFASM.                                       *
+*                                                                     *
+*        Attributes:    RENT, REUS.                                   *
+*                                                                     *
+*        Called by:     RPFMAIN (option 4) and RPFASM00               *
+*                                                                     *
+*        Function:      RPFASM will assemble and link edit your       *
+*                       source module of DDNAME RPFWORK               *
+*                       RPFASM will be attached by RPFMAIN (opt 4.)   *
+*                       Register 1 points as usual to the RPFCOMM area*
+*                       The Assembler program name from RPFCOMM    @rp1
+*                       and IEWL (the Linkage Editor) will            *
+*                       be invoked in RPFASM.                         *
+*                       After completion of assembler and Linkage     *
+*                       Editor, the browse processor RPFBRO will be   *
+*                       invoked to browse the assembler output if     *
+*                       request with 'OUTPUT=Y' or the SYSTERM     @rp1
+*                       output will be browsed if RC assembler > 0 @rp1
+*                       If 'LKED OUTPUT' is 'Y' then the Linkage      *
+*                       Editor SYSPRINT output will be Browsed after  *
+*                       termination of Browse of the assembler output.*
+*                       The datadsets of the assembler and Linkage    *
+*                       Editor will be dynamically allocated with     *
+*                       IKJDAIR with DDNAMES, whose are               *
+*                       specified in ASMDDNS and LKEDDDNS.            *
+*                                                                     *
+*        Subroutines:   RPFDAIR, dynamic allocation interface         *
+*                       RPFBRO, Browse the output                     *
+*                       IKJDAIR, (un)allocate and (un)concatenate.    *
+*                                                                     *
+*        Note:          If 'END' is entered or PF03/PF15 is hit,      *
+*                       RPFASM will terminate immediately             *
+*                                                                     *
+*        Return codes:  00  Assembly (and LKED) alright               *
+*                       04  An unrecoverable error has occured.       *
+*                                                                     *
+*        Registers:     Registers 12,10 and 9 are the base registers. *
+*                       Register 11 points to the RPFCOMM control blk *
+*                       Register 8 points to the dynamic screen area. *
+*                       Register 7 points the output BUFFER           *
+*                                                                     *
+*        Change log:                                                  *
+*        Jun 22,1993 RPr: Number of MACLIB's increased from 5 to 6.   *
+*        Nov 13,2002 RPr: 7 color support added                       *
+*        Dec 21,2004 RPr: space of work data sets increased           *
+*        Mar 20,2006 RPr: HASM command deleted and assembler       @rp1
+*                         program name retrieved from RPFCOMM      @rp1
+*        Apr 17,2006 RPr: Abend013-34 in RPFTERM of IEV090 solved  @rp2
+*        Dec 15,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*        Jan 10,2019 RPr: ASMPARM LOAD replaced by OBJECT          @rp3
+*        Mar 23,2019 RPr: Support added for all kinds of 3270 screens *
+*                         up to 62 lines x 160 columns (3290)         *
+*        May 03,2019 RPr: Link the Assembler with VL=1 to prevent     *
+*                         MSG IEC908I 112-03 during execution of the  *
+*                         Assembler-H (IEV90)                      @rp4
+*        Feb 23,2020 RPr: Change Allocation RC=32 to Member not found *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Oct 20,2020 RPr: Change message: Alloc err 1708 into         *
+*                         Data set not in catalog (the real reason).  *
+*        Jan 16,2021 RPr: RPFASM protected against abends in the      *
+*                         assember and linkage editor.                *
+*        Dec 12,2021 RPr: DYNALLOC's replaced by IKJDAIR calls and    *
+*                         RPFASM made re-entrant and re-usable.       *
+*        Jan 03,2022 RPr: Fix allocation error Include library.       *
+*        Jul 02,2023 RPr: Give the SYSPRINT of the XF and H-assembler *
+*                         a blksize of 6050 instead of 121.           *
+*        Dec 07,2024 RPr: Use standard TSO naming conventions for     *
+*                         data set names.                             *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFASM   CSECT                        RPF foreground assembler and link
+RPFASM   AMODE 31                                                @rpa01
+RPFASM   RMODE 24                                                @rpa01
+         COPY  SYSVARS
+         SAVE  (14,12),,*              Save registers
+         LR    R12,R15                 Setup base register
+         USING RPFASM,R12,R10          Make RPFASM addressable
+         L     R11,0(,R1)              Address of parameter
+         USING COMMAREA,R11            RPFCOMM
+         XC    COMMPRM,COMMPRM         Clear COMMPRM initally
+         GETMAIN R,LV=WORKL            Save area + working storage
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(0,R13)             Forward pointer
+         LR    R13,R1                  Override callers savearea
+         B     START                   Branch around savearea
+         DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         USING WORKAREA,R13            Working storage
+         LA    R10,2048(,R12)          2nd base register
+         LA    R10,2048(,R10)
+         ST    R11,ADDRCOMM            Save for later use
+         GETMAIN R,LV=SCREENSL         Acquire storage for the screen
+         LR    R8,R1                   Save in reg. 9 (base for screen)
+         USING SCREENS,R8
+         LR    R0,R1                   Prepare for MVCL
+         LA    R1,SCREENSL             Length input and ...
+         LR    R3,R1                                    output
+         L     R2,=V(SCREENS)          Input
+         MVCL  R0,R2                   Move to dynamic area
+         STM   R8,R13,HEREADDR         Save registers for ESTAE
+         MVC   RPFLIN,MDLLIN           Move model DCB
+         MVI   ASMREST,X'40'           Clear rest of ...
+         MVC   ASMREST+1(L'ASMREST-1),ASMREST        assembler parm
+         MVI   LKEDPARM,X'40'          Clear Linkage Editor ...
+         MVC   LKEDPARM+1(L'LKEDPARM-1),LKEDPARM            parm
+         MVC   ASMBEG,PRMASM           Default assembler parm
+         MVI   ASMEND,C','             Continuation character
+         MVC   LKDNAME,=CL8'IEWL'      Name of Linkage Editor
+         MVC   TERM90,=CL8'RPFUT2'     Move default DDN in RPFUT2  @rp2
+         MVC   ASMPARM(2),=AL2(ASMEND-ASMBEG)    Lenght of
+         MVC   ASMDPRM(2),=AL2(ASMEND-ASMBEG)             assemler parm
+         MVC   ASMSRCH(4),=X'0001000E' BLDL list
+         MVC   ASMDDNS,MODDDNS         Move ASM DD name list
+         MVC   LKEDDDNS,MOD2DDNS       Move LKED DD name list
+         MVI   SW,0                    Clear switch
+         MVC   SCR5PRT,COMMPRT         Move default printer     @961125
+         MVC   SCR5CLAS,COMOUTCL       Move default SYSOUT cls. @961126
+         MVC   SCR5INP,COMMBR          Move RPFWORK membername
+         MVC   SCR5LBI,COMMDSN         Move RPFWORK dsname
+         MVC   SCR5TXT(1),COMMCMD      Move EW or EWA
+         L     R2,COMASMPT             RPFASM section of RPFCOMM
+         USING COMMASMD,R2             Make addressable
+         MVC   ASSEMBLR,COMMASM        Assembler name
+         MVC   SCR5LB0,COMMMAC1        Move
+         MVC   SCR5LB1,COMMMAC2          Maclib
+         MVC   SCR5LB2,COMMMAC3            libraries
+         MVC   SCR5LB3,COMMMAC4              from
+         MVC   SCR5LB4,COMMMAC5                RPF
+         MVC   SCR5LB6,COMMMAC6                   COMM
+         MVC   SCR5IDDN,COMMIDDN       Move DDNAME incl lib fro RPFCOMM
+         MVC   SCR5IDSN,COMMIDSN       Move DSName incl lib fro RPFCOMM
+         MVC   SCR5LBO,COMMOBJ         Move object from RPFCOMM
+         MVC   STMNT1+5(69),COMMLKED   Move 1st control stmnt
+         MVC   STMNT2+5(69),COMMLKED+69  Move 2nd control statement
+         MVC   STMNT3+5(69),COMMLKED+138 Move 3rd control statement
+         MVC   STMNT4+5(69),COMMLKED+207 Move 4th control statement
+         MVC   STMNT5+5(69),COMMLKED+276 Move 5th control statement
+         MVC   STMNT6+5(69),COMMLKED+345 Move 6th control statement
+         MVC   SCR5ASM,COMMASPA        Move Assembler PARM
+         MVC   SCR5PRM,COMMLKPA        Move Linkage Editor PARM
+         DROP  R2                      COMMASMD
+         LM    R4,R5,COMMSIZE          Pickup lines
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR5TXT+3
+*
+         LA    R0,2                    Row 2, Cmd =>
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R2C1+1
+*                                      Source, object, load, INC lib
+         LA    R3,R3C1                 Point to data area in screen
+         LA    R4,3                    First data line is line3
+         LA    R5,4                    Last data line is line6
+SCR01    DS    0H
+         LR    R0,R4                   Parameter line
+         LA    R1,1                    Parameter column (1)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+         LR    R0,R4                   Parameter line
+         LA    R1,34                   Parameter column (34+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         LA    R6,LIBSC5L(,R3)         Position in DSN
+         STCM  R0,3,1(R6)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,LIBRL(,R3)           Next line in screen
+         BCT   R5,SCR01                And do complete screen
+*
+         XR    R7,R7                   Set increment to 0 (for 24x80)
+         CLC   COMMSIZE,=F'27'         At least a 27 lines screen?
+         BL    *+8                     No: carry
+         LA    R7,1                    Else set increment to 1
+         LA    R3,R7C1                 Point to data area in screen
+         LA    R4,7                    First data line is line7
+         LA    R5,6                    Last data line is line12
+SCR03    DS    0H                      Macro libraries
+         LR    R0,R4                   Parameter line
+         AR    R0,R7                   + increment
+         LA    R1,1                    Parameter column (1)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)              And Save
+         LR    R0,R4                   Parameter line
+         AR    R0,R7                   + increment
+         LA    R1,19                   Parameter column (19+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         LA    R6,MACL(,R3)            Position in DSN
+         STCM  R0,3,1(R6)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,MACLEN(,R3)          Next line in screen
+         BCT   R5,SCR03                And do complete screen
+*
+         LA    R0,14                   Row 14 or 15, ASM=Y/N, Parm
+         AR    R0,R7                   + increment large screens
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R14C1+1
+*
+         LA    R0,15                   Row 15 or 16, LKED=Y/N, Parm
+         AR    R0,R7                   + increment large screens
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R15C1+1
+*
+         LA    R0,16                   Row 16 or 17, Printer
+         AR    R0,R7                   + increment large screens
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R16C2+1
+*
+         CLC   COMMSIZE,=F'27'         At least 27 rows in the screen
+         BL    *+8                     No: carry
+         LA    R7,1(,R7)               Add 1 to increment
+         LA    R0,17                   Row 17 or 19
+         AR    R0,R7                   + increment large screens
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R17C2+1
+*
+         L     R0,COMMSIZE             Row last, HIT ....
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC2+1
+*                                      LKED control statements
+         LA    R3,R18C2                Point to data area in screen
+         LA    R4,18                   First data line is line18
+         CLC   COMMSIZE,=F'27'         At least a 27 lines screen?
+         BL    *+8                     No: carry
+         LA    R4,20                   Else start at line 20
+         LA    R5,6                    Last data line is line 23 or 25
+SCR05    DS    0H                     Linkage editor control statements
+         LR    R0,R4                   Parameter line
+         LA    R1,2                    Parameter column (2+)
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,3(R3)              And Save
+*
+         LA    R4,1(,R4)               Increase line number
+         LA    R3,STMLEN(,R3)          Next line in screen
+         BCT   R5,SCR05                And do complete screen
+*
+         LA    R0,3                    Row 3
+         LA    R1,19                   Column 19+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,CURDS0+1
+         STCM  R0,3,CURSTD+1
+         MVI   CURDS0,COMMSBA          SBA order
+         MVI   CURSTD,COMMSBA          SBA order
+*
+*        end of screen setup           ------------------------------*
+*
+         MVC   SCR5CURS,CURSTD         Default cursor location
+CONTINUE DS    0H
+         MVI   MSG1TXT,C'-'            Clear ...
+         MVC   MSG1TXT+1(L'MSG1TXT-1),MSG1TXT  message field
+         BAL   R14,RPFFREE
+         NI    SW,255-$NOOBJ-$NOASM-$LKEXEC set flags off
+         TM    COMMFLG1,$COMMSEQ       Sequential input ?
+         BO    START1                  Yes: do nothing
+         CLI   SCR5LB5,C' '            LOADLIB already specified?
+         BNE   LIB99                   Yes: branch
+*
+*        No LOADLIB specified, use the DSNAME of the source library
+*        and change the suffix into LOAD.
+*
+*
+         MVC   SCR5LB5,COMMDSN         Move DSNAME of source library
+         LA    R2,SCR5LB5+45           Last position of LOADLIB
+         LA    R3,SCR5LB5              First position of LOADLIB
+LIB1     CR    R2,R3                   No '.' found in SCR5LB3?
+         BNH   LIB99                   Do not alter SCR5LB3
+         CLI   0(R2),C'.'              '.' found?
+         BE    LIB3                    Yes: alter suffix SCR5LB3
+         BCTR  R2,0                    Decrease register 2
+         B     LIB1                    Test again
+LIB3     LA    R3,SCR5LB5+45           Last position SCR5LB3
+         LA    R2,1(,R2)               Point after '.'
+         SLR   R3,R2                   Calculate length
+         C     R3,=F'7'                Length longer than 8?
+         BNH   LIB5                    No: good
+         LA    R3,7                    Else truncate to 8
+LIB5     EX    R3,LIBMOVE              Move suffix
+         CLI   SCR5LB5,X'7D'           Is it a quoted data set name?
+         BNE   LIB99                   No: ready
+         MVI   4(R2),X'7D'             Else move an end quote
+         B     LIB99
+LIBMOVE  MVC   0(0,R2),=CL8'LOAD'
+LIB99    DS    0H
+         MVI   SCR5MEM,C' '            Blank member name ...
+         MVC   SCR5MEM+1(7),SCR5MEM                  ... of LOADLIB
+         MVC   SCR5INPO,SCR5MEM        Blank member name of OBJLIB
+         CLC   SCR5LB0,COMMDSN         Srclib already spec as Maclib1?
+         BE    START1                  Yes: do not set src as Maclib6
+         CLC   SCR5LB1,COMMDSN         Srclib already spec as Maclib2?
+         BE    START1                  Yes: do not set src as Maclib6
+         CLC   SCR5LB2,COMMDSN         Srclib already spec as Maclib3?
+         BE    START1                  Yes: do not set src as Maclib6
+         CLC   SCR5LB3,COMMDSN         Srclib already spec as Maclib4?
+         BE    START1                  Yes: do not set src as Maclib6
+         CLC   SCR5LB4,COMMDSN         Srclib already spec as Maclib5?
+         BE    START1                  Yes: do not set src as Maclib6
+         CLI   SCR5LB6,C' '            Filled in ?
+         BNE   START1                  Yes: skip
+         MVC   SCR5LB6,COMMDSN         Move Library as Maclib
+START1   DS    0H
+         MVI   SCR5TXT+1,X'C2'         WCC = unlock
+RPFINIT  DS    0H
+         BAL   R14,RPFTGET             Get the buffer
+         CLI   BUFASME,C'Y'            Should Assembler be executed?
+         BE    ASMEXEC                 Yes: run first the Assembler
+         OI    SW,$NOASM               Mark no assembly needed
+         B     NOASM                   Branch
+ASMEXEC  DS    0H
+         L     R5,=V(DSNS)             Load data set list
+         USING DSNS,R5                 Adress this list
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               IKJDAP08
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFUT1'    DDNAME to allocate
+         MVC   DA08PDSN,=A(UT1DSNL)    Temporary data set name
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name (SYSDA)
+         MVC   DA08SER,DA08MNM         No volume serial
+         MVI   DA08PQTY+3,15           15 cylinders primary
+         MVI   DA08SQTY+3,6            6 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LTR   R15,R15                 Allocation OK?
+         BNZ   RPFERR1                 No: error
+         LA    R1,RPFD08               Point to allocation parm block
+         MVI   DA08DDN+5,C'2'          DD-name is RPFUT2
+         MVC   DA08PDSN,=A(UT2DSNL)    Temporary data set name
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LTR   R15,R15                 Allocation OK?
+         BNZ   RPFERR1                 No: error
+         LA    R1,RPFD08               Point to allocation parm block
+         MVI   DA08DDN+5,C'3'          DD-name is RPFUT2
+         MVC   DA08PDSN,=A(UT3DSNL)    Temporary data set name
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LTR   R15,R15                 Allocation OK?
+         BNZ   RPFERR1                 No: error
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFTERM'   DDNAME to allocate
+         MVC   DA08PDSN,=A(TRMDSNL)    Temporary data set name
+         MVI   DA08PQTY+3,10           10 cylinders primary
+         MVI   DA08SQTY+3,2            2 cylinders secondary
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LTR   R15,R15                 Allocation OK?
+         BNZ   RPFERR1                 No: error
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFPRINT'  DDNAME to allocate
+         MVC   DA08PDSN,=A(PRTDSNL)    Temporary data set name
+         MVI   DA08PQTY+3,30           30 cylinders primary
+         MVI   DA08SQTY+3,6            6 cylinders secondary
+         CLC   =C'IEV90',ASSEMBLR      Are we using IEV90 assembler?
+         BE    DAIR03                  Yes
+         CLC   =C'IFOX00',ASSEMBLR     Are we using IFOX00 assembler?
+         BNE   DAIR05                  Yes
+DAIR03   MVC   DA08BLK,=F'6050'        Block the Assembler SYSPRINT
+DAIR05   L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LTR   R15,R15                 Allocation OK?
+         BNZ   RPFERR1                 No: go to error routine
+         DROP  R5,R1                   DSNS and DAPB08
+DAIR07   CLC   COMMDSN,BUFLIBI         Are the allocation changed?
+         BE    DAIRCALL                No: Invoke RPFDAIR immediately
+         CLI   BUFLIBI,C' '            Source library present?
+         BNE   DAIR09                  Yes: carry
+         MVC   MSG5,ERR1TXT            Msg: Data set name missing
+         B     RPF000                  Prepare to review screen
+DAIR09   DS    0H
+         MVC   COMMDSN,BUFLIBI         Move source DSNAME
+         MVI   COMMVOL,C' '            Assume cataloged
+         MVC   COMMVOL+1(5),COMMVOL                      data set
+DAIRCALL DS    0H
+         MVC   COMMBR,BUFINP           Move member of SOURCE library
+         OI    COMMFLG1,$COMMALC       Tell RPFDAIR to allocate
+         L     R15,EPDAIR              Entry point RPFDAIR
+         LA    R1,ADDRCOMM             Address of RPFCOMM
+         CALL  (15)                    Invoke RPFDAIR
+         LTR   R15,R15                 Rc RPFDAIR = 0?
+         BZ    RPF000A                 Yes: allocated, test LRECL
+         C     R15,=F'32'              Rc = 32? (member not found)
+         BNE   ERR4                    No: test or RC=4
+         MVI   BUFMEMB,C' '            Blank MEMBER
+         MVC   BUFMEMB+1(7),BUFMEMB                 of LOADLIB
+         MVC   BUFINPO,BUFMEMB         Blank MEMBER of OBJLIB
+         MVC   SCR5MEM,BUFMEMB         Copy to
+         MVC   SCR5INPO,BUFMEMB               screen
+         MVC   MSG5,ERR3TXT            Msg: Member not found
+         B     RPF000                  Prepare to review screen
+ERR4     DS    0H
+         C     R15,=F'4'               Rc = 4? data set not in catalog?
+         BNE   OTHERR                  No: test or RC=4
+         MVC   MSG5,ERRBTXT            Msg: Data set not in catalog
+         B     RPF000                  Prepare to review screen
+OTHERR   DS    0H
+         CVD   R15,DWB                 Convert to packed
+         MVC   MSG5,ERR6TXT            Msg: Allocation RC=xxxx
+         UNPK  MSG5+21(4),DWB          Convert to display format
+         OI    MSG5+24,X'F0'           And clear the sign
+RPF000   DS    0H
+         MVC   SCR5CURS,CURDS0         Set cursor on error field
+         BAL   R14,RPFTGET             Review the screen
+         B     DAIR07
+RPF000A  DS    0H
+         CLC   COMMRECL,=F'80'         Is the source card image?
+         BE    RPF000B                 Yes: good
+         MVC   MSG5,ERRATXT            Msg: Not a card image data set
+         B     RPF000                  Display screen with error
+RPF000B  DS    0H
+         XC    RPFD08,RPFD08           Clear parameter block
+         XC    RPFD34,RPFD34           Clear parameter block
+         XC    RPFD0C,RPFD0C           Clear parameter block
+         XC    RPFATTR,RPFATTR         Clear Attribute block
+         LA    R14,RPFATTR             DAIR ACB
+         USING DAIRACB,R14             IKJDACB
+         LA    R15,RPFD34              Point to attribute parm block
+         USING DAPB34,R15              IKJDAP34
+         LA    R3,RPFD08               Point to allocation parm block
+         USING DAPB08,R3               IKJDAP08   s DSECT
+         LA    R4,RPFD0C               Point to concat parm block
+         USING DAPB0C,R4               IKJDAP0C
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVI   DA0CCD+1,X'0C'          Entry code 0C (concatenation)
+         MVC   DA0CNUMB,=AL2(1)        Default 1
+         MVI   DA08DSP1,DA08SHR        DISP=SHR
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08SER,DA08MNM         No volume serial
+         MVC   DA08UNIT,DA08MNM        No unit name
+         CLI   BUFLIB0,C' '            No 1st MACLIB ?
+         BE    RPF031                  Yes: no MACLIBs specified
+         OI    DA08CTL,DA08ATRL        Attibute list present
+         MVC   DA08DDN,=CL8'RPFLIB'    DDNAME to allocate
+         MVC   DA0CDDN,=CL8'RPFLIB'    DDNAME to concatenate
+         MVC   DA08ALN,=CL8'ASMMACLB'  Attribute list name
+         MVC   DAIBLKSI,=AL2(32720)    Max. BLKSIZE
+         MVI   DA34CD+1,X'34'          Entry code
+         MVC   DA34NAME,DA08ALN        Move attribute list name
+         MVI   DA34CTRL,DA34CHN        Chain attr. list
+         STCM  R14,15,DA34ADDR         Address of DAIRACB (attr. list)
+         LA    R1,RPFD34               Chain the attribute list
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LTR   R15,R15                 Chaining successful?
+         BZ    RPF000C                 Yes: carry on
+         CVD   R15,DBW                 Convert return code
+         MVC   MSG5,ERRDTXT            Error message
+         UNPK  MSG5+6(4),DBW           Return code
+         OI    MSG5+9,X'F0'            and clear sign
+         B     RPF000                  Try again
+RPF000C  DS    0H                      Examine BUFLIB1
+         DROP  R14,R15                 DAIRACB and DAPB34
+         OI    SW,$ATTR                Attribute list chained
+RPF000D  DS    0H                      Examine BUFLIB1
+         LA    R0,BUFLIB0              Maclib 1 unparsed
+         LA    R1,ALCDSN             Maclib 1 unquoted or prefix added
+         LA    R2,DA08PDSN             To receive length + DSN
+         BAL   R14,PRSALLOC            Parse and allocate
+         LTR   R15,R15                 Test completion
+         BZ    RPF001                  Branch if allright
+         LA    R1,C1STMAC              Number of Maclib
+         LR    R0,R15                  Return code
+         LA    R15,CURMAC1             SBA order and adress maclib
+         BAL   R14,ALLOCERR            Produce error message
+         B     RPF000D
+RPF001   DS    0H                      Examine BUFLIB1
+         XC    DA08ALN,DA08ALN         Clear attribute list name
+         CLI   BUFLIB1,C' '            Nothing specified?
+         BE    RPF031                  Yes: only 1 Maclib specified
+         MVC   DA0CNUMB,=AL2(2)        Concatenation count to 2
+         MVI   DA08CTL,0               Clear attribute list flag
+         MVC   DA08DDN,=CL8'RPFLIB1'   DDNAME to allocate
+         MVC   DA0CDDN+8(8),=CL8'RPFLIB1' 2nd DDNAME to concatenate
+         LA    R0,BUFLIB1              Maclib 1 unparsed
+         LA    R1,ALCDSN             Maclib 1 unquoted or prefix added
+         LA    R2,DA08PDSN             To receive length + DSN
+         BAL   R14,PRSALLOC            Parse and allocate
+         LTR   R15,R15                 Test completion
+         BZ    RPF004                  Branch if allright
+         LA    R1,C2NDMAC              Number of Maclib
+         LR    R0,R15                  Return code
+         LA    R15,CURMAC2             SBA order and adress maclib
+         BAL   R14,ALLOCERR            Produce error message
+         B     RPF001
+RPF004   DS    0H                      Allocate second Maclib
+         CLI   BUFLIB2,C' '            Nothing specified?
+         BE    CONCAT                  Yes: 2 Maclibs
+         MVC   DA0CNUMB,=AL2(3)        Concatenation count to 3
+         MVC   DA08DDN,=CL8'RPFLIB2'   DDNAME to allocate
+         MVC   DA0CDDN+16(8),=CL8'RPFLIB2' 3rd DDNAME to concatenate
+         LA    R0,BUFLIB2              Maclib 2 unparsed
+         LA    R1,ALCDSN             Maclib 2 unquoted or prefix added
+         LA    R2,DA08PDSN             To receive length + DSN
+         BAL   R14,PRSALLOC            Parse and allocate
+         LTR   R15,R15                 Test completion
+         BZ    RPF005                  Branch if allright
+         LA    R1,C3RDMAC              Number of Maclib
+         LR    R0,R15                  Return code
+         LA    R15,CURMAC3             SBA order and adress maclib
+         BAL   R14,ALLOCERR            Produce error message
+         MVC   DA0CNUMB,=AL2(2)        Restore CONCAT counter
+         B     RPF004
+RPF005   DS    0H
+         CLI   BUFLIB3,C' '            Nothing specified ?
+         BE    CONCAT                  3 MACLIBS Specified
+         MVC   DA0CNUMB,=AL2(4)        Concatenation count to 4
+         MVC   DA08DDN,=CL8'RPFLIB3'   DDNAME to allocate
+         MVC   DA0CDDN+24(8),=CL8'RPFLIB3' 4th DDNAME to concatenate
+         LA    R0,BUFLIB3              Maclib 3 unparsed
+         LA    R1,ALCDSN             Maclib 3 unquoted or prefix added
+         LA    R2,DA08PDSN             To receive length + DSN
+         BAL   R14,PRSALLOC            Parse and allocate
+         LTR   R15,R15                 Test completion
+         BZ    RPF006                  Branch if allright
+         LA    R1,C4THMAC              Number of Maclib
+         LR    R0,R15                  Return code
+         LA    R15,CURMAC4             SBA order and adress maclib
+         BAL   R14,ALLOCERR            Produce error message
+         MVC   DA0CNUMB,=AL2(3)        Restore CONCAT counter
+         B     RPF005
+RPF006   DS    0H
+         CLI   BUFLIB4,C' '            Nothing specified?
+         BE    CONCAT                  4 Maclib's specified
+         MVC   DA0CNUMB,=AL2(5)        Concatenation count to 5
+         MVC   DA08DDN,=CL8'RPFLIB4'   DDNAME to allocate
+         MVC   DA0CDDN+32(8),=CL8'RPFLIB4' 5th DDNAME to concatenate
+         LA    R0,BUFLIB4              Maclib 4 unparsed
+         LA    R1,ALCDSN             Maclib 4 unquoted or prefix added
+         LA    R2,DA08PDSN             To receive length + DSN
+         BAL   R14,PRSALLOC            Parse and allocate
+         LTR   R15,R15                 Test completion
+         BZ    RPF007                  Branch if allright
+         LA    R1,C5THMAC              Number of Maclib
+         LR    R0,R15                  Return code
+         LA    R15,CURMAC5             SBA order and adress maclib
+         BAL   R14,ALLOCERR            Produce error message
+         MVC   DA0CNUMB,=AL2(4)        Restore CONCAT counter
+         B     RPF006
+RPF007   DS    0H
+         CLI   BUFLIB6,C' '            Nothing specified?
+         BE    CONCAT                  Yes: 5 Maclibs specified
+         MVC   DA0CNUMB,=AL2(6)        Concatenation count to 5
+         MVC   DA08DDN,=CL8'RPFLIB6'   DDNAME to allocate
+         MVC   DA0CDDN+40(8),=CL8'RPFLIB6' 6th DDNAME to concatenate
+         LA    R0,BUFLIB4              Maclib 5 unparsed
+         LA    R1,ALCDSN             Maclib 5 unquoted or prefix added
+         LA    R2,DA08PDSN             To receive length + DSN
+         BAL   R14,PRSALLOC            Parse and allocate
+         LTR   R15,R15                 Test completion alloc maclib 6
+         BZ    CONCAT                  Branch if allright
+         LA    R1,C6THMAC              Number of Maclib
+         LR    R0,R15                  Return code
+         LA    R15,CURMAC6             SBA order and adress maclib
+         BAL   R14,ALLOCERR            Produce error message
+         MVC   DA0CNUMB,=AL2(5)        Restore CONCAT counter
+         B     RPF007
+CONCAT   DS    0H                      Allocations are OK
+         LA    1,RPFD0C                Load CONCAT pointer
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LTR   R15,R15                 Ok?
+         BZ    RPF031                  Yes: invoke the Assembler
+         MVC   MSG5,ERR5TXT            Msg: Dynalloc error SYSLIB
+         B     RPFERR2                 Return with Rc=4
+         DROP  R3,R4                   DAPB08 and DAPB0C
+RPF031   DS    0H
+         BAL   R14,OBJECT              Allocate Object data set
+         B     *+4(15)                 Branchlist
+         B     RPF032                  Rc=0, object lib allocated
+         B     RPF032                  Rc=4, No ASM=N specified
+         B     ERROBJ1                 Rc=8, object lib same as source
+         B     ERROBJ2                 Rc=12, allocation error
+ERROBJ1  DS    0H
+         MVC   SCR5CURS,CUROBJ         Set cursor on error field
+         MVC   MSG5,ERR7TXT            Move in screen
+         MVI   MSG5+8,C'2'             Data set number in error
+         BAL   R14,RPFTGET             Review the screen
+         B     RPF031                  Branch
+ERROBJ2  DS    0H
+         LA    R15,CUROBJ              Set cursor on error field
+         LA    R1,=C'(2)'              Move number of data set in scr.
+         LR    R0,R15                  Return code
+         BAL   R14,ALLOCERR            Produce error message
+         B     RPF031                  Branch
+RPF032   LA    R3,30                   Max 30 positions additional PARM
+         LA    R4,BUFASM               Additional Assembler options
+         MVC   ASMPARM,ASMDPRM         Move original PARM length
+         LH    R5,ASMPARM              Original PARM length
+         XR    R6,R6                   Count for add bytes
+RPF033   DS    0H                      Start loop
+         CLI   0(R4),C' '              End of PARM?
+         BE    RPF035                  Yes: all done
+         LA    R4,1(,R4)               Next byte
+         LA    R6,1(,R6)               Count byte
+         BCT   R3,RPF033
+RPF035   DS    0H                      End loop
+         LTR   R6,R6                   No additional options?
+         BZ    RPF037                  Take only default PARM
+         BCTR  R6,0                    Minus 1 for execute
+         EX    R6,RPFMOVE              Move add PARM
+         LA    R6,2(,R6)               Count comma
+         AR    R6,R5                   Plus length original
+         STH   R6,ASMPARM              And store it
+         B     RPF037                  Branch to assembler
+RPFMOVE  MVC   ASMREST(0),BUFASM       << executed >>
+RPF037   DS    0H                      Link to assembler
+         MVC   ASMLINK,ASSEMBLR        Name of Assembler program
+         BLDL  0,ASMSRCH               Try to find the Assembler   @rp1
+         LTR   R15,R15                 Found?                      @rp1
+         BZ    RPF038                  Yes: branch                 @rp1
+         MVC   MSG5,ERR9TXT            Error message               @rp1
+         MVC   MSG5+7(8),ASSEMBLR      NO: move asm name           @rp1
+         B     RPFERR2                 Give error msg and terminate@rp1
+RPF038   DS    0H                                                  @rp1
+         MVC   MSG5,MSG3TXT            Msg: 'assembler' running ...
+         MVC   MSG5+7(8),ASMLINK       Move program name in message
+         MVI   SCR5TXT+1,X'C0'         WCC = lock
+         BAL   R14,RPFTPUT             Re-write the screen
+         MVI   SCR5TXT+1,X'C2'         WCC = Unlock
+         CLC   ASMLINK,=CL8'IEV90'     H-assembler?                @rp2
+         BNE   NOIEV                   no: leave it alone          @rp2
+         MVC   TERM90,=CL8'RPFTERM'    Systerm on other position   @rp2
+*                                      in DDname list              @rp2
+NOIEV    DS    0H                                                  @rp2
+         MVC   ERRPROG,ASMLINK         Move program name in error
+         LA    R2,HEREADDR             Registers to restore in ESTAE
+         XC    ESTAEL(L#ESTAEL),ESTAEL Clear list
+*
+         AIF   (&SVS).SVS1
+         ESTAE STAEEXIT,PARAM=(2),MF=(E,ESTAEL)
+         AGO   .NOSVS1
+.SVS1    ANOP
+         STAE  STAEEXIT,PARAM=(2),MF=(E,ESTAEL)
+.NOSVS1  ANOP
+         LA    R1,ASMPARM              Parameter
+         ST    R1,PARM                 Save in parmlist
+         LA    R1,ASMDDNS              Parameter DDname list
+         LA    R14,1
+         SLL   R14,31                  Promote to high order (VL)
+         OR    R1,R14                  VL bit
+         ST    R1,PARM+4               2nd parameter
+         LA    R1,PARM                 Parameter for assembler
+         XC    LNKLST(L#LNKLST),LNKLST
+         RPFSA24                       Switch to amode 24        @rpa01
+         LINK  EPLOC=ASMLINK,SF=(E,LNKLST)
+*                                      Invoke the assembler
+         LR    R2,R15                  Save register 15
+         RPFSA31                       Restore addressing mode   @rpa01
+         AIF   (&SVS).SVS2
+         ESTAE 0                       Kill ESTAE
+         AGO   .NOSVS2
+.SVS2    ANOP
+         STAE 0                        Kill STAE
+.NOSVS2  ANOP
+         LR    R15,R2                  Restore register 15
+         MVC   MSG1ASM,=CL8'RC ASM= '
+         CVD   R15,DWB                 Convert return code
+         UNPK  MSG1RC1(2),DWB(8)       Make zoned
+         OI    MSG1RC1+1,X'F0'         Clear sign
+         LTR   R15,R15                 Return code assembler = 0?
+         BZ    NOASM                   Yes: branch
+         CLI   BUFOUTP,C'N'            No output req ?
+         BNE   NOASM                   No: branch
+         MVI   BUFOUTP,C'T'            Browse term output,
+*                                      ) because assembly errors
+NOASM    DS    0H                      Assembler skipped
+         CLI   BUFLKED,C'Y'            Link edit?
+         BNE   RPF091                  Branch if not
+         CLC   MSG1RC1,=C'04'          Rc higher than 4 ?
+         BH    RPF091                  Link Edit impossible
+         L     R5,=V(DSNS)             Temporary DSN table
+         USING DSNS,R5                 DSNS
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R1,RPFD08               Point to allocation parm block
+         USING DAPB08,R1               IKJDAP08
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFUT4'    SYSUT1 of linkage editor
+         MVC   DA08PDSN,=A(UT4DSNL)    Temporary data set name
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVI   DA08MNM,C' '            Provide no ...
+         MVC   DA08MNM+1(7),DA08MNM               member name
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name (SYSDA)
+         MVC   DA08SER,DA08MNM         No volume serial
+         MVI   DA08PQTY+3,15           15 cylinders primary
+         MVI   DA08SQTY+3,6            6 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LTR   R15,R15                 Allocation OK?
+         BNZ   RPFERR1                 No: go to error routine
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFLKPRT'  SYSPRINT of linkage editor
+         MVC   DA08PDSN,=A(LKPDSNL)    Temporary data set name
+         MVI   DA08PQTY+3,8            8 tracks primary
+         MVI   DA08SQTY+3,6            5 tracks secondary
+         MVI   DA08CTL,DA08TRKS        Track allocation
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LTR   R15,R15                 Allocation OK?
+         BNZ   RPFERR1                 No: go to error routine
+         LA    R1,RPFD08               Point to allocation parm block
+         MVC   DA08DDN,=CL8'RPFLIN'    SYSIN of linkage editor
+         MVC   DA08PDSN,=A(LINDSNL)    Temporary data set name
+*
+         AIF   (&SVS).NOMOD
+         MVI   DA08DSP1,DA08MOD        DISP=MOD (not accepted with SVS)
+.NOMOD   ANOP
+         MVI   DA08PQTY+3,1            1 track primary
+         MVI   DA08SQTY+3,1            1 track secondary
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LTR   R15,R15                 Allocation OK?
+         BNZ   RPFERR1                 No: go to error routine
+         DROP  R1,R5                   DABP08 and DSNS
+RPF040   DS    0H
+         TM    SW,$NOASM               ASSEMBLER has been skipped?
+         BNO   RPF041                  If done Object already allocated
+         BAL   R14,OBJECT              Allocate Object data set
+         B     *+4(15)                 Branchlist
+         B     RPF041                  Rc=0, object lib allocated
+         B     RPF041                  Rc=4, No ASM=N specified
+         B     ERROBJ3                 Rc=8, object lib same as source
+         B     ERROBJ4                 Rc=12, allocation error
+ERROBJ3  DS    0H
+         MVC   SCR5CURS,CUROBJ         Set cursor on error field
+         MVC   MSG5,ERR7TXT            Move in screen
+         MVI   MSG5+8,C'2'             Data set number in error
+         BAL   R14,RPFTGET             Read screen
+         B     RPF040                  Branch
+ERROBJ4  DS    0H
+         LA    R15,CUROBJ              Set cursor on error field
+         LA    R1,=C'(2)'              Move number of data set in scr.
+         LR    R0,R15                  Return code
+         BAL   R14,ALLOCERR            Produce error message
+         B     RPF040                  Branch
+RPF041   DS    0H
+         CLC   BUFLIB5,COMMDSN         Is LOADLIB same as Source lib?
+         BNE   RPF042                  No: Don't
+*
+*        Link edit in the source library is not a good idea
+*
+         MVC   MSG5,ERR7TXT            Move error msg
+         MVI   MSG5+8,C'3'             Data set (3)
+         MVC   SCR5CURS,CURLOAD        Set cursor on error field
+         BAL   R14,RPFTGET             Read the screen
+         B     RPF041                  Retry
+RPF042   DS    0H
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R3,RPFD08               Point to allocation parm block
+         USING DAPB08,R3               Address this DSECT
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVI   DA08DSP1,DA08SHR        DISP=SHR
+         MVI   DA08SER,C' '            No volume serial
+         MVC   DA08SER+1(7),DA08SER
+         MVI   DA08MNM,C' '            No member name
+         MVC   DA08MNM+1(7),DA08MNM
+         MVC   DA08UNIT,DA08SER        No unit name
+         CLI   BUFMEMB,C' '            Member specified?
+         BE    RPF043                  Branch if not
+         MVC   DA08MNM,BUFMEMB         Member name or blank
+RPF043   MVC   DA08DDN,=CL8'RPFLMOD'   DDNAME to allocate
+         LA    R0,BUFLIB5              Load library unparsed
+         LA    R1,ALCDSN               Loadlib unquoted or prefix added
+         LA    R2,DA08PDSN             To receive length + DSN
+         BAL   R14,PRSALLOC            Parse and allocate
+         LTR   R15,R15                 Allocation ok?
+         BZ    RPF046                  Yes: examine INC library
+         LA    R1,CLOAD                Number of loadlib on screen
+         LR    R0,R15                  Return code
+         LA    R15,CURLOAD             SBA order and adress loadlib
+         BAL   R14,ALLOCERR            Produce error message
+         B     RPF041                  Retry
+RPF046   DS    0H
+         MVC   DA08DDN,=CL8'RPFAUT'    LKED automatic call library
+         MVI   DA08MNM,C' '            No ...
+         MVC   DA08MNM+1(7),DA08MNM          member name
+         LA    R1,RPFD08               Point to allocation parm block
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         CLI   BUFIDDN,C' '            No Include lib DDNAME specified?
+         BE    RPF051                  Yes: branch
+         CLI   BUFIDSN,C' '            No Include lib DSNAME specified?
+         BE    RPF051                  Yes: branch
+         MVI   DA08MNM,C' '            No ...
+         MVC   DA08MNM+1(7),DA08MNM          member name
+         MVC   DA08DDN,BUFIDDN         DDNAME to allocate
+         LA    R0,BUFIDSN              Include library unparsed
+         LA    R1,ALCDSN               Inclib unquoted or prefix added
+         LA    R2,DA08PDSN             To receive length + DSN
+         BAL   R14,PRSALLOC            Parse and allocate
+         LTR   R15,R15                 Allocation INC lib ok?
+         BZ    RPF051                  Yes: examine assembler PARM
+         DROP  R3                      DAPB08
+         LA    R1,CINC                 Number of INC-lib on screen
+         LR    R0,R15                  Return code
+         LA    R15,CURIDSN             SBA order and adress INC-lib
+         BAL   R14,ALLOCERR            Produce error message
+         B     RPF046                  Retry
+RPF051   DS    0H                      Examine Linkage editor PARM
+         LA    R2,BUFLKPA              Parm of Linkage Editor
+         XR    R3,R3                   Clear count register
+         MVC   LKEDPARM+2(30),BUFLKPA  Move contents pf PARM
+         LA    R4,30                   Maximum length of Lked PARM
+RPF053   DS    0H
+         CLI   0(2),C' '               End of PARM?
+         BE    RPF055                  Branch
+         LA    R2,1(,R2)               Next character of PARM
+         LA    R3,1(,R3)               Count bytes
+         BCT   R4,RPF053
+RPF055   DS    0H
+         STH   R3,LKEDPARM             Store length into parm
+         LA    R2,BUFCST1              Load first control stmnt
+         LA    R4,6                    Maximum is 6
+         MVI   COMOPN,128              This is the only and last DCB
+         OPEN  (RPFLIN,(OUTPUT)),MF=(E,COMOPN) object file
+         RPFSA24                       Switch to amode 24        @rpa01
+         TM    SW,$NOOBJ               No OBJECT data set?
+         BO    RPF060                  Ok: Do not write Include Stmnt
+         MVI   LINE,C' '               Blank
+         MVC   LINE+1(79),LINE              line
+         MVC   LINE+1(13),=C'INCLUDE RPFGO'
+         PUT   RPFLIN,LINE             Include object deck
+RPF060   CLC   0(8,R2),=CL8' '         No control statement
+         BE    RPF061                  Close the file
+         MVC   LINE+1(69),0(R2)        Move control statement
+         PUT   RPFLIN,LINE             Write on object deck
+         LA    R2,69(,R2)              Next control statement
+         BCT   R4,RPF060               Branch back
+RPF061   DS    0H
+         MVI   COMCLS,X'80'            This is the only and last DCB
+         CLOSE RPFLIN,MF=(E,COMCLS)    Close objectdeck
+         FREEPOOL RPFLIN               And free the buffers
+         RPFSA31                       Restore addressing mode   @rpa01
+         MVC   MSG5,MSG3TXT            Msg: 'linkedit' running ...
+         MVC   MSG5+7(8),LKDNAME       Move program name in message
+         MVI   SCR5TXT+1,X'C0'         WCC = Lock
+         BAL   R14,RPFTPUT             Re-write the screen
+         MVI   SCR5TXT+1,X'C2'         WCC = Unlock
+         MVC   ERRPROG,LKDNAME         Move program name in error
+         LA    R2,HEREADDR             Registers to restore in ESTAE
+         XC    ESTAEL(L#ESTAEL),ESTAEL Clear list
+*
+         AIF   (&SVS).SVS3
+         ESTAE STAEEXIT,PARAM=(2),MF=(E,ESTAEL)
+         AGO   .NOSVS3
+.SVS3    ANOP
+         STAE  STAEEXIT,PARAM=(2),MF=(E,ESTAEL)
+.NOSVS3  ANOP
+         LA    R1,LKEDPARM             Parameter
+         ST    R1,PARM                 Save in parmlist
+         LA    R1,LKEDDDNS             Parameter DDname list
+         LA    R14,1
+         SLL   R14,31                  Promote to high order (VL)
+         OR    R1,R14                  VL bit
+         ST    R1,PARM+4               2nd parameter
+         LA    R1,PARM                 Parameter for assembler
+         RPFSA24                       Switch to amode 24        @rpa01
+         XC    LNKLST(L#LNKLST),LNKLST
+         LINK  EPLOC=LKDNAME,SF=(E,LNKLST)
+         RPFSA31                       Restore addressing mode   @rpa01
+         CVD   R15,DWB                 Convert return code
+*
+         AIF   (&SVS).SVS4
+         ESTAE 0                       Kill ESTAE environment
+         AGO   .NOSVS4
+.SVS4    ANOP
+         STAE 0                        Kill STAE environment
+.NOSVS4  ANOP
+         UNPK  MSG1RC2(2),DWB(8)       Make display format
+         OI    MSG1RC2+1,X'F0'         Clear sign
+         MVC   MSG1RLK,=C' RC '
+         MVC   MSG1LKD,=C'LKED='
+         OI    SW,$LKEXEC              Mark Linkage editor executed
+         CLC   MSG1RC2(2),=C'00'       Rc = 0?
+         BE    RPF091                  Yes: do not change BUFLBRO
+         MVI   BUFLBRO,C'Y'            Set default browse Lked = Y
+RPF091   DS    0H
+         TM    SW,$NOASM               Assember executed?
+         BO    RPF096                  No: skip browse output
+         CLI   BUFOUTP,C'N'            No assembler output requested?
+         BE    RPF096                  Yes: skip browse asm output
+         MVC   COMMPRM(8),=CL8'RPFTERM' Default SYSTERM output
+         CLI   BUFOUTP,C'Y'            See the Assembler print?    @rp1
+         BNE   RPF095                  Yes: branch
+         MVC   COMMPRM(8),=CL8'RPFPRINT' If yes, show SYSPRINT output
+RPF095   DS    0H
+         MVC   COMMPRM+16(8),ASSEMBLR  Move name of assembler      @rp1
+         BAL   R2,BRO                  Invoke RPF browser
+RPF096   TM    SW,$LKEXEC              Is Linkage Editor executed?
+         BNO   REPEAT                  No: free the data sets
+         CLI   BUFLBRO,C'Y'            Browse Linkage Editor output?
+         BNE   REPEAT                  No: free the data sets
+         MVC   COMMPRM(8),=CL8'RPFLKPRT' Set DDNAME for RPFBRO
+         MVC   COMMPRM+16(8),LKDNAME   Move name of Linkage Editor
+         BAL   R2,BRO                  Invoke RPF browser
+         B     REPEAT
+BRO      RPFSA24                       Switch to amode 24        @rpa01
+         LA    R1,ADDRCOMM             Address of RPFCOMM
+         LINK  EP=RPFBRO               Link to Browse
+         RPFSA31                       Restore addressing mode   @rpa01
+         BR    R2                      Return
+REPEAT   DS    0H
+         MVC   MSG5,MSG1TXT            Msg: Rc asm=xxxx, lked=yyyy
+         B     CONTINUE                Issue Assembler menu again
+RPFABNO  DS    0H
+         LA    R5,4                    Return with rc=4
+         B     RETURN                  Return to caller
+RPFNORM  DS    0H
+         XR    R5,R5                   Return code 0
+RETURN   DS    0H
+         FREEMAIN R,A=(8),LV=SCREENSL  Get rid of the screen area
+         LR    R3,R13                  Our save area + workin storage
+         L     R13,4(,R13)             Load callers save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release working storage
+         LR    R15,R5                  Return code
+         RETURN (14,12),RC=(15)
+RPFERR1  DS    0H                      Error in ALLOC work ds ASM/LKED
+         MVC   MSG5,ERR2TXT            Move error message
+RPFERR2  DS    0H                                                  @rp1
+         OI    SW,$ERROR               Mark unrecoverable error
+         BAL   R14,RPFTGET
+         BAL   R14,RPFFREE             Free the assembler data sets
+         B     RPFABNO                 End with return code 4
+         TITLE 'Parse and allocate data set'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:  PRSALLOC                                           *
+*                                                                     *
+*        Function: Remove quotes from quoted data set names - or -    *
+*                  add TSO prefix is the input data set name is       *
+*                  not quoted.                                        *
+*                  After parsing the real length and dataset will be  *
+*                  stored in DA08PDSN and IKJDAIR will be called.     *
+*                                                                     *
+*        Register 0  contains the to be parsed data set name          *
+*        Register 1  is the address of the field that received the    *
+*                    parsed data set name                             *
+*        Register 2  contains the address of DA08PDSN                 *
+*        Register 15 will contain the return code                     *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+PRSALLOC ST    R14,R14PARSE            Save register 14
+         STM   R3,R4,R34PARSE          Save registers 3 and 4
+         ST    R11,PARMFLD             Parameter for DSNPARS
+         ST    R0,PARMFLD+4            Unparsed data set name
+         ST    R1,PARMFLD+8            Parsed data set name
+         LR    R3,R2                   Register 2 will be hit by TRT
+         L     R15,EPDSNPA             Routine address
+         LA    R1,PARMFLD              Parameter
+         BALR  R14,R15                 Execute
+         L     R1,PARMFLD+8            End of parsed ....
+         LA    R1,44(,R1)                            data set name
+         L     R4,PARMFLD+8
+         TRT   0(44,R4),COMSKPNS       Register1 -> first blank
+         SLR   R1,R4                   ... length
+         STCM  R1,3,ALCL               And save real length
+         LA    R1,ALCL                 Data set name + length
+         ST    R1,0(,R3)               Save in parameter block
+         LA    R1,RPFD08               Point to allocation parm block
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LM    R3,R4,R34PARSE          Restore registers 3 and 4
+         L     R14,R14PARSE            Restore register 14
+         BR    R14                     Return
+         TITLE 'Handle allocation error object,loadlib and maclibs'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Error in allocation of one of the maclibs, object library    *
+*        or LOAD-lib.                                                 *
+*        A message will be produced and retry will be scheduled.      *
+*        Register 1  points to the library number on the screen.      *
+*        Register 15 points to the SBA order and address of the       *
+*                    involved library on the screen.                  *
+*        Register 0  contains the return code of IKJDAIR.             *
+*        Register 14 contains the return address.                     *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+ALLOCERR DS    0H
+         STM   R2,R7,R27ALCER          Save registers 2-7
+         ST    R14,R14ALCER            Save register 14
+         MVC   MSG5,ERR4TXT            Msg: Alloc cde xxxx on yyyyyy
+         MVC   MSG5+22(3),0(R1)        Move # of data set in message
+         MVC   SCR5CURS,0(R15)         Set cursor on Maclib x
+         CVD   R0,DBW                  Return code IKJDAIR call
+         UNPK  MSG5+5(2),DBW           Make display format
+         OI    MSG5+6,X'F0'            Clear sign
+         LA    R1,RPFD08               Allocation parm block
+         USING DAPB08,R1               IKJDAP08
+         UNPK  DBW(5),DA08DARC(3)      Expand each byte
+         NC    DBW(4),=X'0F0F0F0F0F0F' Clear hi order nibbles
+         TR    DBW(4),=C'0123456789ABCDEF'
+         MVC   MSG5+14(4),DBW          Move to user field
+         CLC   DA08DARC,=X'1708'       Data set not in catalog?
+         BNE   ALLOCER2                No: carry
+         MVC   MSG5,ERRBTXT            Msg: Data set not in catalog
+ALLOCER2 DS    0H
+         DROP  R1
+         BAL   R14,RPFTGET             Review the screen
+         LM    R2,R7,R27ALCER          Restore registers 2-7
+         L     R14,R14ALCER            Restore register 14
+         BR    R14                     Return
+*
+         TITLE 'Allocate a permanent or temporary object data set'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        O B J E C T:                                                 *
+*                                                                     *
+*              Allocate the Object library. If not specified          *
+*              a temporary object data set will be allocated, except  *
+*              if 'ASM Y/N:' = 'N' specified then no temporary object *
+*              will be allocated.                                     *
+*                                                                     *
+*        Return codes:                                                *
+*              0000:  No errors.                                      *
+*              0004:  No Object data set with 'ASM Y/N:' = 'N'        *
+*              0008:  Object data set same as Source data set.        *
+*              0012:  Allocation error (error code in DA08DARC)       *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+OBJECT   DS    0H
+         ST    R14,R14ROUT             Save register 14
+         XC    RPFD08,RPFD08           Clear parameter block
+         LA    R3,RPFD08               Point to allocation parm block
+         USING DAPB08,R3               IKJDAP08
+         MVI   DA08CD+1,X'08'          Entry code 08 (allocation)
+         MVC   DA08DDN,=CL8'RPFGO'     DDNAME to allocate
+         MVI   DA08SER,C' '            Provide no ...
+         MVC   DA08SER+1(7),DA08SER               volume serial
+         MVC   DA08UNIT,DA08SER        No unit name
+         MVC   DA08MNM,BUFINPO         Move member name
+         MVI   DA08DSP1,DA08SHR        DISP=SHR
+         CLI   BUFLIBO,C' '            No Object lib Specified?
+         BE    OBJ003                  Yes: allocate a temporary one
+         CLC   BUFLIBI,BUFLIBO         Object same as Source library?
+         BE    OBJ053                  Yes: not a good idea, error
+         LA    R0,BUFLIBO              Object library unparsed
+         LA    R1,ALCDSN               Object unquoted or prefix added
+         LA    R2,DA08PDSN             To receive length + DSN
+         BAL   R14,PRSALLOC            Parse and allocate
+         LTR   R15,R15                 Allocation OK?
+         BNZ   OBJ059                  No: Issue an error message
+         B     OBJ098
+OBJ003   DS    0H
+         TM    SW,$NOASM               Asm y/n: = 'Y'?
+         BO    OBJ051                  No: don't allocate an OBJECT
+         L     R5,=V(DSNS)             Load data sets list
+         USING DSNS,R5                 Address the list
+         MVC   DA08PDSN,=A(OBJDSNL)    Temporary data set name
+         MVI   DA08DSP1,DA08NEW        DISP=NEW,
+         MVI   DA08DPS2,DA08DEL                 DELETE
+         MVC   DA08UNIT,COMMSTOR       Move UNIT name (SYSDA)
+         MVC   DA08MNM,DA08SER         No volume serial and member
+         MVI   DA08PQTY+3,5            5 cylinders primary
+         MVI   DA08SQTY+3,2            2 cylinders secondary
+         MVI   DA08CTL,DA08CYLS        Cylinder allocation
+         LA    R1,RPFD08               Allocation parm block
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         DROP  R3,R5                   DAPB08 and DSNS
+         LTR   R15,R15                 Alloc object ok?
+         BNZ   OBJ059                  No issue error
+         B     OBJ098
+OBJ051   DS    0H
+         OI    SW,$NOOBJ               Mark no object data set
+         LA    R15,4                   Rc=0004
+         B     OBJ099
+OBJ053   DS    0H
+         LA    R15,8                   Rc=0008
+         B     OBJ099
+OBJ059   DS    0H
+         LA    R15,12                  Rc=0012
+         B     OBJ099
+OBJ098   DS    0H
+         XR    R15,R15                 Rc=0000
+OBJ099   DS    0H
+         L     R14,R14ROUT             Return address
+         BR    R14                     Return.
+         TITLE 'Write the screen'
+RPFTPUT  DS    0H
+         ST    R14,R14TPUT             Save register 14
+         LA    R1,SCR5TXT              Area (screen) address
+         LA    R0,SCR5LEN              Length of screen
+         L     R15,=V(TPUTS)           Routine address
+         BALR  R14,R15                 Write screen
+         L     R14,R14TPUT             Restore register 14
+         BR    R14                     Return
+*
+         TITLE 'READ THE SCREEN'
+RPFTGET  DS    0H
+         ST    R14,R14ROUT             Save return register
+RPFTGET1 DS    0H
+         BAL   R14,RPFTPUT             First write the screen
+         L     R5,COMMSCR              Output formatted buffer
+         LA    R5,1900(,R5)            Point to 2nd part
+         L     R3,COMMSCR              Load screen address
+         LR    R1,R3                   Area to register 1
+         LA    R0,1788                 Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+*
+*        Do a TGET ASIS to obtain the AID byte
+*        After the TGET ASIS remove the SBA's from the output
+*
+         TM    SW,$ERROR               Unrecoverable error occurred?
+         BO    RPFTGETZ                Yes: do not examine screen
+         CLI   0(R3),X'F3'             PFK3 (END) pressed?
+         BE    RPFTGET3                Yes: terminate RPFASM
+         CLI   0(R3),X'C3'             PFK15 (END) pressed?
+         BE    RPFTGET3                Yes: terminate RPFASM
+         CLI   0(R3),X'6D'             Clear key pressed?
+         BE    CONV001                 Yes: refresh
+         CLI   0(R3),X'7D'             Enter key pressed?
+         BE    CONV003                 Ok: continue
+         MVC   MSG5,ERR8TXT            Msg: Invalid key pressed
+CONV001  DS    0H
+         B     RPFTGET1                Read the screen again
+CONV003  DS    0H
+         XR    R2,R2                   Init output length
+         LR    R4,R1                   Save input length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   CONV099                 If zero or less: end of routine
+         LA    R3,3(,R3)
+*
+*        Input screen is pointed to by R3
+*        Output screen is pointed to by R5
+*        The next section (to CONV099) will remove all the SBA's
+*
+CONV005  DS    0H
+         CLI   0(R3),COMMSBA           SBA?
+         BE    CONV007                 Yes: skip next 3 bytes input
+         MVC   0(1,R5),0(R3)           Move input byte to output area
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte input
+         BCT   R4,CONV005              Loop until all done
+         B     CONV099                 End of routine
+CONV007  DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes SBA
+         SH    R4,=H'2'                Decrease BCT register
+         BNP   CONV099                 <=0: end of conversion
+         BCT   R4,CONV005              Examine next byte
+CONV099  DS    0H
+         LR    R1,R2                   Output length in register 1
+         L     R4,COMMSCR              load buffer
+         LA    R4,1900(,R4)            Point to buffer
+         LTR   R1,R1                   Nothing received?
+         BZ    RPFTGET1                Yes: display screen
+         MVC   SCR5CURS,CURSTD         Default CURSOR location
+         LA    R0,BUFFER               Output buffer
+         L     R1,=A(BUFFEND-BUFCMD)   Length of buffer area
+         LR    R2,R0                   Copy first operand to second
+         IC    R3,=X'40'               Fill character is a blank
+         SLL   R3,24                   Promote to high-order
+         MVCL  R0,R2                   Blank out buffer area
+         LR    R6,R1                   Length of TGET
+         LA    R3,BUFCMD               Address of command in buffer
+*
+SCAN0A   DS    0H
+         CLC   CSRC,0(R4)              Source library reached?
+         BE    SCAN0B                  Yes: scan next field
+         MVC   0(1,R3),0(R4)           Move byte of command
+         LA    R3,1(,R3)               Next byte of COMMAND
+         LA    R4,1(,R4)               Next byte of BUFFER
+         BCT   R6,SCAN0A               Loop until command field compl.
+         B     RPFTGET1                No more data: display screen
+SCAN0B   LA    R4,L'CSRC(,R4)          Point after '(1)'
+         SH    R6,=AL2(L'CSRC)         Skip 3 bytes IN 'BUFFER'
+         LA    R3,BUFINP               Source member
+SCAN0C   DS    0H
+         CLC   CSDSN,0(R4)             Source (DSNAME) reached?
+         BE    SCAN0D                  Yes: scan next field
+         MVC   0(1,R3),0(R4)           Move source (member)
+         LA    R3,1(,R3)               Next byte of SOURCE (member)
+         LA    R4,1(,R4)               Next byte of buffer
+         BCT   R6,SCAN0C               Loop until SOURCE member compl.
+         B     RPFTGET1                No data anymore: display screen
+SCAN0D   LA    R4,L'CSDSN(,R4)         Point after ',DSN='
+         SH    R6,=AL2(L'CSDSN)        Skip 5 bytes in 'BUFFER'
+         LA    R3,BUFLIBI              Source library (DSNAME)
+SCAN0E   DS    0H
+         CLC   COBJ,0(R4)              Object library reached?
+         BE    SCAN0F                  Yes: scan next field
+         MVC   0(1,R3),0(R4)           Move byte source (DSNAME) field
+         LA    R3,1(,R3)               Next byte of source lib field
+         LA    R4,1(,R4)               Next byte of buffer
+         BCT   R6,SCAN0E               Loop until source lib complete
+         B     RPFTGET1                No data anymore: display screen
+SCAN0F   LA    R4,L'COBJ(,R4)          Point after '(2)'
+         SH    R6,=AL2(L'COBJ)         Skip 3 bytes in 'BUFFER'
+         LA    R3,BUFINPO              Object (member)
+SCAN0G   DS    0H
+         CLC   CODSN,0(R4)             Object (DSNAME) reached?
+         BE    SCAN0H                  Yes: scan next field
+         MVC   0(1,R3),0(R4)           Move Object (member)
+         LA    R3,1(,R3)               Next byte of OBJECT (member)
+         LA    R4,1(,R4)               Next byte of buffer
+         BCT   R6,SCAN0G               Loop until Object member compl.
+         B     RPFTGET1                No data anymore: display screen
+SCAN0H   LA    R4,L'CODSN(,R4)         Point after ',DSN=' (object)
+         SH    R6,=AL2(L'CODSN)        Skip 5 bytes in 'BUFFER'
+         LA    R3,BUFLIBO              Object (DSNAME)
+SCAN0I   DS    0H
+         CLC   CLOAD,0(R4)             LOADLIB field reached?
+         BE    SCAN0J                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte OBJLIB DSN field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte OBJLIB DSN field
+         BCT   R6,SCAN0I               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN0J   LA    R4,L'CLOAD(,R4)         Point after '(3)'
+         SH    R6,=AL2(L'CLOAD)        Skip the bytes
+         LA    R3,BUFMEMB              Member of load module field
+SCAN0K   DS    0H
+         CLC   CLDSN,0(R4)             'DSNAME' field reached?
+         BE    SCAN0L                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 'MEMBER' loadmod field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 'MEMBER' loadmod field
+         BCT   R6,SCAN0K               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN0L   LA    R4,L'CLDSN(R4)          Point after ',DSN='
+         SH    R6,=AL2(L'CLDSN)        Skip the bytes
+         LA    R3,BUFLIB5              DSNAME of load library field
+SCAN0M   DS    0H
+         CLC   CINC,0(R4)              INC-LIB field reached?
+         BE    SCAN0N                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte LOADLIB DSN field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte LOADLIB DSN field
+         BCT   R6,SCAN0M               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN0N   LA    R4,L'CINC(,R4)          Point after '(4)'
+         SH    R6,=AL2(L'CINC)         Skip the bytes
+         LA    R3,BUFIDDN              DDNAME of INC-LIB field
+SCAN0P   DS    0H
+         CLC   CIDSN,0(R4)             'DSNAME' Inc-lib reached?
+         BE    SCAN0Q                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte INC-LIB DDNAME field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte INC-LIB DDNAME field
+         BCT   R6,SCAN0P               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN0Q   LA    R4,L'CIDSN(,R4)         Point after ',DSN=' of INC-LIB
+         SH    R6,=AL2(L'CIDSN)        Skip the bytes
+         LA    R3,BUFIDSN              DSNAME of INC-LIB field
+SCAN01   DS    0H
+         CLC   C1STMAC,0(R4)           First MACLIB reached?
+         BE    SCAN03                  Yes: scan next field
+         MVC   0(1,R3),0(R4)           Move byte include lib (DSNAME)
+         LA    R4,1(,R4)               Next byte of buffer
+         LA    R3,1(,R3)               Next byte include lib (DSNAME)
+         BCT   R6,SCAN01               Loop
+         B     RPFTGET1                No data anymore: display screen
+SCAN03   LA    R4,L'C1STMAC(,R4)       Point after '(5)'
+         SH    R6,=AL2(L'C1STMAC)      Skip 3 bytes in 'BUFFER'
+         LA    R3,BUFLIB0              First MACLIB field
+SCAN05   DS    0H
+         CLC   C2NDMAC,0(R4)           2nd MACLIB reached?
+         BE    SCAN07                  Yes: found.
+         MVC   0(1,R3),0(R4)           Move byte 1st MACLIB field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 1st MACLIB field
+         BCT   R6,SCAN05               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN07   LA    R3,BUFLIB1              Address of 2nd MACLIB field
+         LA    R4,L'C2NDMAC(,R4)       Point after '(6)'
+         SH    R6,=AL2(L'C2NDMAC)      Skip 3 byte length
+SCAN09   DS    0H
+         CLC   C3RDMAC,0(R4)           3rd MACLIB reached?
+         BE    SCAN11                  Yes: found.
+         MVC   0(1,R3),0(R4)           Move byte 2nd maclib field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 2nd MACLIB field
+         BCT   R6,SCAN09               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN11   LA    R3,BUFLIB2              Address of 3rd MACLIB field
+         LA    R4,L'C3RDMAC(,R4)       Point after '(7)'
+         SH    R6,=AL2(L'C3RDMAC)      Skip 3 bytes length
+SCAN11A  DS    0H
+         CLC   C4THMAC,0(R4)           4th MACLIB reached?
+         BE    SCAN11B                 Yes: found.
+         MVC   0(1,R3),0(R4)           Move byte 3rd MACLIB field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 3rd MACLIB field
+         BCT   R6,SCAN11A              Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN11B  LA    R3,BUFLIB3              Address of 4th MACLIB field
+         LA    R4,L'C4THMAC(,R4)       Point after '(8)'
+         SH    R6,=AL2(L'C4THMAC)      Skip 3 bytes length
+SCAN11C  DS    0H
+         CLC   C5THMAC,0(R4)           5th MACLIB reached?
+         BE    SCAN11D                 Yes: found.
+         MVC   0(1,R3),0(R4)           Move byte 4th MACLIB field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 4th MACLIB field
+         BCT   R6,SCAN11C              Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN11D  LA    R3,BUFLIB4              Address of 5th MACLIB field
+         LA    R4,L'C5THMAC(,R4)       Point after '(8)'
+         SH    R6,=AL2(L'C5THMAC)      Skip 3 bytes length
+SCAN11E  DS    0H
+         CLC   C6THMAC,0(R4)           6th Maclib reached?
+         BE    SCAN11F                 Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 5th MACLIB field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 5th MACLIB field
+         BCT   R6,SCAN11E              Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN11F  LA    R3,BUFLIB6              Address of 5th MACLIB field
+         LA    R4,L'C6THMAC(,R4)       Point after '(A)'
+         SH    R6,=AL2(L'C6THMAC)      Skip 3 bytes length
+SCAN13   DS    0H
+         CLC   CASMYN,0(R4)            Asm execute Y/N?
+         BE    SCAN15                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 6th MACLIB field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 6th MACLIB field
+         BCT   R6,SCAN13               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN15   LA    R4,L'CASMYN(,R4)        Point after 'ASM  EXEC...'
+         SH    R6,=AL2(L'CASMYN)       Skip the bytes
+         LA    R3,BUFASME              'ASM exec' field
+SCAN16   DS    0H
+         CLC   CASMO,0(R4)             'Output Y/N'? field?        @rp1
+         BE    SCAN16A                 Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 'ASM EXEC' field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 'ASM EXEC' FIELD
+         BCT   R6,SCAN16               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN16A  LA    R4,L'CASMO(,R4)         Point after 'OUTPUT Y/N'    @rp1
+         SH    R6,=AL2(L'CASMO)        Skip the bytes              @rp1
+         LA    R3,BUFOUTP              'ASM OUTPUT' field
+SCAN17   DS    0H
+         CLC   CASMP,0(R4)             Asm PARM field reached?
+         BE    SCAN19                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 'ASM OUTPUT' field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 'ASM OUTPUT' field
+         BCT   R6,SCAN17               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN19   LA    R4,L'CASMP(,R4)         Point after ',PARM:'
+         SH    R6,=AL2(L'CASMP)        Skip the bytes
+         LA    R3,BUFASM               'ASM PARM' field
+SCAN21   DS    0H
+         CLC   CLKDYN,0(R4)            'Lked' field reached?
+         BE    SCAN23                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 'ASM PARM' field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 'ASM PARM' field
+         BCT   R6,SCAN21               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN23   LA    R4,L'CLKDYN(,R4)        Point after 'LKED Y/N:'
+         SH    R6,=AL2(L'CLKDYN)       Skip the bytes
+         LA    R3,BUFLKED              'LKED' field
+SCAN25   DS    0H
+         CLC   CLKDO,0(R4)             ',Output Y/N:' Field reached@rp1
+         BE    SCAN27                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 'LKED' field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 'LKED' field
+         BCT   R6,SCAN25               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN27   LA    R4,L'CLKDO(,R4)         Point after ',OUTPUT Y/N:'  @rp1
+         SH    R6,=AL2(L'CLKDO)        Skip the bytes              @rp1
+         LA    R3,BUFLBRO              'LKED output' field
+SCAN29   DS    0H
+         CLC   CLKDP,0(R4)             'LKED parm' field reached?
+         BE    SCAN31                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 'LKED OUTPUT' field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 'LKED OUTPUT' field
+         BCT   R6,SCAN29               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN31   LA    R4,L'CLKDP(,R4)         Point after ',PARM:'
+         SH    R6,=AL2(L'CLKDP)        Skip the bytes
+         LA    R3,BUFLKPA              'LKED PARM' field
+SCAN33   DS    0H
+         CLC   CPRT,0(R4)              'PRINTER:' reached?
+         BE    SCAN35                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 'LKED PARM' field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 'LKED PARM' field
+         BCT   R6,SCAN33               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN35   LA    R4,L'CPRT(,R4)          Point after 'PRINTER:'
+         SH    R6,=AL2(L'CPRT)         Skip the bytes
+         LA    R3,BUFPRT               'PRINTER' field
+SCAN37   DS    0H
+         CLC   CCLASS,0(R4)            ',CLASS=' reached?
+         BE    SCAN39                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 'PRINTER' field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 'PRINTER' field
+         BCT   R6,SCAN37               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN39   LA    R4,L'CCLASS(,R4)        Point after 'CLASS='
+         SH    R6,=AL2(L'CCLASS)       Skip the bytes
+         LA    R3,BUFCLAS              'CLASS' field
+SCAN41   DS    0H
+         CLC   C1ST,0(R4)              1st control statement reached?
+         BE    SCAN43                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 'CLASS' field
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 'CLASS' field
+         BCT   R6,SCAN41               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN43   LA    R4,L'C1ST(,R4)          Point after '1>'
+         SH    R6,=AL2(L'C1ST)         Skip the bytes
+         LA    R3,BUFCST1              1st control statement field
+SCAN45   DS    0H
+         CLC   C2ND,0(R4)              2nd control statement reached?
+         BE    SCAN47                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 1st control statement
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 1st control statement
+         BCT   R6,SCAN45               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN47   LA    R4,L'C2ND(,R4)          Point after '2>'
+         SH    R6,=AL2(L'C2ND)         Skip the bytes
+         LA    R3,BUFCST2              2nd control statement field
+SCAN49   DS    0H
+         CLC   C3RD,0(R4)              3rd control statement reached?
+         BE    SCAN51                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 2nd control statement
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 2nd control statement
+         BCT   R6,SCAN49               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN51   LA    R4,L'C3RD(,R4)          Point after '3>'
+         SH    R6,=AL2(L'C3RD)         Skip the bytes
+         LA    R3,BUFCST3              3rd control statement field
+SCAN53   DS    0H
+         CLC   C4TH,0(R4)              4th control statement reached?
+         BE    SCAN55                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 3rd control statement
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 3rd control statement
+         BCT   R6,SCAN53               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN55   LA    R4,L'C4TH(,R4)          Point after '4>'
+         SH    R6,=AL2(L'C4TH)         Skip the bytes
+         LA    R3,BUFCST4              4th control statement field
+SCAN57   DS    0H
+         CLC   C5TH,0(R4)              5th control statement reached?
+         BE    SCAN59                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 4th control statement
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 4th control statement
+         BCT   R6,SCAN57               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN59   LA    R4,L'C5TH(,R4)          Point after '5>'
+         SH    R6,=AL2(L'C5TH)         Skip the bytes
+         LA    R3,BUFCST5              5th control statement field
+SCAN61   DS    0H
+         CLC   C6TH,0(R4)              6th control statement reached?
+         BE    SCAN63                  Yes: found
+         MVC   0(1,R3),0(R4)           Move byte 5th control statement
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 5th control statement
+         BCT   R6,SCAN61               Test next byte
+         B     RPFTGET1                No data anymore: display screen
+SCAN63   LA    R4,L'C6TH(,R4)          Point after '6>'
+         LA    R3,BUFCST6              6th control statement field
+         SH    R6,=AL2(L'C6TH)         Skip the bytes
+         BNP   ENDSCAN                 <=0: end of scan
+SCAN65   MVC   0(1,R3),0(R4)           Move byte 6th control statement
+         LA    R4,1(,R4)               Next byte buffer
+         LA    R3,1(,R3)               Next byte 6th control statement
+         BCT   R6,SCAN65               Move bytes until complete
+ENDSCAN  DS    0H
+         MVC   MSG5(25),MSG5-1         Populate message with '-'
+         LA    R1,BUFCMD
+         L     R14,=A(BUFFEND-BUFCMD)  Length of buffer area
+ENDSCAN1 DS    0H
+         TR    0(1,R1),COMTCAPS        Xlate
+         LA    R1,1(,R1)                    complete
+         BCT   R14,ENDSCAN1                         buffer to caps
+         CLC   BUFINPO,=CL8' '         Object member blank?
+         BNE   *+10                    No: branch
+         MVC   BUFINPO,BUFINP         Yes: copy source member to object
+         CLC   BUFMEMB,=CL8' '         Load module member blank?
+         BNE   *+10                    No: branch
+         MVC   BUFMEMB,BUFINPO         Yes: copy source member to LOAD
+         CLC   BUFCMD(3),=C'END'       END entered?
+         BNE   RPFTGET4                No: branch
+RPFTGET3 BAL   R14,RPFFREE             Free the data sets
+         L     R14,=A(RPFNORM)         Load exit address
+         BR    R14                     Normal return
+RPFTGET4 DS    0H
+         MVC   COMMPRT,BUFPRT          Move Printer name to RPFCOMM
+         MVC   COMOUTCL,BUFCLAS        Move Output class to RPFCOMM
+         L     R14,COMASMPT            RPFASM section of RPFCOMM
+         USING COMMASMD,R14            Make addressable
+         MVC   COMMMAC1,BUFLIB0        Move
+         MVC   COMMMAC2,BUFLIB1          Macro
+         MVC   COMMMAC3,BUFLIB2            Libraries
+         MVC   COMMMAC4,BUFLIB3              to
+         MVC   COMMMAC5,BUFLIB4                RPF-
+         MVC   COMMMAC6,BUFLIB6                    COMM
+         LA    R0,COMMLKED             Output
+         LA    R1,6*69                 Length
+         LR    R3,R1                   Length 2nd operand
+         LA    R2,BUFCST1              Input
+         MVCL  R0,R2                   Move LKED control to RPFCOMM
+         MVC   COMMOBJ,BUFLIBO         Move DSN of OBJ ds to RPFCOMM
+         MVC   COMMIDDN,BUFIDDN        Move DDN of INC-LIB to RPFCOMM
+         MVC   COMMIDSN,BUFIDSN        Move DSN of INC-LIB to RPFCOMM
+         MVC   COMMASPA,BUFASM         Move ASM Parm to RPFCOMM
+         MVC   COMMLKPA,BUFLKPA        Move LKED parm to RPFCOMM
+         DROP  R14                     COMMASMD
+         LA    R3,BUFLIB0              Shift blank Maclibs
+         LA    R4,6                    Max 6 times
+*
+*        At this point blank Maclib specifications will be
+*        Shifted to the end.
+*        That is easy to scan: if a MacLib is found blank,
+*        all the next ones are blank too.
+*
+RPFTGET5 CLI   0(R3),C' '              Blank Maclib found?
+         BNE   RPFTGET6                No: Examine next Maclib
+         MVC   BUFLIB0,BUFLIB1         Move BUFLIB1 to BUFLIB0
+         MVC   BUFLIB1,BUFLIB2         Move BUFLIB2 to BUFLIB1
+         MVC   BUFLIB2,BUFLIB3         Move BUFLIB3 to BUFLIB2
+         MVC   BUFLIB3,BUFLIB4         Move BUFLIB4 to BUFLIB3
+         MVC   BUFLIB4,BUFLIB6         Move BUFLIB6 to BUFLIB4
+         MVI   BUFLIB6,C' '            And blank ...
+         MVC   BUFLIB6+1(43),BUFLIB6             out BUFLIB6
+         BCT   R4,RPFTGET5             Loop until all done
+         B     RPFTGETY                No Maclibs specified
+RPFTGET6 LA    R3,BUFLIB1              Shift blank Maclibs
+         LA    R4,5                    Max 5 times
+RPFTGET7 CLI   0(R3),C' '              Blank Maclib found?
+         BNE   RPFTGET8                No: examine next Maclib
+         MVC   BUFLIB1,BUFLIB2         Move BUFLIB2 to BUFLIB1
+         MVC   BUFLIB2,BUFLIB3         Move BUFLIB3 to BUFLIB2
+         MVC   BUFLIB3,BUFLIB4         Move BUFLIB4 to BUFLIB3
+         MVC   BUFLIB4,BUFLIB6         Move BUFLIB6 to BUFLIB4
+         MVI   BUFLIB6,C' '            And blank ...
+         MVC   BUFLIB6+1(43),BUFLIB6             out BUFLIB6
+         BCT   R4,RPFTGET7             Loop until all done
+         B     RPFTGETY                No Maclibs specified
+RPFTGET8 LA    R3,BUFLIB2              Shift blank Maclibs
+         LA    R4,4                    Max 4 times
+RPFTGET9 CLI   0(R3),C' '              Blank Maclib found?
+         BNE   RPFTGETA                No: examine next Maclib
+         MVC   BUFLIB2,BUFLIB3         Move BUFLIB3 to BUFLIB2
+         MVC   BUFLIB3,BUFLIB4         Move BUFLIB4 to BUFLIB3
+         MVC   BUFLIB4,BUFLIB6         Move BUFLIB6 to BUFLIB4
+         MVI   BUFLIB6,C' '            And blank ...
+         MVC   BUFLIB6+1(43),BUFLIB6             out BUFLIB6
+         BCT   R4,RPFTGET9             Loop until all done
+         B     RPFTGETY                No Maclibs specified
+RPFTGETA LA    R3,BUFLIB3              Shift blank Maclibs
+         LA    R4,3                    Max 3 times
+RPFTGETB CLI   0(R3),C' '              Blank Maclib found?
+         BNE   RPFTGETC                No: Examine next Maclib
+         MVC   BUFLIB3,BUFLIB4         Move BUFLIB4 to BUFLIB3
+         MVC   BUFLIB4,BUFLIB6         Move BUFLIB6 to BUFLIB4
+         MVI   BUFLIB6,C' '            And blank ...
+         MVC   BUFLIB6+1(43),BUFLIB6             out BUFLIB6
+         BCT   R4,RPFTGETB             Loop until all done
+RPFTGETC LA    R3,BUFLIB4              Shift blank Maclibs
+         LA    R4,2                    Max 2 times
+RPFTGETD CLI   0(R3),C' '              Blank Maclib found?
+         BNE   RPFTGETY                No: Examine next Maclib
+         MVC   BUFLIB4,BUFLIB6         Move BUFLIB6 to BUFLIB4
+         MVI   BUFLIB6,C' '            And blank ...
+         MVC   BUFLIB6+1(43),BUFLIB6             out BUFLIB6
+         BCT   R4,RPFTGETD             Loop until all done
+RPFTGETY MVC   SCR5LBI,BUFLIBI         Move
+         MVC   SCR5LBO,BUFLIBO
+         MVC   SCR5LB0,BUFLIB0           the
+         MVC   SCR5LB1,BUFLIB1
+         MVC   SCR5LB2,BUFLIB2
+         MVC   SCR5LB3,BUFLIB3              read
+         MVC   SCR5LB4,BUFLIB4
+         MVC   SCR5LB5,BUFLIB5                   scr-
+         MVC   SCR5LB6,BUFLIB6                      een
+         MVC   SCR5IDDN,BUFIDDN
+         MVC   SCR5IDSN,BUFIDSN
+         MVC   SCR5INP,BUFINP
+         MVC   SCR5INPO,BUFINPO                     in
+         MVC   REP5,BUFCMD
+         MVC   SCR5OUT,BUFOUTP
+         MVC   SCR5LKD,BUFLKED                          format
+         MVC   SCR5MEM,BUFMEMB
+         MVC   SCR5ASM,BUFASM
+         MVC   SCR5ASME,BUFASME
+         MVC   SCR5PRM,BUFLKPA
+         MVC   SCR5PRT,BUFPRT                                   @961125
+         MVC   SCR5CLAS,BUFCLAS                                 @961126
+         MVC   SCR5BRO,BUFLBRO
+         MVC   STMNT1+5(69),BUFCST1
+         MVC   STMNT2+5(69),BUFCST2
+         MVC   STMNT3+5(69),BUFCST3
+         MVC   STMNT4+5(69),BUFCST4
+         MVC   STMNT5+5(69),BUFCST5
+         MVC   STMNT6+5(69),BUFCST6
+         MVC   SCR5LBI,BUFLIBI         Move
+RPFTGETZ L     R14,R14ROUT             Restore return register
+         BR    R14                     Branch to caller
+         TITLE 'Free the data sets'
+RPFFREE  DS    0H
+         ST    R14,R14ROUT             Save register 14
+         XC    RPFD10,RPFD10           Clear
+         LA    R1,RPFD10               Deconcat parm block
+         USING DAPB10,R1               IKJDAP10
+         MVI   DA10CD+1,X'10'          Entry code
+         MVC   DA10DDN,=CL8'RPFLIB'    DDNAME to de concatenate
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         DROP  R1                      IKJDAP10
+         XC    RPFD18,RPFD18           Clear parameter block
+         LA    R1,RPFD18               Point to unallocation parm block
+         USING DAPB18,R1               IKJDAP18
+         MVI   DA18CD+1,X'18'          Entry code 0018 (unallocate)
+         MVC   DA18DDN,=CL8'RPFUT1'    DDNAME to unallocate
+         MVI   DA18MNM,C' '            Provide no ...
+         MVC   DA18MNM+1(7),DA18MNM               member name
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVI   DA18DDN+5,C'2'          DD-name is RPFUT2
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVI   DA18DDN+5,C'3'          DD-name is RPFUT3
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVI   DA18DDN+5,C'4'          DD-name is RPFUT4
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFTERM'   DDNAME to unallocate
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFPRINT'  DDNAME to unallocate
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFLKPRT'  DDNAME to unallocate
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFLIN'    DDNAME to unallocate
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFLIB'    DDNAME to unallocate
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVI   DA18DDN+6,C'1'          DD-name = BUFLIB1
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVI   DA18DDN+6,C'2'          DD-name = BUFLIB2
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVI   DA18DDN+6,C'3'          DD-name = BUFLIB3
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVI   DA18DDN+6,C'4'          DD-name = BUFLIB4
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVI   DA18DDN+6,C'6'          DD-name = BUFLIB6
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFLMOD'   DDNAME to unallocate
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFAUT'    Automatic call library
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,=CL8'RPFGO'     OBJECT library (SYSLIN of asm)
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         TM    SW,$ATTR                Attribute list chained?
+         BNO   FREE03                  No skip unchain ATTR list
+         LA    R14,RPFD34              Unchain the attribute list
+         USING DAPB34,R14              Address IKJDA34
+         MVI   DA34CTRL,DA34UNCH       Unchain attribute list
+         LA    R1,RPFD34               Chain the attribute list
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         NI    SW,255-$ATTR            Chain off
+         DROP  R14                     DAPB34
+FREE03   DS    0H
+         CLI   BUFIDDN,C' '            DDNAME Include lib specified?
+         BE    FREE99                  No: branch
+         CLI   BUFIDSN,C' '            DSNAME Include lib specified?
+         BE    FREE99                  No: branch
+         LA    R1,RPFD18               Point to unallocation parm block
+         MVC   DA18DDN,BUFIDDN         Automatic call library
+         L     R15,=V(CALLTS)          IKJDAIR routine
+         CALL  (15)
+         DROP  R1                      DAPB18
+FREE99   DS    0H
+         L     R14,R14ROUT             Restore register 14
+         BR    R14                     Return to caller
+         TITLE 'Try to retry from Assembler or LKED abend'
+         AIF   (&SVS).SVS6
+*---------------------------------------------------------------------*
+*                                                                     *
+*        ESTAE exit and retry routine: handle the abends occurred in  *
+*        the assembler and/or linkage editor, retry, give the         *
+*        abend message and return to the caller.                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+STAEEXIT DS    0H
+         DROP  ,
+         USING *,15
+         ST    R14,12(,R13)            Save register 14
+         C     R0,=F'12'               Is there a SDWA?
+         BE    STAE020                 No: percolate
+         USING SDWA,R1
+         XR    R2,R2                   Clear register 2
+         ICM   R2,7,SDWACMPC           Insert completion code
+         SRL   R2,12                   Shift out user completion code
+         L     R3,SDWAPARM             PARM with registers 10-13
+         ST    R2,SDWASR02             Save register 2
+         MVC   SDWASR08(24),0(R3)      Restore registers 8-13
+         SETRP RC=4,                   Indicate retry                  *
+               RETADDR=RET,            Retry-address                   *
+               RETREGS=YES,            Restore registers for retry ..  *
+               FRESDWA=YES             And free the SDWA
+         BR    R14                     Return to RTM
+STAE020  DS    0H
+         SETRP RC=0,REGS=(14),         Indicate percolation            *
+               COMPCOD=(998,USER)      With user completion code
+         DROP  R1,R15                  SDWA and STAEEXIT
+*
+RET      DS    0H                      With restored R2,R10,R11,R12,R13
+         DROP  ,
+         USING RPFASM,R12,R10          Get addressability
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Working storage
+         USING SCREENS,R8              Screen
+         RPFSA31                       Restore addressing mode
+         AGO   .NOSVS6
+*
+.SVS6    ANOP
+*---------------------------------------------------------------------*
+*                                                                     *
+*        STAE exit and retry routine: handle the abends occurred in   *
+*        the assembler and/or linkage editor, retry, give the         *
+*        abend message and return to the caller.                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+STAEEXIT DS    0H
+         DROP  ,
+         USING *,15
+         ST    R14,12(,R13)            Save register 14
+         C     R0,=F'12'               Is there a STAE Control Blk?
+         BE    STAE020                 No: percolate
+         USING SCB,R1
+         XR    R2,R2                   Clear register 2
+         ICM   R2,7,SCBCMP             Insert completion code
+         SRL   R2,12                   Shift out user completion code
+         L     R3,SCBPARM              PARM with registers 8-13
+         ST    R2,24(,R3)              Save completion code
+         LR    R15,4                   RC=4, Retry
+         LA    R0,RET                  Retry routine
+         BR    R14                     Return to RTM
+STAE020  DS    0H
+         LA    R15,0                   Indicate percolation
+         BR    R14                     Return to RTM
+         DROP  R15                     STAEEXIT
+*
+RET      DS    0H                      With restored R2,R10,R11,R12,R13
+         DROP  ,
+         USING RPFASM,R12,R10          Get addressability
+         USING COMMAREA,R11            RPFCOMM
+         USING WORKAREA,R13            Working storage
+         USING SCREENS,R8              Screen
+         USING SCB,R1
+         L     R3,SCBPARM              PARM with registers 8-13
+         LM    R8,R13,0(R3)            Restore registers 8-13
+         L     R2,24(,R3)              Restore register 2 from HEREADDR
+         FREEMAIN R,LV=104,A=(1)       Freemain workarea
+.NOSVS6  ANOP
+         STH   R2,SYSTEMCC             Save system completion code
+         MVC   MSG5,ERRCTXT            Move into screen
+         UNPK  DBW(5),SYSTEMCC(3)      Expand each byte
+         NC    DBW(4),=X'0F0F0F0F0F0F' Clear hi order nibbles
+         TR    DBW(4),=C'0123456789ABCDEF'
+         MVC   MSG5+21(4),DBW          Move to user field
+         MVI   MSG5+24,C' '            Blank first zero
+         MVC   MSG5+4(8),ERRPROG       Move program name in error
+         B     RPFERR2                 Write error, cleanup and exit
+         TITLE 'Constants and literals'
+         LTORG ,
+*
+ERR1TXT  DC    CL25'--- Data set name missing'
+ERR2TXT  DC    CL25'-- Alloc. error work data'
+ERR3TXT  DC    CL25'-------- Member not found'
+ERR4TXT  DC    CL25'- Rc=xx Error=xxxx on xxx' +5, +14 and +22
+ERR5TXT  DC    CL25'--- DYNALLOC error SYSLIB'
+ERR6TXT  DC    CL25'----- Allocation RC= xxxx' +21
+ERR7TXT  DC    CL25'--- Ds (.) same as ds (1)' +8
+ERR8TXT  DC    CL25'----- Invalid key pressed'
+ERR9TXT  DC    CL25'------ xxxxxxxx not found' +7
+ERRATXT  DC    CL25'---No card image data set'
+ERRBTXT  DC    CL25'- Data set not in catalog'
+ERRCTXT  DC    CL25'--- xxxxxxxx abended xxxx' +4 and +21
+ERRDTXT  DC    CL25'-- Rc=xxxx Attribute list' +6
+MSG3TXT  DC    CL25'------ xxxxxxxx running..' +7
+         TITLE 'DDNAME LISTS OF ASSEMBLER AND Linkage Editor'
+MODDDNS  DS    0F
+         DC    AL2(STOPA-STARTA)
+STARTA   EQU   *
+         DC    CL8'RPFGO'              SYSLIN entry
+         DC    XL8'00'                 Empty entry (SYSLMOD member)
+         DC    XL8'00'                 Empty entry (SYSLMOD)
+         DC    CL8'RPFLIB'             SYSLIB
+         DC    CL8'RPFWORK'            SYSIN
+         DC    CL8'RPFPRINT'           SYSPRINT
+         DC    CL8'RPFPUNCH'           SYSPUNCH
+         DC    CL8'RPFUT1'             SYSUT1
+MOD90    DC    CL8'RPFUT2'             SYSUT2 or SYSTERM if IEV90 @rp2
+         DC    CL8'RPFUT3'             SYSUT3
+         DC    CL8'RPFGO'              SYSGO
+         DC    CL8'RPFTERM'            SYSTERM
+STOPA    EQU   *
+MOD2DDNS DS    0H
+         DC    AL2(STOPL-STARTL)
+STARTL   EQU   *
+         DC    CL8'RPFLIN'             SYSLIN
+         DC    XL8'00'                 Member name of Linkage Editor
+         DC    CL8'RPFLMOD'            SYSLMOD
+         DC    CL8'RPFAUT'             SYSLIB
+         DC    XL8'00'
+         DC    CL8'RPFLKPRT'           SYSPRINT
+         DC    XL8'00'
+         DC    CL8'RPFUT4'             SYSUT1
+         DC    XL8'00'
+         DC    XL8'00'
+         DC    XL8'00'
+         DC    XL8'00'                 SYSTERM
+STOPL    EQU   *
+PRMASM   DC    CL44'NODECK,OBJECT,TERM,LINECOUNT(51),XREF(SHORT)'
+*
+         PRINT NOGEN
+MDLLIN   DCB   DSORG=PS,DDNAME=RPFLIN,MACRF=PM,RECFM=FB,LRECL=80,      X
+               BLKSIZE=3200
+L#MDLLIN EQU   *-MDLLIN
+         PRINT GEN
+         DROP
+         RCTOSBA RENT=YES              Convert Row/Column to SBA
+         COPY  TPUTS
+         TITLE 'S C R E E N  FORMATS'
+SCREENS  CSECT
+SCR5TXTF DC    X'27'                   Escape character TPUT FULLSCR
+SCR5TXT  DC    X'00C21100001DF8'       r1,c1+
+         DC    CL54'RPF Foreground assembler (And linkage editor)------X
+               ---'
+MSG5     DC    CL25'-------------------------'
+R2C1     DC    X'110000',X'1DF8',C'Cmd =>',X'1DC1' r2,c1+
+REP5     DC    CL24' ',X'1DF0'
+*
+R3C1     DC    X'110000',X'1DF1',AL3(WHITE) r3,c1+
+CSRC     DC    C'(1)',X'1DF0',AL3(GREEN)
+         DC    C'Src-lib ',AL3(TURQ),C'MEM='
+         DC    X'1DC9',AL3(RED)
+SCR5INP  DC    CL8' '
+         DC    X'1DF1',AL3(TURQ)
+CSDSN    DC    C',DSN=',X'1DC9'
+LIBSC5L  EQU   *-R3C1
+         DC    X'110000',AL3(RED)      r3,c34+
+SCR5LBI  DC    CL46' '
+         DC    X'1DF0'
+LIBRL    EQU   *-R3C1
+*
+         DC    X'110000',X'1DF1',AL3(WHITE) r4,c1+
+COBJ     DC    C'(2)',X'1DF0',AL3(GREEN)
+         DC    C'Obj-lib ',AL3(TURQ),C'MEM='
+         DC    X'1DC9',AL3(RED)
+SCR5INPO DC    CL8' '
+         DC    X'1DF1',AL3(TURQ)
+CODSN    DC    C',DSN=',X'1DC9'
+CUROBJ   DC    X'11C4D1',AL3(RED)      r4,c34+
+SCR5LBO  DC    CL46' '
+         DC    X'1DF0'
+*
+         DC    X'110000',X'1DF1',AL3(WHITE) r5,c1+
+CLOAD    DC    C'(3)',X'1DF0',AL3(GREEN)
+         DC    C'Loadlib ',AL3(TURQ),C'MEM='
+         DC    X'1DC9',AL3(RED)
+SCR5MEM  DC    CL8' '
+         DC    X'1DF1',AL3(TURQ)
+CLDSN    DC    C',DSN=',X'1DC9'
+CURLOAD  DC    X'110000'               r5,c34+
+         DC    AL3(RED)
+SCR5LB5  DC    CL46' '
+         DC    X'1DF0'
+*
+         DC    X'110000',X'1DF1',AL3(WHITE) r6,c1+
+CINC     DC    C'(4)',X'1DF0',AL3(GREEN)
+         DC    C'INC-lib ',AL3(TURQ),C'DDN='
+         DC    X'1DC9'
+         DC    AL3(RED)
+SCR5IDDN DC    CL8' '
+         DC    X'1DF1',AL3(TURQ)
+CIDSN    DC    C',DSN=',X'1DC9'
+CURIDSN  DC    X'110000'               r06,c34+
+         DC    AL3(RED)
+SCR5IDSN DC    CL46' '
+         DC    X'1DF0'
+*
+R7C1     DC    X'110000',X'1DF1',AL3(WHITE) r7,c1+
+C1STMAC  DC    C'(5)',X'1DF0',AL3(GREEN)
+         DC    C'Maclib1 ',AL3(TURQ),C'DSN='
+         DC    X'1DC9'
+MACL     EQU   *-R7C1
+CURMAC1  DC    X'110000'               r07,c19+
+         DC    AL3(RED)
+SCR5LB0  DC    CL46' '                 Maclib name 1
+         DC    X'1DF0'
+MACLEN   EQU   *-R7C1
+*
+         DC    X'110000',X'1DF1',AL3(WHITE) r09,c1+
+C2NDMAC  DC    C'(6)',X'1DF0',AL3(GREEN)
+         DC    C'Maclib2 ',AL3(TURQ),C'DSN='
+         DC    X'1DC9'
+CURMAC2  DC    X'110000'               r08,c19+
+         DC    AL3(RED)
+SCR5LB1  DC    CL46' '                 Maclib name 2
+         DC    X'1DF0'
+*
+         DC    X'110000',X'1DF1',AL3(WHITE) r10,c1+
+C3RDMAC  DC    C'(7)',X'1DF0',AL3(GREEN)
+         DC    C'Maclib3 ',AL3(TURQ),C'DSN='
+         DC    X'1DC9'
+CURMAC3  DC    X'110000'               r09,c19+  +32
+         DC    AL3(RED)
+SCR5LB2  DC    CL46' '                 Maclib name 3
+         DC    X'1DF0'
+*
+         DC    X'110000',X'1DF1',AL3(WHITE) r11,C1+
+C4THMAC  DC    C'(8)',X'1DF0',AL3(GREEN)
+         DC    C'Maclib4 ',AL3(TURQ),C'DSN='
+         DC    X'1DC9'
+CURMAC4  DC    X'110000'               r11,c19+
+         DC    AL3(RED)
+SCR5LB3  DC    CL46' '                 MACLIB name 4
+         DC    X'1DF0'
+*
+         DC    X'110000',X'1DF1',AL3(WHITE) r12,c1+
+C5THMAC  DC    C'(9)',X'1DF0',AL3(GREEN)
+         DC    C'Maclib5 ',AL3(TURQ),C'DSN='
+         DC    X'1DC9'
+CURMAC5  DC    X'110000'               r12,c19+
+         DC    AL3(RED)
+SCR5LB4  DC    CL46' '                 MACLIB name 5
+         DC    X'1DF0'
+*
+         DC    X'110000',X'1DF1',AL3(WHITE) r13,c1+
+C6THMAC  DC    C'(A)',X'1DF0',AL3(GREEN)
+         DC    C'Maclib6 ',AL3(TURQ),C'DSN='
+         DC    X'1DC9'
+CURMAC6  DC    X'110000'               r13,c19+
+         DC    AL3(RED)
+SCR5LB6  DC    CL46' '                 MACLIB name 6
+         DC    X'1DF0'
+*
+R14C1    DC    X'110000',X'1DF1',AL3(TURQ) r15,c01+
+CASMYN   DC    C'ASM  Y/N:',X'1DC9',AL3(RED)
+SCR5ASME DC    C'Y',X'1DF1',AL3(TURQ)
+CASMO    DC    C',Output Y/N:',X'1DC9'                             @rp1
+         DC    AL3(RED)
+SCR5OUT  DC    C'N',X'1DF1',AL3(TURQ)
+CASMP    DC    C',Parm:'
+         DC    X'1DC9',AL3(RED)
+SCR5ASM  DC    CL30' ',X'1DF0'
+*
+R15C1    DC    X'110000',X'1DF1'       r15,c01+
+         DC    AL3(TURQ)
+CLKDYN   DC    C'LKED Y/N:',X'1DC9',AL3(RED)
+SCR5LKD  DC    C'Y',X'1DF1'
+         DC    AL3(TURQ)
+CLKDO    DC    C',Output Y/N:',X'1DC9'                             @rp1
+         DC    AL3(RED)
+SCR5BRO  DC    C'N',X'1DF1',AL3(TURQ)
+CLKDP    DC    C',Parm:'
+         DC    X'1DC9'
+         DC    AL3(RED)
+SCR5PRM  DC    CL30' ',X'1DF0'
+         DC    X'1DF1'
+*
+R16C2    DC    X'110000'               r16,c2+ MDT on
+         DC    AL3(TURQ)
+CPRT     DC    C'Printer:',X'1DC9'
+         DC    AL3(RED)
+SCR5PRT  DC    CL8' ',X'1DF1'
+         DC    AL3(TURQ)
+CCLASS   DC    C',CLASS=',X'1DC9'
+         DC    AL3(RED)
+SCR5CLAS DC    C' ',X'1DF0'
+R17C2    DC    X'110000'               r17,c2+
+         DC    AL3(YELLOW)
+         DC    C'Optional LKED control statements, DDNAME loadlib is RPX
+               FAUT'
+*
+R18C2    DC    X'1DF9',X'110000'       r18,c2+
+         DC    AL3(WHITE)
+C1ST     DC    C'1>'
+STMNT1   DC    X'1DC1',AL3(RED),CL69' ',X'1DF0'
+STMLEN   EQU   *-R18C2
+*
+         DC    X'1DF9',X'110000'       r19,c2+
+         DC    AL3(WHITE)
+C2ND     DC    C'2>'
+STMNT2   DC    X'1DC1',AL3(RED),CL69' ',X'1DF0'
+*
+         DC    X'1DF9',X'110000'       r20,c2+
+         DC    AL3(WHITE)
+C3RD     DC    C'3>'
+STMNT3   DC    X'1DC1',AL3(RED),CL69' ',X'1DF0'
+*
+         DC    X'1DF9',X'110000'       r21,c2+
+         DC    AL3(WHITE)
+C4TH     DC    C'4>'
+STMNT4   DC    X'1DC1',AL3(RED),CL69' ',X'1DF0'
+*
+         DC    X'1DF9',X'110000'       r22,c2+
+         DC    AL3(WHITE)
+C5TH     DC    C'5>'
+STMNT5   DC    X'1DC1',AL3(RED),CL69' ',X'1DF0'
+*
+         DC    X'1DF9',X'110000'       r23,c2+
+         DC    AL3(WHITE)
+C6TH     DC    C'6>'
+STMNT6   DC    X'1DC1',AL3(RED),CL69' ',X'1DF0'
+*
+RLASTC2  DC    X'110000'
+         DC    AL3(TURQ)
+         DC    C'Hit ',AL3(WHITE)
+         DC    C'PF03/15 ',AL3(TURQ),C'to return'
+*
+SCR5CURS DC    XL3'000000'
+         DC    X'13'
+SCR5LEN  EQU   *-SCR5TXT
+SCR5LENF EQU   *-SCR5TXTF
+SCREENSL EQU   *-SCREENS
+         TITLE 'Temporary data sets of Assembler and Linkage editor'
+DSNS     CSECT
+PRTDSNL  DC    AL2(10)                 Real length of data set name
+PRTDSN   DS    0CL44
+         DC    X'5050'
+         DC    CL42'RPFPRINT'
+LINDSNL  DC    AL2(8)                  Real length of data set name
+LINDSN   DS    0CL44
+         DC    X'5050'
+         DC    CL42'RPFLIN'
+UT1DSNL  DC    AL2(8)                  Real length of data set name
+UT1DSN   DS    0CL44
+         DC    X'5050'
+         DC    CL42'RPFUT1'
+UT2DSNL  DC    AL2(8)                  Real length of data set name
+UT2DSN   DS    0CL44
+         DC    X'5050'
+         DC    CL42'RPFUT2'
+UT3DSNL  DC    AL2(8)                  Real length of data set name
+UT3DSN   DS    0CL44
+         DC    X'5050'
+         DC    CL42'RPFUT3'
+UT4DSNL  DC    AL2(8)                  Real length of data set name
+UT4DSN   DS    0CL44
+         DC    X'5050'
+         DC    CL42'RPFUT4'            SYSUT1 of linkage editor
+TRMDSNL  DC    AL2(9)                  Real length of data set name
+TERMDSN  DS    0CL44
+         DC    X'5050'
+         DC    CL42'RPFTERM'
+LKPDSNL  DC    AL2(10)                 Real length of data set name
+LKPRTDSN DS    0CL44                   Linkage editor SYSPRINT
+         DC    X'5050'
+         DC    CL42'RPFLKPRT'
+OBJDSNL  DC    AL2(8)
+OBJDSN   DS    0CL44                   OBJECT output
+         DC    X'5050'
+         DC    CL42'RPFOBJ'
+*
+         COPY  CALLTS
+*
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F                     Save area
+R27ALCER DS    6F                      Save registers 2-7 ALLOCERR
+R34PARSE DS    2F                      Save register 3,4, PRSALLOC
+R12TS    DS    F                       Save register 12, CALLTS
+R14ALCER DS    F                       Save register 14, ALLOCERR
+R14PARSE DS    F                       Save register 14, PRSALLOC
+R14ROUT  DS    F                       Save register 14 some routines
+R14TPUT  DS    F                       Save register 14, RPFTPUT
+R14TS    DS    F                       Save register 14, CALLTS
+PARMFLD  DS    3F                      3 parameters for DSNPARS
+ADDRCOMM DS    F                       Contains address of RPFCOMM
+ERRPROG  DS    CL8                     Program name of abend
+ASSEMBLR DS    CL8                     Program name of assembler
+LNKLST   LINK  EPLOC=*,SF=L
+L#LNKLST EQU   *-LNKLST                Length
+*
+         AIF   (&SVS).SVS7
+ESTAEL   ESTAE MF=L
+         AGO   .NOSVS7
+.SVS7    ANOP
+ESTAEL   STAE MF=L
+.NOSVS7  ANOP
+*
+L#ESTAEL EQU   *-ESTAEL
+DBW      DS    D                       Workfield RCTOSBA routine
+SBAR0R1  DS    D                       Workfield RCTOSBA routine
+PARM     DS    D                       Parm for Assembler + Lked
+RPFDAPL  DS    5F                      Dair parameter list
+RPFATTR  DS    CL48                    Attribute list
+RPFD08   DS    CL84                    Allocation parm block
+RPFD18   DS    CL40                    Unallocation parm block
+RPFD34   DS    CL20                    Attribute parm block
+RPFD0C   DS    CL60                    Max 6 data sets to concatenate
+RPFD10   DS    CL16                    Deconcatenation
+ECB      DS    F                       An event control block
+HEREADDR DS    7F                      Save registers 8-13 for ESTAE
+*                                      + extra fullword for SVS
+SYSTEMCC DS    H
+CURSTD   DS    XL3                     Default cursor R3C1+ for screen
+CURDS0   DS    XL3                     r03,c19+
+*
+LKDNAME  DS    CL8                     Name of Linkage Editor
+*
+SW       DC    X'00'
+$NOOBJ   EQU   128                     No Object data set allocated
+$NOASM   EQU   64                      Assembler not executed
+$LKEXEC  EQU   32                      Linkage editor executed
+$ERROR   EQU   16                      Unrecoverable error occurred
+$ATTR    EQU   8                       Attribute list made
+         DS    0H
+LKEDPARM DS    CL32                    Parameter of Linkage Editor
+ASMDPRM  DS    AL2
+ASMPARM  DS    AL2
+ASMBEG   DS    CL44                    Default part of assembler parm
+ASMEND   DS    C
+ASMREST  DS    CL30
+*
+MSG1TXT  DS    0CL25                   Msg: Rc ASM=xx, LKED=yy
+         DS    CL4
+MSG1ASM  DS    CL8
+MSG1RC1  DS    CL2
+MSG1RLK  DS    CL4
+MSG1LKD  DS    CL5
+MSG1RC2  DS    CL2
+*
+ASMSRCH  DS    0F                      Align on fullword           @rp1
+         DC    AL2(1)                  One entry                   @rp1
+         DC    AL2(14)                 Length of data              @rp1
+ASMLINK  DC    CL8' '                  Assembler program name      @rp1
+         DC    XL6'00'                 TTRKZC                      @rp1
+*
+         DS    0F
+ASMDDNS  DS    0CL98
+         DS    AL2
+         DS    CL8                     SYSLIN entry
+         DS    XL8                     Empty entry (SYSLMOD member)
+         DS    XL8                     Empty entry (SYSLMOD)
+         DS    CL8                     SYSLIB
+         DS    CL8                     SYSIN
+         DS    CL8                     SYSPRINT
+         DS    CL8                     SYSPUNCH
+         DS    CL8                     SYSUT1
+TERM90   DS    CL8                     SYSUT2 or SYSTERM if IEV90 @rp2
+         DS    CL8                     SYSUT3
+         DS    CL8                     SYSGO
+         DS    CL8                     SYSTERM
+*
+         DS    0F
+LKEDDDNS DS    0CL98
+         DS    AL2
+         DS    CL8                     SYSLIN
+         DS    XL8                     Member name of Linkage Editor
+         DS    CL8                     SYSLMOD
+         DS    CL8                     SYSLIB
+         DS    XL8
+         DS    CL8                     SYSPRINT
+         DS    XL8
+         DS    CL8                     SYSUT1
+         DS    XL8
+         DS    XL8
+         DS    XL8
+         DS    XL8                     SYSTERM
+*
+LINE     DC    CL80' '
+DWB      DS    D
+RPFLIN   DS    CL(L#MDLLIN)            Copy of MDLLIN
+BUFFER   DS    0H
+BUFCMD   DS    CL24                    \
+BUFINP   DS    CL8                     |
+BUFINPO  DS    CL8                     | member of Object library
+BUFLIBI  DS    CL46                    |
+BUFLIBO  DS    CL46                    | Object library
+BUFLIB0  DS    CL46                    | Maclib 1
+BUFLIB1  DS    CL46                    | Maclib 2
+BUFLIB2  DS    CL46                    | Maclib 3
+BUFLIB3  DS    CL46                    | Maclib 4
+BUFLIB4  DS    CL46  Will be blanked   | Maclib 5
+BUFLIB5  DS    CL46                    | Load library
+BUFLIB6  DS    CL46                    | Maclib 6
+BUFIDDN  DS    CL8                     | DDNAME include library
+BUFIDSN  DS    CL46      In one MVCL   | Include library
+BUFOUTP  DS    CL1                     |
+BUFASME  DS    CL1                     |
+BUFASM   DS    CL30                    | Assembler PARM
+BUFLKED  DS    CL1                     |
+BUFLKPA  DS    CL30                    | Linkage editor PARM
+BUFLBRO  DS    CL1                     |
+BUFMEMB  DS    CL8                     |
+BUFPRT   DS    CL8                     |                        @961125
+BUFCLAS  DS    CL1                     |                        @961126
+BUFCST1  DS    CL69                    | Linkage
+BUFCST2  DS    CL69                    |        Editor
+BUFCST3  DS    CL69                    |              Control
+BUFCST4  DS    CL69                    |                    Statements
+BUFCST5  DS    CL69                    |
+BUFCST6  DS    CL69                    |
+         DS    CL5                     |
+BUFFEND  EQU   *                       /
+         DS    0F
+ALCL     DS    H                       Data set to allocate in PRSALLOC
+ALCDSN   DS    CL44
+WORKL    EQU   *-WORKAREA
+         TITLE 'RPFCOMM DSECT'
+COMMAREA RPFCOMM
+         TITLE 'Other DSECT''s'
+*
+         AIF   (&SVS).SCB
+         IHASDWA
+         AGO   .NOSCB
+.SCB     ANOP
+*        104 byte STAE work area
+*
+SCB      DSECT                         STAE workarea
+SCBPARM  DS    F                       Parameter from STAE macro
+SCBCMP   DS    F                       Completion code
+SCBPSW   DS    2F                      PSW at time of abend
+SCBPSWA  DS    2F                      P/P PSW beform abend
+SCBGR0   DS    F                       Register 0
+SCBGR1   DS    F                       Register 1
+SCBGR2   DS    F                       Register 2
+SCBGR3   DS    F                       Register 3
+SCBGR4   DS    F                       Register 4
+SCBGR5   DS    F                       Register 5
+SCBGR6   DS    F                       Register 6
+SCBGR7   DS    F                       Register 7
+SCBGR8   DS    F                       Register 8
+SCBGR9   DS    F                       Register 9
+SCBGR10  DS    F                       Register 10
+SCBGR11  DS    F                       Register 11
+SCBGR12  DS    F                       Register 12
+SCBGR13  DS    F                       Register 13
+SCBGR14  DS    F                       Register 14
+SCBGR15  DS    F                       Register 15
+.NOSCB   ANOP
+         CVT   DSECT=YES,LIST=NO
+         IKJCPPL
+         IKJDAPL
+         IKJDACB                       IKJDAIR attribute list
+         IKJDAP08                      IKJDAIR allocation parm block
+         IKJDAP0C                      IKJDAIR concatenation parm blk
+DA0CDDN  DS    CL8
+         IKJDAP10                      IKJDAIR deconcat parm block
+         IKJDAP18                      IKJDAIR unallocation parm block
+         IKJDAP34
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9                       Reserved for 3rd base if needed
+R10      EQU   10                      Second base register
+R11      EQU   11                      Address of RPFCOMM
+R12      EQU   12                      First base register
+R13      EQU   13                      Address of working storage
+R14      EQU   14
+R15      EQU   15
+         END

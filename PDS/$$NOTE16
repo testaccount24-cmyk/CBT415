@@ -1,0 +1,85 @@
+    RPF V1R9M7
+Subject:  RPF V1R9M7
+From:     <robprins2@kpnmail.nl>
+Date:     4/9/2024, 6:41 AM
+To:       "Sam Golob" <sbgolob@cbttape.org>
+
+Dear Sam,
+
+Finally, RPF V1R9M7 is finished.
+
+I have run a lot of tests and now this release is ready to distribute.
+
+The highlights are:
+
+RPFALLOC Field 'Other dataset' added in option 3.2.
+RPFARCH   Archiver: **END** + number of items added in last
+                  line of item-list and message 'Scroll had no effect'
+                  deleted.
+                  Items deleted without confirmation if option
+                  'Confirm item delete' = <blank> and this option set
+                  in entry screen.
+RPFBRO     Primary command ASCII added in HELP screen.
+                  Browse: *** Bottom of data *** line added.
+                  Fix possible ABEND0C4 during initial repeat FIND.
+RPFDATAL Option 'Confirm member delete' in screen in
+                  option 3.1 (Library management).
+RPFDEF     Option 'Confirm member delete' in session defaults screen
+                  and written on the RPF profile cluster.
+                  ABEND0C4 fixed if wrong NULLS or wrong REPLACE entered
+                  in option 0.1.
+                  Do not display 'Invalid option' if no data entered.
+RPFEDIT   *** Top of data *** line added and message
+                  'Scroll had no effect' deleted.
+RPFFIND   EDIT: F X'hh..' nnn checks the wrong column. This is fixed.
+RPFINIT   Option 'Confirm member delete' read from profile.
+RPFLIB     Librarian: **END** + number of modules added in last line of
+                  module list and message 'Scroll had no effect'
+                  deleted.
+RPFMAIN   Do not display 'Invalid option' if no data entered.
+                  Fix excessive 'Dataset/member saved' messages.
+RPFMVCPY Remove limitation of LRECL up to 4096 for sequential datasets
+                  and allow copy RECFM=U sequential datasets.  **END**
+                  and number of members added in last line of member
+                  selection list and message 'Scroll had no effect'
+                  deleted.
+RPFPDS     Invoke TSOEXEC XMIT or XMIT depending if TSOEXEC
+                  is installed or not.
+                  Members deleted without confirmation if option
+                  'Confirm member delete' = <blank>
+                  ABEND0C4 fixed in primary command L if the member
+                  selection list is sorted on SIZE.
+                  Member selection list: primary commands LEFT and RIGHT
+                  added to show all the information of the member
+                  selection list on narrow screens.
+                  **END** and number of members (and number of records)
+                  added in last line of selection list, and message
+                  'Scroll had no effect' deleted.
+                  Reset ISPF stats: Line command 'B' (Browse) added.
+RPFSAVE   Remove trailing blanks in short V(B) records.
+RPFTSO     ABEND30A fixed if underlying TSO command fails.
+RPFUTIL   Do not display 'Invalid option' if no data entered.
+RPFVTOC1 DS-list: primary commands LEFT and RIGHT added to show all
+                  information of the DS-list on narrow screens.
+                  Primary command HELP added in DS-LIST and HELP info
+                  screen added.
+                  **END** + number of datasets and number of tracks
+                  added in last line of DS-List. Message 'Scroll had no
+                  effect' deleted
+
+Would you like to place the attached file onto the CBT updates section?
+
+Thank you very much in advance,
+
+All the best of everything to you and your family.
+
+Met vriendelijke groet/With kind regards/Mit freundlichen Gruessen
+/Bien a vous/Saludos Cordiales
+
+Rob Prins
+Haremakers 54, 1531 LC Wormer
+Ploegdijk 2 H633, 7241 SC Lochem
+T 06-46312299
+E robprins2@kpnmail.nl
+www.prince-webdesign.nl
+

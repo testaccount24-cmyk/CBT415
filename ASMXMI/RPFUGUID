@@ -1,0 +1,4572 @@
+:h1.RPF User's Guide version 2. Release 0.0.
+.ju off
+.ti ¬ 05
+.tb set 10 20 30 40 50 60 70
+:fig place=inline frame=box concat=no.
+:xmp.
+
+
+              RRRRRRRRRRRRRRRR
+              RRRR        RRRR                       FFFFFFFFFFFFFFFFF
+             RRRR         RRR                        FFFF           F
+            RRRR        RRRR                        FFFF
+           RRRRRRRRRRRRRRR                         FFFF      F
+          RRRR   RRRR        PPPPPPPPPPPPPPPPPPPPPFFFFFFFFFFF
+         RRRR    RRRR        PPPP         PPPP   FFFF      F
+        RRRR     RRRR       PPPP          PPP   FFFF
+       RRRR      RRRR      PPPP         PPPP   FFFF
+     RRRRRR     RRRRRRRRRRPPPPPPPPPPPPPPPP    FFFF
+                         PPPP                FFFF
+                        PPPP               FFFFFF
+                       PPPP
+                      PPPP
+                     PPPP
+                   PPPPPP
+
+
+
+
+
+
+
+
+    Version 2.    Release 0.0
+:exmp.
+:efig.
+:h2.Introduction.
+:p.
+RPF is a command processor under TSO, developed by Rob Prins
+member of the systems programming department of the ING
+Bank in Amsterdam. For program development the ING Bank used ROSCOE,
+but when the systems programming group started using TSO for
+maintenance, the need arose for a full-screen editor under TSO. at
+this point Rob decided to develop their own editor, not only
+because they needed an editor, but also for learning the internals of
+TSO. This resulted in the 'RPF' package. It is not only an editor,
+but it also includes functions like Library Functions (SCRATCH, RENAME
+EDIT, PRINT, BROWSE, and assigning ALIAS), foreground assembly and
+link edit, VTOC, and catalog listing, data set allocation and
+deletion and even a LIBRARIAN
+and ARCHIVER interface to read and write modules on a disk
+master file and a TSO command processor to execute TSO commands in
+RPF.  The main advantage of an inhouse developed package is, that the
+source is available, so that it can be tailored to the demands of the
+user. As the package became available to the users (the systems
+programmers) they very soon stopped using ROSCOE for program
+development, which indicated that it is a very useful product.  RPF
+runs in a MVS38J, MVS/380, MVS/XA, MVS/ESA, OS/390 and z/OS operating
+system. Afterwards the RPF product became available for the members
+of the Hercules group.
+:p.RPF supports a lot of screen sizes. The minimum size = a 3270
+model 2 (24 lines x 80 columns). The maximum size is 99 lines.
+The maximum screen width = 200 bytes.
+All sizes in between are supported (exampe: 99x132).
+The maximum buffer size (screen width x screen size) = 16384
+(16K).
+:p.
+:p.
+:p.
+(C)-1979-2025 Skybird Systems, email: prin0096@gmail.com
+Internet: www.prince-webdesign.nl/rpf
+:h3.RPF data set naming conventions.
+:p.
+All data set names entered in the RPF panels uses the standard
+TSO data set naming conventions.
+:p.
+If a data set name is entered enclosed in single quotes ('), the
+data set name is treated as fully qualified.
+:p.
+Data set names entered without quotes will be prefixed with the TSO
+prefix. The TSO prefix is defaulted to the UserID, but can be altered
+with the TSO command:
+:p.
+:xmp.
+PROFILE PREFIX('new prefix')
+:exmp.
+:p.
+E.g., It the name A.CNTL is entered and the TSO prefix is A0611, the
+data set name would be A0611.A.CNTL.
+:p.
+A data set name entered as 'SYS1.PARMLIB' remains unchanged.
+:p.
+:h2.How to start RPF.
+:p.
+RPF is a TSO command processor for full screen data editing, and
+utility functions.
+RPF can be activated by entering the command 'RPF' on
+your TSO terminal.
+:h3.How to work with RPF.
+:p.
+If you start RPF a profile member will be read from a partitioned
+data set with a record length of 80 with defaults for your userid.
+The member name = @RPFPROF.
+If the member is not present, the member will be created by RPF.
+.br
+The DD-statement ISPPROF in the TSO LOGON procedure should point
+to the profile data set. If omitted, RPF choose her own defaults.
+.br
+You also can start RPF with an option. E.g., RPF 3.4 will go directly
+to DSLIST.
+:p.
+After RPF has started without operands, the following main menu
+appears on the screen.
+:p.
+:xmp.
+------------------------------- RPF Main menu -------------(C)-1979-2025 Skybird
+Option  ===>
+                                                             Userid  - A0611
+   0  DEFAULTS     Alter / Display session defaults          Time    - 16:01:25
+   1  BROWSE       View or browse data sets or members       System  - TK5R
+   2  EDIT         Update or create data sets or members     TSO-proc- ISPLOGON
+   3  UTILITY      Enter UTILITY                             Prefix  - A0611
+   4  ASSEMBLER    Foreground ASSEMBLER and LINK edit        Terminal- CUU0C0
+   5  USER         Execute RPF user routine                  Release - V2R0M0
+   6  TSO          Execute TSO commands                      OS rel. - 038
+   7  TUTORIAL     Display HELP information
+   8  TEST         Enter TEST mode (Authorized)               January   2025
+   9  OPERATOR     Enter OPERATOR mode                     Su Mo Tu We Th Fr Sa
+   X  EXIT         Terminate RPF                                     1  2  3  4
+                                                            5  6  7  8  9 10 11
+                                                           12 13 14 15 16 17 18
+____________________________________________________       19 20 21 22 23 24 25
+|                                                  |       26 27 28 29 30 31
+| RPF V2R0M0, Build: 2024-12-08T15:41+01           |
+| Use of RPF is free, modifications in consultation|
+| with me. Information: prin0096@gmail.com         |
+| www.prince-webdesign.nl/rpf                      |
+|__________________________________________________|
+
+Hit PF03/15 to terminate RPF                       (C)-1979-2025 Skybird Systems
+:exmp.
+:p.
+Figure 1. RPF main menu
+:h2 id=def. Change session defaults.
+:p.
+The session defaults are placed in member @RPFPROF in the
+partitioned data set specified in the ISPPROF DD-statement
+of the TSO logon procedure or allocated with the TSO ALLOCATE command.
+:p.
+You can change the following defaults in the profile member:
+:p.
+:ol.
+:li.The maximum number of lines for the editor. The minimum is 500
+lines, and the maximum is 999,999 lines.  Default is 7,000 lines.
+:li.SYSOUT class. The default is SYSOUT class C. SYSOUT class will
+be used in the print commands of RPF.
+:li.Logging YES or NO. This default is for future use.
+:li.Nulls YES or NO. This default will set the RPF
+editor in NULLS mode or NONULLS mode.
+:li.AUTOSAVE Y or N. With this default the workspace will
+be saved automatically if AUTOSAVE=Y. With AUTOSAVE=N, EDIT will
+issue the message 'Enter SAVE, CANCEL or END'.
+:li.
+Replace = YES or NO. The parameter defaults the Replace like members
+in Move/Copy.
+:li.
+Default prefix. This is a field of maximum 17 bytes containing the
+default prefix in the data set list menu (opt. 3.4).
+:li.
+COLS = Y or N. Set or reset the scale line in EDIT.
+:li.
+Confirm = / or <blank>. Set 'Confirm member delete' for Library
+Functions and Archiver interface.
+:li.
+CAPS = AUT, ON or OFF. Set CAPS mode for EDIT. If AUT = specified,
+EDIT will automatically detect if lower case characters and sets
+CAPS to OFF. If no lower case characters are detected, CAPS will
+be set to OFF.
+.br
+If CAPS = ON, EDIT will set CAPS to ON, no matter whether lower
+case characters are detected or not.
+.br
+IF CAPS = OFF, EDIT will set CAPS to OFF, even if only upper-case
+characters are detected.
+:li.
+The default program name of the assembler. This name is used in the
+assembler menu (option 4).
+:li.Default allocations.
+You can specify the default member name,
+data set name for EDIT, Browse, utility and assembler functions.
+For LIBRARIAN, the default module name and LIBRARIAN master
+file can be specified. For the ARCHIVER,
+the default Archive VSAM cluster can be specified.
+:li.Printer. Specify the remote printer. If nothing
+specified, the output will be routed to a LOCAL printer.
+:li.PFK settings:   You can set the commands in the PFKs (1 to 24)
+The use of all PFKs is supported in EDIT, BROWSE
+Library Functions, LIBRARIAN maintenance and HELP
+functions.
+The use of the END PFK (PF03 or PF15) is
+supported in all selection menus.
+Meaning of the 'CON' attribute:
+CON=Y: The command in the PFK will set in the
+command area on the screen, but will not be
+executed.
+To execute the command you should press ENTER
+CON=N: The command will be executed
+immediately.
+CON=X: The PFK has gotten the 'UNDEFINED' status.
+:li.Assembler maclibs. Specify up to 6 maclibs.
+:li.Assembler parm. This is the default assembler parm in the
+foreground assembly.
+:li.Linkage editor parm. This is the default linkage editor parm in the
+foreground assembly.
+:li.Linkage editor control statements. 6 optional statements used by
+the linkage editor.
+:eol.
+:p.
+All the changed defaults will be written on the profile data set
+if present.
+.br
+If you select -0- on the main menu the default menu appears on the
+screen:
+:p.
+With selection -0- you can list the status of your RPF session.
+In this screen the date and time, session duration, EDIT options,
+default options, current allocation, workspace size and lines of
+the workspace in use are to be displayed.
+Press ENTER to leave this status screen.
+:p.
+With -1- you can change the workspace size, the logging,
+the SYSOUT class, Autosave, Submit, Replace, default prefix,
+COLS attribute, and CONFIRM attribute.
+To change these defaults, press ENTER after the changes made.
+To cancel the changes, use PF03/PF15.
+:p.
+With -2- you can change the
+default allocations, LIBRARIAN and ARCHIVER allocations.
+To change these defaults press ENTER after the changes made.
+To cancel the changes, use PF03/PF15.
+:p.
+With -3- you can change your PFK settings.
+:p.
+With -4- you can update the assembler program name, assembler
+maclibs, assembler- and linkage editor parameters,
+parameters, and the default linkage editor control statements.
+.br
+To leave the default menus press PF03/PF15.
+:p.
+It is also possible to select the default functions directly from
+the RPF main menu, without interference of the defaults menu (e.g.
+select '0.1' for increase workspace). If the function is terminated
+in this case, RPF always returns to the main menu.
+:h2 id=brw. Browse data sets, members or load modules.
+:p.
+If you select -1- on the RPF main menu, a data entry screen will
+be displayed for selection of the to be browsed data set.
+You can select the data sets in two ways:
+:ul c.
+:li.Select the member name/data set name (and volume serial) in
+the allocation menu.
+:li.Select 1 of the data sets in the data set selection menu, by
+placing the cursor in the line of the requested data set and hitting
+ENTER.
+.br
+If '=n(.n)' is entered in the member name or data set name,
+RPF returns to the main menu and executes option n(.n).
+:eul.
+After selection of this data set, the BROWSE function will be invoked,
+and the data set (and volume serial) will be placed in selection list.
+This selection list will be written in the RPF profile data set
+upon exit of RPF.
+:p.
+If the member is not specified, a member selection list has
+been displayed.
+If you select an 'S' in front of the chosen member, The browse
+processor
+will be invoked. See also :hdref refid=pdsm for information about
+The 'S' line command.
+:p.
+The following RPF browse primary commands are available:
+:dl tsize=18
+:dthd.Primary command
+:ddhd.Function
+:dt.ASCII
+:dd.Toggle ASCII mode on or off. If in ASCII mode, the data will
+be translated to EBCDIC.
+:dt.BOTTOM
+:dd.Start display with the bottom of the data set.
+An alias of 'BOTTOM' is 'B'.
+:dt.C nnn
+:dd.Shift the display to column nnn.
+nnn should not exceed the record length of the data set.
+:dt.DOWN
+:dd.Scroll forward from the cursor position if the cursor is in
+the data. If the cursor is not in the data, 1 screen will be
+scrolled forward.
+If you use DOWN with a PFK and an 'M' in the
+command field the 'BOTTOM' command will be executed.
+:dt.END
+:dd.Terminate BROWSE. RPF will go back to the utility allocation menu.
+:dt.F 'string'
+:dd.search specified character string. All lines, which
+contains 'string' will be highlighted, and the
+message 'Chars string found' will appear.
+If only an 'F' is entered, a repeat find of the
+previous specified string will be done.
+The find always start from the current position in
+the data set. If no match can be found, the message
+'Bottom of data reached' will appear.
+The quotes (') around 'string' can be omitted, if
+no blanks are inside the string.
+.br
+An alias of F is 'FIND'.
+:dt.F x'hhhh..'
+:dd.Search for HEX strings in the data set.
+:dt.HEX
+:dd.Toggle HEX mode of the browser on or off.
+In HEX mode, each record contains of 4 lines: 1) The
+original line. 2) A hex line containing the high-order HEX nibbles.
+3). A hex line containing the low-order nibbles. 4) A separator line.
+.br
+The HEX command will be ignored if a data set or member with
+RECFM=U is browsed.
+:dt.LEFT
+:dd.Scroll 1 screen to the left (80 bytes for screens
+model 2,3,4 and up to 200 bytes for a huge terminal).
+:dt.PFK
+:dd.Display PFK screen and alter PFKs if you
+wish. These PFK changes are only effective
+during this RPF session.
+To change the PFK-s permanent use the defaults menu.
+:dt.PRINT x
+:dd.Print the data set into SYSOUT class x.
+If you omit the SYSOUT class, the default SYSOUT class will be taken.
+:dt.RETURN
+:dd.Terminate BROWSE. RPF will go back immediately to the main menu.
+:dt.=n or =n.n
+:dd.Terminate BROWSE. RPF will go back to MAIN, and option 'n' or
+'n.n' will be executed
+:dt.RIGHT
+:dd.Scroll 1 screen to the right (80 bytes for screens
+model 2,3,4 and up to 200 bytes for a huge terminal).
+:dt.SUB(MIT)
+:dd.Submit the data set with the TSO SUBMIT command.
+:dt.TOP
+:dd.Start display with the top of the data set.
+An alias of 'TOP' is 'T'.
+:dt.TSO
+:dd.Execute TSO commands. Module RPFTSO will be invoked.
+:dt.UP
+:dd.Scroll backward to the cursor position if the cursor is
+in the data. If the cursor is not in the data, 1 screen will
+be scrolled backward.
+If you use UP with a PFK and an 'M' in the
+command field the 'BOTTOM' command will be executed.
+:edl.
+:lblbox.Notes.
+:ul.
+:li.All these commands can be set under a PFK.
+So, you can use the PFKs instead of entering the commands
+on the screen.
+:li.If you print the data set with the 'PRINT' command
+RPF will make header lines if the data set does not
+contain ASA or machine control characters.
+If the to be browsed input data set is a card image data set
+(LRECL=80 and no control characters), a scale line will be
+printed after the header lines and after each record, the
+start column of the first non-blank character of that line
+will be printed.
+If the control characters are present RPF does not
+make headers.
+:li.If a RECFM=U data set is browsed/viewed, the output will be
+formatted on the screen. The output records fit within the screen
+width and more records will be written if the RECFM=U data set has
+larger records. The output contains a HEX offset, the data line,
+a record with the high-order HEX nibble, a record with the low-order
+nibbles and a HEX ruler.
+:eul.
+:elblbox.
+:h2 id=edit. EDIT a data set or PDS member.
+:p.
+If you select option '2' on the RPF main menu, the EDIT function
+will be performed.
+.br
+The EDIT data entry screen contains of two parts.
+:ol.
+:li.The data entry screen.
+In this part of the screen you can perform the allocation
+of the data set to be edited.
+If the allocations are alright, the data set or PDS member will
+be edited and the EDIT screen appears, otherwise the user will be
+prompted for retry.
+:li.The data set selection list.
+:eol.
+You can select the data sets in two ways:
+:ul c.
+:li.Select the member name/data set name (and volume serial) in
+the allocation menu.
+:li.Select 1 of the data sets in the data set selection menu, by
+placing the cursor in the line of the requested data set and hitting
+ENTER.
+:eul.
+:p.
+If '=n(.n)' is entered in the member name or data set name,
+RPF returns to the main menu and executes option n(.n).
+.br
+After selection of this data set, the Edit function will be invoked.
+and the data set (and volume serial) will be placed in selection list.
+This selection list will be written in the RPF data set, if
+you leave RPF.
+If you want to cancel the function, press PF03 or PF15.
+:p.
+If the member is not specified, a member selection list has
+been displayed.
+If you select an 'S' in front of the chosen member, The editor
+will be invoked. See also :hdref refid=pdsm for information about
+The 'S' line command.
+:p.
+If the member does not exist, an input screen will be made with 1
+screen blank lines and in the header line will appear 'Input  mmmmmmm'.
+'mmmmmmmmm' is the data set name and (member) if present.
+If the data set or member exists: 'Input' is replaced by 'Edit'.
+If the data set is edited you can change your data in fullscreen mode.
+The screen is divided into 5 parts:
+:ul c.
+:li.The header, containing the data set name, the member name
+and the ISPF version/modification level (vv.mm) if available.
+:li.The message area for the informational and error messages
+:li.The BNDS field with the editor boundaries.
+:li.The scroll amount.
+:li.The data area, containing the data to be edited.
+:eul.
+The editor can be entered in standard or in COBOL mode and
+will be automatically detected.
+In the standard mode, the amount of columns to display is the width
+of the screen minus 8 or the complete record if the record fits
+in the screen. Example: if the LRECL of the data set is 133 and
+the width of the screen is 80, 72 columns will be displayed.
+If the record of the data does not fit on the screen, the RIGHT
+and LEFT can be used to scroll.
+.br
+In the COBOL mode columns 7-78 will be displayed if an 80-column
+screen is used. The line numbers (if present)
+or created by the 'RENUM' command will affect cols 1-6.
+COBOL mode works only if the record length of the data
+set = 80.
+.sp
+If the the last 8 columns or columns 1-6 (COBOL only) of the
+data set are numbered,
+manual modification of these columns is ignored.
+.br
+In both cases, you can work with line-numbers in the commands,
+because the numbers on the screen are NOT in the data set
+.br
+If a data set does not contain line numbers,
+the editor will be entered in 'NONUM' mode.
+.br
+If you do program development press CAPS LOCK, use the UC line
+command, or enter the CAPS ON command.
+.br
+If the data contains unprintable characters,
+the lines with unprintable characters cannot be edited.
+.br
+If you have entered a wrong command or invalid command the command
+will be repeated, so you can make easy your corrections.
+:p.There are two types of commands:
+.br
+The primary commands entered in the 'command' field
+(see :hdref refid=eprim ).
+.br
+Line commands entered in the linenumber fields
+(see :hdref refid=eline ).
+:h3 id=eprim. EDIT primary commands.
+:p.
+The EDIT primary commands are described in alphabetic order below:
+:dl tsize=18
+:dthd.Primary command
+:ddhd.Function
+:dt.=n or =n.n
+:dd.Terminate the editor, return to MAIN and option 'n' or
+'n.n' will be executed. The data will be saved if changes are made.
+:dt.APPEND
+:dd.Append another data set or member in the EDIT workspace.
+After entering 'APPEND', the data set menu will appear.
+Alter the allocations and press ENTER to append.
+With the END command the data will be saved in the data set/member
+which is initially edited.
+:dt.AUTOSAVE ON/OFF
+:dd.Turn on or off AUTOSAVE. With AUTOSAVE ON, the data will be
+automatically saved.
+.br
+With AUTOSAVE OFF and the data is changed, RPF EDIT will issue
+the message 'Enter SAVE, CANCEL or END'.
+.br
+If SAVE entered, the data will be saved and the editor will terminate.
+.br
+If CANCEL entered, RPF stays in the editor.
+.br
+If END entered, EDIT will execute the primary command CANCEL.
+.br
+The initial value (ON or OFF) will be controlled by the
+AUTOSAVE parameter in the defaults (option 0.1).
+:dt.BNDS n,m
+:dd.With this command you can set the range of columns
+which will be used in 'C', 'F', 'FILL', 'UC',
+'LC' and 'SORT' primary commands.
+.br
+If you enter this command without operands:
+.br
+1. If COBOL is set to ON, the boundaries are column 7
+to 72.
+.br
+2. If the edited data set/member contains fixed records the
+boundary range covers the visible part of the data in the screen.
+If the data is numbered and the visible part is the end of
+the record or the complete record, the end boundary is record
+length - 8.
+3. If the edited data set/member contains variable records, the
+boundary range covers the visible part of the data in the screen.
+If the data is numbererd the start boundary is set to 9, if the
+visible part of the data is positioned from the beginning.
+.br
+If the second operand is 999, the end boundary is the
+record length of the data set or member.
+.br
+Another possibility to set the boundary range is
+changing the 'BNDS' value in the right corner
+of the EDIT screen.
+:dt.BOTTOM
+:dd.Display last screen of the data set.
+This command may be abbreviated as 'B'
+:dt.C /aaa/bbb/(A)
+:dd.With this command, you can change character strings
+throughout your entire workspace.
+If you do not specify the 'A' after the last
+delimiter, only the first line on the screen will
+be changed, otherwise the first line till the end
+of the workspace will be changed.
+If you enter 'C /string//(A)' the character string
+will be deleted.
+With 'C //string/(A)' the character string will be
+inserted before the first character of the line,
+or all lines if 'A' is specified.
+The delimiter can be any character.
+Only character strings will be changed, which are
+in the column-range, that is set by the 'BNDS' primary command.
+:dt.C /aa/bb/n,m
+:dd.With this form of the 'C' command you can make
+changes in a specified line range (n,m). both
+numbers should be specified. If you want to
+change 1 line use first the 'L nnnn' command
+and after this command 'C /aaa/bbb/'.
+If n = '*' change will be done beginning with the
+current line.
+In this case the second number should be after the current line.
+:dt.C /x'hh..'/bbb/n,m  or C /x'hh..'/bbb/(A)
+:dd.Change HEX character(s) 'hh..' into 'bbb'
+The 'x' can be specified in lower- or upper-case.
+:dt.C /aaa/x'hh..'/n,m  or C /aaa/x'hh..'/(A)
+:dd.Change string 'aaa' into HEX string 'hh..'
+The 'x' can be specified in lower- or upper-case.
+:dt.C /x'hh..'/x'jj..'/n,m  or C /x'hh..'/x'jj..'/(A)
+:dd.Change HEX string 'hh..'into HEX string 'jj..'
+The 'x' can be specified in lower- or upper-case.
+.br.
+Example 1: C /X'404040'/X'2020'/A change 3 blanks into
+2x X'20'. C /   /X'2020'/A is equivalent.
+:dt.C /P'.'/bb/n,m or C /P'.'/x'hh..'/(n,m) or (A)
+:dd.Change invalid characters into string 'bb' or
+into HEX string x'hh..'.
+.br.
+Example 2: C /P'.'/ /A  Change all invalid characters
+into a blank. C /P'.'/X'40'/a is equivalent.
+.br
+If a line is successfully changed, the line number will be reversed.
+:dt.CANCEL
+:dd.Terminate the RPF EDIT function, without saving
+the workspace. This command may be abbreviated as 'CAN'.
+.br
+If changes are made, a warning message 'Discard changes?' will be
+given. A reply YES or NO is needed to discard the changes or not.
+:dt.CAPS ON/OFF
+:dd.Set the editor dynamically in CAPS mode with CAPS ON or in
+ASIS mode with CAPS OFF.
+:dt.CANCEL
+:dd.Terminate the RPF EDIT function, without saving
+the workspace. This command may be abbreviated as 'CAN'
+:dt.CO n,m,o
+:dd.Copy line range n till m after line o.
+If you specify n=* the current line till line m will be copied.
+If 'o' is omitted line n will be copied after line m.
+If the CO command cannot be executed, a suitable
+error message will be displayed.
+After successful copy, the workspace will be renumbered.
+:dt.COBOL ON/OFF
+:dd.Set the editor in COBOL mode if ON is specified or in
+standard mode of OFF is specified.
+In COBOL mode, the 'LEFT' and 'RIGHT' primary commands
+are disabled.
+If the editor was in 'NUM' mode before the 'COBOL ON'
+command was given, RPFEDIT will do a numeric test
+for columns 01-06 of the workspace. If not numeric
+RPFEDIT will come into the 'NONUM' mode after the 'COBOL ON'
+command.
+If the editor was in 'NUM' mode before the 'COBOL OFF'
+command was given, RPFEDIT will do a numeric test
+for last 8 columns of the workspace. If not numeric
+RPFEDIT will come into the 'NONUM' mode after the 'COBOL OFF'
+command.
+:dt.COLS
+:dd.Toggle display of the scale line in EDIT.
+:dt.COPY
+:dd.Copy a data set or member after the line marked with an 'A'
+(after), 'TT' (before first line) or 'BB' (after last line).
+The data entry panel will appear to select the data set or
+member. After selecting, the data set or member will be copied.
+:dt.CREATE
+:dd.Save a range of lines with line commands 'CC -- CC', CB or CT
+into a data set or member. An alias of CREATE is CRE.
+:p.
+:hp2.Example:ehp2.
+.br
+To save the complete data in another data set or member:
+.br
+Enter CREATE in the command field and CB in the first line of the
+data.
+:p.
+A SAVE menu will be displayed.
+.br
+The SAVE menu have 5 options.
+:ul c.
+:li.Option 1, save into a PDS(E) or sequential data set (default).
+:li.Option 2, save into a PDS(E) or sequential data set with
+the REPLACE option.
+:li.Option 3, save into a LIBRARIAN masterfile.
+:li.Option 4, save into an ARCHIVE VSAM cluster.
+:eul.
+:p.
+If you save in a PDS(E) member that already exists
+and that member is not the same as the original
+member edited, the user will be prompted to replace
+the member or enter a 'newname', except if option
+'2' has been selected (SAVE RE-USE).
+If you select option '3' on the SAVE menu,
+the rest of the parameters are ignored and RPF
+will select the LIBRARIAN menu (see :hdref refid=libu )
+.br
+Option '4' will perform saving upon an Archiver VSAM cluster.
+See :hdref refid=archu
+If the workspace is saved into a PDS member, RPF
+will update the statistics in the directory or
+add statistics if the statistics are not already present.
+.br
+The directory entry after save is built as follows:
+:ul c.
+:li.member name (8 bytes EBCDIC)
+:li.TTR (3 bytes hex)
+:li.C (1 byte binary X'0F' or X'14')
+:li.version (1 byte binary unsigned)
+:li.modification (1 byte binary unsigned)
+:li.flags (1 byte hex)
+:li.seconds of time updated (1 byte packed without sign)
+:li.date added (4 bytes packed '0CyydddF')
+:li.date updated (4 bytes packed '0CyydddF')
+:li.time updated (2 bytes packed without sign 'hhmm')
+:li.number of records (2 bytes binary unsigned)
+:li.initial number of records (2 bytes binary unsigned)
+:li.modified number records (2 bytes binary unsigned)
+:li.ID (7 bytes EBCDIC)
+:li.blanks (3 bytes EBCDIC)
+:eul.
+.br
+If bit 2 of flags is set to 1, an extended area is present starting
+from the second byte in "blanks" and contains:
+:ul c.
+:li.number of records (4 bytes binary unsigned)
+:li.initial number of records (4 bytes binary unsigned)
+:li.modified number records (4 bytes binary unsigned)
+:eul.
+:dt.CUT
+:dd.Copy lines between CC (See :hdref refid=eline ), first line to CT
+or CB to last line to the clipboard file.
+.br
+Instead of the copy line commands, also the move line commands
+can be used (MM, first line to MT and MB to last line).
+.br
+The clipboard file is allocated with ddname RPFCTPST.
+The contents of the clipboard file can be pasted in any member or
+data set in the current RPF session. The clipboard will be deleted
+upon end of the RPF session.
+:dt.DEL n,m
+:dd.Delete lines n till m or delete line n if m is omitted.
+:dt.DEL *,n
+:dd.Delete n lines starting with the first line on the screen.
+If n is omitted only the first line on the screen
+has been deleted.
+:dt.$DOC
+:dd.Add a date and timestamp after '//* last update: ' in
+the record. '//* LAST UPDATE: ' is also valid. Code this
+string exactly with a blank after '*' and a blank after ':'.
+:dt.DOWN
+:dd.With this command you can scroll forward.
+.br
+The scroll value is specified in the screen,
+which can be: 'PAGE' for a complete screen,
+'CSR' for scroll on cursor position (if scroll
+forward, line on which the cursor is located,
+becomes the first line. If scroll backward, line
+on which the cursor is located, becomes the last
+line. If the cursor is in the command field,
+the number of lines on the screen minus 1 will be scrolled).
+'HALF' for a half screen or 'LINE' for a
+single line. If you want to change this value
+you can alter this first character in this field
+('C', 'H', 'P' or 'L').
+.br
+If 'M' is entered in the command field and the
+'DOWN' command is given by means of a PFK the
+'BOTTOM' command will be executed.
+.br
+If you enter 'nnnnn' (max 5 positions 0-9) and the DOWN command has
+been given by means of a PFK,
+'nnnnn' lines will be scrolled forward.
+:dt.END
+:dd.Terminate the RPF EDIT function and save the data if changes are
+made. No menu will be presented. The data will be saved in the
+same data set/member, if AUTOSAVE=Y.
+RPF will return to the EDIT allocation menu.
+If AUTOSAVE=N, the message 'Enter SAVE, CANCEL or END' will be
+issued and EDIT will not be terminated.
+:dt.F 'String' (nnn) or F "String" (nnn)
+:dd.Find a specified character string in the workspace.
+If the character string is found, the cursor will be set on
+the found string.
+If the find is unsuccessful a suitable error
+message will be displayed and the command will be repeated.
+The delimiter (the quote or double quote) is optional, unless 'string'
+contains blanks.
+.br
+If nnn is specified, FIND will be executed only in column nnn.
+E.g. F RPF 10 = Find string RPF in column 10.
+.br
+The character string (and start column) will be remembered by RPF,
+so you can enter only an 'F' to execute the last FIND command.
+Only character strings will be found, which are
+in the column-range, that is set by the 'BNDS' primary command.
+.br
+An alias of F is FIND.
+.br
+If the repeat F is exhausted with message Bottom of data reached,
+and immediately a subsequent repeat F is given, search will
+start from the beginning.
+:dt.F p'.' or F P'.' (nnn)
+:dd.This is a special form of the F primary command. With this F
+primary command you can search for invalid characters in the
+workspace. After a successful F P'.', the user will be
+notified which invalid character is found
+(message: Chars X'..' found).
+:dt.F x'hhhh..' (nnn)
+:dd.Search for HEX strings in the workspace.
+:dt.FILL /string/
+:dd.With this command you set a character string in
+each line starting with the current line till
+the end of the workspace.
+The character string will start in the column,
+which is set by the 'BNDS' primary command.
+The data, which was there will be overwritten.
+:dt.FILL /str/n,m
+:dd.This FILL command will only affect the line range n,m
+:dt.HAR xxxxxx,n,m
+:dd.Print the lines n till m on printer with
+name xxxxxx. If n and m are omitted the lines
+on the current screen will be printed.
+The printer will be acquired during this command
+after successful hardcopy the message
+'HARDCOPY MADE' will appear.
+:dt.HAR xxxxxx,*,n
+:dd.Print n lines on printer xxxxxxx starting with
+the first line on the screen.
+If n=99999999 the current line till the end of
+the workspace will be printed
+:dt.HAR xxx,n,m, TITLE/NOTITLE, EJECT/NOEJECT, INDENT/NOINDENT,
+C=nn,P=nn, F='text', SCS,DSC
+:dd.With 'EJECT' you can skip after every 'nn' lines
+(nn is value in the 'P' operand). 'EJECT' is default.
+.br
+With 'TITLE', you can print headers on each page
+default is 'NOTITLE'.
+.br
+With 'c=nn' you can print 'nn' copies (default 1).
+.br
+With the keyword 'INDENT' the print will be
+shifted 8 positions to the right.
+Default is 'NOINDENT'.
+.br
+The printer name and line numbers are positional
+parameters, the rest are keywords.
+.br
+With F='text' a footnote will be printed at
+the bottom of each page. 'text' has a maximum
+length of 80 and should be specified between
+apostrophes.
+.br
+'SCS' (lutype1) or 'DSC' (lutype 0 or 3) should
+be specified if the printer is cross domain used.
+:dt.HELP
+:dd.Invoke the RPF HELP facility.
+.br
+See :hdref refid=help for more information concerning HELP
+:dt.I m,n
+:dd.Insert n blank lines after line m or insert n lines
+after the first line on the screen (specify m=*).
+If n is omitted 1 line will be inserted after line
+m or current line if m=*.
+After a successful insertion the workspace will be
+renumbered and the cursor will be set in the first inserted line.
+.br
+The line numbers of the inserted lines will be highlighted, until
+data is entered in an inserted line. You do not need to delete
+unused lines. The highlighted lines (the inserted lines without data)
+will not be saved (with the END or SAVE primary command) or submitted
+(with the SUBMIT primary command). This is the way like
+VM XEDIT it does.
+:dt.L +nnn/L -nnn
+:dd.Skip :hp2.nnn:ehp2. lines forward or backward.
+If you are at the top of the screen
+and you enter 'L -nnn' or you are at the bottom
+of the workspace and you enter 'L +nnn',
+the command will be ignored.
+:dt.JCL
+:dd.Do a syntax check of the JCL if you are editing a member
+containing JCL. The usually used JCL parameters will be checked.
+:dt.L nnn
+:dd.Locate the screen at line nnn.
+After execution of this command line nnn will be
+the first line on the screen (the current line).
+If line nnn does not exist in the data set, an error
+message will be produced and the command ignored.
+:dt.LC x y
+:dd.Translate the lines x-y to lower case (between line-x and
+line-y) within the EDIT boundaries. If x (and y) are
+omitted, translation will be done from the current line until
+the end of the workspace.
+After execution an implicit 'CAPS OFF' command will be executed.
+:dt.LEFT
+:dd.Scroll to the left depending on the SCROLL value (PAGE,
+HALF or CSR)
+:dt.MO n,m,o
+:dd.Copy linerange n till m after line o.
+.br
+If you specify n=* the current line till line m will be copied.
+The original lines n till m will be deleted after
+successful copy.
+If 'o' is omitted line n will be moved after line m.
+.br
+If the MO command cannot be executed, a suitable
+error message will be displayed.
+After successful move the workspace will be renumbered.
+:dt.NUMBER OFF or NUM OFF
+:dd.Set the editor in 'NONUM' mode without changing line numbers.
+:dt.NUMBER ON or NUM ON
+:dd.Set the editor in Numbered mode. The data will be renumbered.
+See also the RENUMBER primary command.
+:dt.NULLS ON/OFF
+:dd.Replace the trailing blanks on the screen by terminal
+erase characters if ON is used. This provides an easy way
+to use the insert mode of the terminal.
+With NULLS OFF the erase characters will be replaced by blanks.
+:dt.OUT
+:dd.Invoke the RPF output processor. See :hdref refid=outp for more
+information about the OUT primary command.
+:dt.OVLY m,n(,o)
+:dd.Copy line m over line n or over line range n - o.
+If you specify m=*, the current line will be used.
+In the lines n through the blanks will be replaced with the
+characters of the same column of line m (the overlay function).
+Only the character within the EDIT boundaries will be overlaid.
+:dt.PASTE
+:dd.Copy the clipboard file after line marked with 'A' (see
+:hdref refid=eline for the line commands), or before the first line
+(line command TT) or after the last line (line command BB).
+You can PASTE the clipboard file multiple times until the next
+CUT primary command.
+:dt.PFK
+:dd.Display and/or alter PFK settings.
+Press ENTER to perform the changes.
+If finished press PF03/PF15.
+:lblbox.Note.
+The changed PFKs are only effective
+during this RPF session. To change the
+default PFKs use the session default menu (see :hdref refid=def ).
+:elblbox.
+:dt.PRINT n,m PRINT *,n or PRINT
+:dd.Print lines n thru m to a temporary data set, print n lines
+from current line (first line on screen) or print current
+screen if PRINT is issued without operands.
+If n=99999999 in PRINT *,n, the current line until the end of
+data will be printed.
+.br
+After successful PRINT, Browse will be invoked. In BROWSE,
+you can print the data to a SYSOUT class.
+:dt.PROF
+:dd.Toggle display of the PROFILE-line in the editor.
+.br
+The PROFILE-line contains the status about Numbered YES or NO,
+Cobol ON or OFF, Caps ON or OFF, NULLS ON or OFF, and AUTOSAVE
+ON or OFF.
+:dt.R m,n
+:dd.Repeat line m, n times.
+.br
+If m=* the first line on the screen will be repeated n times.
+If n is omitted 1 line will be repeated behind line
+m or current line if m=*.
+After a successful repetition the workspace will be
+renumbered and the cursor will be set in the first
+repeated line.
+:lblbox.Note.
+If n=99999999 the first line on the
+screen till the end of the workspace will be deleted.
+If the entire workspace is deleted, RPF
+will terminate EDIT.
+:elblbox.
+:dt.RENUMBER
+:dd.Renumber the last 8 columns in the workspace starting
+with 100 and a increment of 100 if in standard
+mode, columns 01-06 in the workspace starting
+with 100 and a increment of 100 if in COBOL mode or
+columns 1-8 in the workspace starting with 100 and
+a increment of 100 if the data set has variable records.
+Aliases of RENUMBER are 'REN', 'NUM' or 'RENUM'.
+.br
+If the data was not line numbered before the RENUM command,
+a warning with text 'Data will be lost' will be issued.
+After hitting ENTER the message 'Renumber 'Yes' or 'No''
+will be issued. Reply with indication action to renumber or not.
+:dt.REPLACE
+:dd.Save a range of lines with line commands 'CC -- CC', CB or CT
+into a data set or member with the REPLACE option. An alias of
+REPLACE is REP.
+See primary command CREATE for an explanation of the SAVE
+menu, that is displayed. The only exception is the default option.
+That will be option 2 (RE-USE).
+:dt.RESET
+:dd.Clear the pending line-commands and set the reversed
+line numbers to non-reversed. RESET may be abbreviated as
+RES.
+:dt.RETRIEVE
+:dd.Read the previous entered EDIT primary commands.
+The last 100 commands are saved in the profile data set with
+member name @RPFRTRV.
+Any subsequent RETRIEVE will give you the previous
+command. The last entered primary command is the first command to
+be retrieved.
+:dt.RETURN
+:dd.Terminate the editor and always return to the
+main menu. The data will be saved if changes are made.
+:dt.RIGHT
+:dd.Scroll to the right depending on the SCROLL value (PAGE,
+HALF or CSR).
+.br
+It has no sense to change the last 8 columns on the screen,
+if you are in 'NUM' mode.
+:dt.SAVE
+:dd.SAVE the workspace in a data set.
+The EDIT workspace will be saved in the same data set/member.
+No prompting will be done. To save the data with prompting, use
+the CREATE or REPLACE primary command.
+After SAVE, RPF stays in the editor.
+:dt.SORT
+:dd.Sort the workspace.
+.br
+The entire workspace is sorted; the sort fields
+is set by the 'BNDS' primary command. After successful
+sort, the workspace is renumbered.
+:dt.SUB
+:dd.Submit the workspace to the job execution queue.
+With this command you are able to execute jobs in the background.
+After successful submit the user will be notified
+with the message 'JOB jjjjjjjj SUBMITTED'.
+The TSO command processor SUBMIT will be used to submit the job.
+:dt.TOP
+:dd.Display first screen of the data set.
+An alias of the TOP command is 'T'.
+:dt.TSO
+:dd.Invoke the RPF-TSO command processor.
+With this command it is possible to enter TSO commands
+during edit. If you leave the TSO command processor
+with 'END' RPF will go back to the EDIT mode.
+See :hdref refid=tso
+:dt.UC x y
+:dd.Translate the lines x-y to upper case (between line-x and
+line-y) within the EDIT boundaries. If x (and y) are
+omitted, translation will be done from the current line until
+the end of the workspace.
+:dt.UNNUM
+:dd.Remove the line numbers in the last 8 columns if in standard
+mode, columns 1-6 if in COBOL mode or columns 1-8 if the data set
+contains variable records.
+.br
+The line numbers on the screen will NOT be removed.
+.br
+This command may be abbreviated as 'UNN'
+This primary command is only allowed if the editor
+is in 'NUM' mode, otherwise the primary command will
+be ignored with the message:
+Workspace not numbered
+After execution of 'UNNUM' the editor will be set in 'NONUM' mode.
+:dt.UP
+:dd.Scroll backward depending on the scroll value on
+the screen. The scroll value is described in the DOWN command.
+.br
+If 'M' is entered in the command field and the
+'UP' command is given by means of a PFK the
+'TOP' command will be executed.
+.br
+If you enter 'nnnnn' (max 5 positions 0-9) and the SCB command has
+been given by means of a PFK,
+'nnnnn' lines will be scrolled backward.
+:edl.
+:h3 id=eline. EDIT line commands.
+:p.
+The line commands should be entered in the line number fields
+of the lines, which should be manipulated with these commands.
+The line commands can be entered in any place in the line number
+field
+The following line commands are available:
+:dl tsize=18
+:dthd.Line command
+:ddhd.Function
+:dt.Inn
+:dd.Insert nn lines after the specified line.
+nn blank lines will be inserted and the cursor
+will be placed in the first inserted line.
+If only an 'I' is entered, 1 line will be
+inserted.
+.br
+The line numbers of the inserted lines will be highlighted
+(see also the I primary command)
+:dt.R nn
+:dd.Repeat the specified line nn times and the cursor
+will be placed in the first repetition of that
+line. If only an 'R' is entered the line will
+be repeated once.
+:dt.RR...RR
+:dd.Repeat a block of lines between the lines marked
+with 'RR'. if only once 'RR' is entered the
+line command will wait for the second 'RR'
+and a pending message will be issued.
+:dt.C.....A
+:dd.Copy line marked with 'C' after the line marked
+with 'A'. If the line command is not complete
+(only the 'A' or the 'C' is entered), the command
+will be set pending.
+:dt.C.....O
+:dd.Copy line marked with 'C' over the line marked
+with 'O'. If the line command is not complete
+(only the 'O' or the 'C' is entered), the command
+will be set pending.
+:dt.C....OO...OO
+:dd.Copy line marked with 'C' over the line range marked
+with 'OO -- OO'. If the line command is not complete
+(only the 'OO' or the 'C' is entered), the command
+will be set pending.
+:dt.CC...CC...A
+:dd.Copy the block of lines between 'CC' after line
+'A'. The command will be set pending if it is not
+complete.
+:dt.CC...CC...BB
+:dd.Copy the block of lines between 'CC' after the
+last line. 'BB' can be placed in any line.
+:dt.CC...CC...TT
+:dd.Copy the block of lines between 'CC' before the
+first line. 'TT' can be placed in any line.
+:dt.CT...A
+:dd.Copy the first line until the line marked with 'CT'
+after line 'A'.
+:dt.CB...A
+:dd.copy the line marked with 'CB' until the bottom line
+after line 'A'.
+:dt.M.....A
+:dd.Move line marked with 'C' after the line marked
+with 'A'. If the line command is not complete
+(only the 'A' or the 'N' is entered), the command
+will be set pending.
+:dt.MM...MM...A
+:dd.Move the block of lines between 'MM' after line
+'A'. The command will be set pending if it is not complete.
+:dt.MM...MM...BB
+:dd.Move the block of lines between 'MM' after the
+last line. 'BB' can be placed in any line.
+:dt.MM...MM...TT
+:dd.Move the block of lines between 'MM' before the
+first line. 'TT' can be placed in any line.
+:dt.MT...A
+:dd.Move the first line until the line marked with 'MT'
+after line 'A'.
+:dt.MB...A
+:dd.Move the line marked with 'MB' until the bottom line after line 'A'.
+:dt.D
+:dd.Delete specified line.
+:dt.DD...DD
+:dd.Delete the specified block of lines.
+:dt.DT
+:dd.Delete the block of lines starting with the top
+line until the line marked with 'DT'.
+:dt.DB
+:dd.Delete the block of lines starting with the line
+marked with 'DB' until the bottom line.
+:dt.LC
+:dd.Translate specified line to lower-case.
+:dt.LCC..LCC
+:dd.Translate the specified block of lines to lower-case
+:dt.LCB
+:dd.Translate the block of lines to lower-case starting with the line
+marked with 'LCB' until the bottom line.
+:dt.LCT
+:dd.Translate the block of lines to lower-case starting with the top
+line until the line marked with 'LCT'.
+:dt.UC
+:dd.Translate specified line to upper-case.
+:dt.UCC..UCC
+:dd.Translate the specified block of lines to upper-case.
+:dt.UCB
+:dd.Translate the block of lines to upper-case starting with the line
+marked with 'UCB' until the bottom line.
+:dt.UCT
+:dd.Translate the block of lines to upper-case starting with the top
+line until the line marked with 'UCT'.
+:dt.RESET
+:dd.Reset the pending line commands.
+'RESET' is also valid as primary command.
+:edl.
+:lblbox.Note.
+The block of lines specified, need not to be in the same screen.
+Example: You can enter 'CC' in the first screen, scroll 2
+screens, enter the second 'CC', scroll again some
+screens and enter the 'A'.
+:elblbox.
+:p.
+:lblbox.Notes of EDIT.
+:ol.
+:li.EDIT supports data sets or members with a record length
+from 40 bytes up to 255 bytes. Data sets and members with
+a record format of fixed or variable are supported.
+:li.You can set all your RPF EDIT commands in PFK's, so you can
+press the corresponding PFK to enter a command.
+:li.Line commands can work together with the primary commands:
+BOTTOM, CREATE, CUT, DOWN, F, L, LEFT, M, PASTE, REPLACE, RESET,
+RIGHT, TOP and UP.
+.br
+Example: If a line command is pending only the PFK's can be
+used for scrolling.
+:li.Upon SAVE of the data, the empty inserted lines (marked
+a red line number) are not saved.
+:li.If the workspace size is too small for the data set, the EDIT
+will be terminated and the message 'Workspace too small'
+will appear in the data set selection screen or PDS screen.
+To increase the workspace size use the defaults menu
+:li.If the data set contains unprintable characters the user
+will be notified with the message 'Invalid chars xlated'.
+The translated characters will be changed into periods
+('.'). The translated line will be highlighted and protected.
+:eol.
+:elblbox.
+:h3 id=libu. LIBRARIAN update.
+:p.
+The LIBRARIAN update menu is selected with option 3 on the SAVE
+menu.
+The screen is divided into 8 parts.
+:ol c.
+:li.The header line
+:li.The menu (select 1,2 or 3) to ADD,REPLACE or DLM LIBRARIAN
+modules.
+:li.The DESC field (only valid for ADD and REPLACE)
+:li.The PGMR field (only valid for ADD and REPLACE)
+:li.The LANG field (only valid for ADD and REPLACE)
+:li.The LIBRARIAN module.
+:li.The LIBRARIAN master file.
+:li.The volume on which the master file resides.
+:eol.
+If you have altered the fields and selected a function on the
+menu the data set will be allocated and the LIBRARIAN will be
+invoked.
+:p.
+After completion of the LIBRARIAN, RPF will BROWSE the
+LIBRARIAN output.
+It is recommended to check this output, but the 'OSJOB' error
+can be ignored.
+:p.
+If an error is detected by RPF a suitable message will be
+displayed and retry is possible.
+Press PF03/PF15 to escape from this screen.
+:h3 id=archu. ARCHIVER update.
+:p.
+If you select option 4 on the RPF save menu, the ARCHIVER
+menu will be selected by RPF.
+The screen is divided into 6 parts.
+:ol c.
+:li.The header line
+:li.The item field.
+:li.The item group field or blank.
+:li.The item subgroup field or blank.
+:li.The item type field or blank.
+:li.The Archiver VSAM cluster data set name.
+:eol.
+:p.
+After having altered the fields and chosen the right option,
+the data set will be allocated and Rick Fochtman's ARCHIVER
+will be invoked.
+:p.
+After completion of the Archiver, RPF will browse the
+Archiver output. It is recommended to check this output.
+:p.
+If an error is detected by RPF a suitable message will be
+displayed and retry is possible.
+Press PF03/PF15 to escape from this screen.
+:h2.RPF utility functions.
+:p.
+If you enter '3' on the RPF main menu, the utility menu appears.
+you can select the following functions:
+:ul c.
+:li.Option 0. Reset or delete RPF or ISPF statistics.
+:li.Option 1. Library Functions.
+:li.Option 2. Create or delete data sets (data set functions).
+:li.Option 3. Move/Copy sequential data sets or members of partitioned
+data sets.
+:li.Option 4. VTOC and data set list functions.
+:li.Option 5. Perform LIBRARIAN maintenance.
+:li.Option 6. Invoke the RPF output processor.
+:li.Option 7. Invoke Greg Price' IMON processor.
+:li.Option 8. Search data sets for strings of data.
+:li.Option 9. Edit, browse, print, rename and delete ARCHIVER
+items. ARCHIVER is a component that archives members and/or
+data sets into 1 VSAM archive cluster.
+:eul.
+:p.
+To leave the utility menu enter 'X' to go back to the main menu.
+:p.
+It is also possible to select the utility functions directly from
+the RPF main menu, without interference of the utility menu (e.g.
+select '3.1' for PDS-maintenance). If the utility is terminated in
+this case, RPF always returns to the main menu.
+:xmp.
+------------------------------ RPF Utility menu -------------------------------
+Option  ===>
+                                                             User ID - A0611
+  0  RESET        Reset/Delete ISPF/RPF statistics
+  1  LIBRARY      Library (PDS) Functions
+  2  DATA SET     Create or Delete data sets
+  3  MOVE/COPY    Move or copy data sets or members
+  4  DS LIST      Perform VTOC and catalog functions
+  5  LIBRARIAN    Perform LIBRARIAN maintenance
+  6  OUTPUT       Invoke the output processor
+  7  IMON         Interactive monitor of Greg Price
+  8  SEARCH       Search data sets for strings of data
+  9  ARCHIVER     Process archived members
+  X  EXIT         Return to MAIN menu
+:exmp.
+:p.
+Figure 2. RPF Utility menu
+:h3 id=reset. Reset/Delete ISPF or RPF statistics
+If you select '0' on the RPF utility menu or '3.0' on the
+RPF main menu, a data entry screen for the desired
+partitioned data set will be displayed.
+You can specify a New User ID, a new ISPF/RPF version number and
+a new ISPF/RPF modification level and you can change the 'Data set
+name' and 'Volume serial' fields or select a data set from 1 of the
+8 selection fields.
+If '=n(.n)' is entered in the data set name,
+RPF returns to the main menu and executes option n(.n).
+.br
+Press ENTER to perform the allocation.  If the allocation is
+not successful an error message will be displayed in the message area
+and retry can be done. Press PF03 or PF15 to cancel Reset statistics.
+:p.
+After successful allocation, the RPF Reset member list will be
+displayed.
+.br
+To reset a member to the New User ID, new Version and new
+modification level, enter an 'S' before the member name.
+You will be responded with the message :hp2.'RESET':ehp2. in the
+comments area.
+:p.
+To delete the ISPF or SPF statistics of a member, enter a
+'D' before the member name.
+You will be responded with the message
+:hp2.'ISPF/RPF stats deleted':ehp2. in the comments area.
+.br
+If you want to see the member before reset or delete ISPF stats,
+select line command 'B' to browse the member.
+.br
+See :hdref refid=pdsm for more information concerning the member list.
+:h3 id=pdsm. Library Functions.
+:p.
+If you select '1' on the RPF utility menu or '3.1' on the
+RPF main menu,
+a data entry screen for the desired partitioned data set
+will be displayed. You can change the 'Data set name' and
+'Volume serial' fields and set the atribute 'Confirm member delete'
+to / or to <blank>. If '=n(.n)' is entered in the data set name,
+RPF returns to the main menu and executes option n(.n).
+.br
+Press ENTER to perform the allocation. If the allocation is
+not successful, an error message will be displayed in the message area
+and retry can be done. Press PF03 or PF15 to cancel Library functions.
+:p.
+After successful allocation, the RPF Library Functions
+selection panel will be displayed.
+This panel is divided into 5 parts:
+:ul c.
+:li.The header line.
+:li.The message area.
+:li.The command area for the commands.
+:li.The PDS description field.
+:li.The member area.
+:eul.
+Each line of the member area contains the following fields:
+:ul.
+:li.The line command. This is an input field.
+Valid line-commands are:
+:ol c.
+:li.'A': Assign an alias to the member
+:li.'B': Browse the member.
+:li.'D': Delete the member.
+:li.'E': Edit the member.
+:li.'F': Archive the member in Rick Fochtman's ARCHIVER
+:li.'P': Print the member to the default SYSOUT class.
+:li.'R': Rename the member.
+:li.'S': Select the member for Browse if invoked from Browse in
+the main menu or from Library Functions in the utility menu. Select
+for EDIT if invoked from EDIT in the main menu.
+:li.'V': View the member.
+:eol.
+:li.The member name. This field is protected.
+:li.The newname field for the 'A' and 'R' operation. this is
+an input field.
+:li.The comments field. This is a protected field.
+This field contains the RPF statistics in the directory
+or a response to the operations entered in field 1.
+The RPF statistics are set by the 'SAVE' command in the
+RPF editor and are in the same format as the IBM's ISPF
+statistics. The statistics will only be set if they are
+not already present. If present then the modification
+level will be increased by 1.
+If the statistics are not present or a new member has been
+created, RPF will add statistics in the same format as
+IBM's ISPF statistics, and the version number is set to 01.
+.br
+The fields in the statistics are:
+:ul c.
+:li.TTR of member
+:li.Owner of the member. 8 bytes containing the userid.
+:li.Version:modification level. 5 bytes containing "vv:mm"
+:li.Date created. 10 bytes containing "yyyy/mm/dd".
+:li.Date last updated. 10 bytes containing "yyyy/mm/dd"
+:li.Time last updated. 8 bytes containing "hh&colon.mm&colon.ss"
+:li.Current number of records. 5 bytes.
+:li.Initial number of records. 5 bytes (If the screen width is 92
+bytes or more).
+:li.Modified number of records. 5 bytes (If the screen width is 92
+bytes or more).
+:eul.
+.br
+If the library is a loadlib or program object library the
+following will be displayed.
+:ul c.
+:li.The TTR of the member.
+:li.C byte containing the length of the directory entry and some
+flags (Scatter load and Alias indicator).
+:li.The size of the load module in HEX.
+:li.The true name if the load module is an alias.
+:li.The authorization code (AC) of the load module.
+:li.The addressing mode of the load module (24, 31, 64 or ANY)
+:li.The residency mode of the load module (24 or ANY)
+:li.Additional attributes (re-entrant, re-usable, refreshable
+scatter load, overlay, not-executable and/or Entry Point Zero).
+:eul.
+:li.The alias/update indicator. This is a protected field.
+The field contains 'ALIAS' if the member is an alias
+or blanks.
+If the member is update today, the comment field
+(field 4) is higlighted.
+:eul.
+The RPF Library Functions primary commands are:
+:dl tsize=18
+:dthd.Primary command
+:ddhd.Function
+:dt.=n or =n.n
+:dd.Terminate PDS, return to main and execute option 'n' or
+'n.n'.
+:dt.BOTTOM
+:dd.Display the last screen of the directory listing.
+This command may be abbreviated as 'B'
+:dt.DOWN
+:dd.Display the next screen.
+.br
+If 'M' is entered in the command field and the 'DOWN' command is given
+by means of a PFK, the 'BOTTOM' command will be executed.
+:dt.END or RETURN
+:dd.Terminate Library Functions. RPF will return to
+the utility allocation menu with 'END' or main menu with
+the 'RETURN' command
+:dt.HELP
+:dd.Display a screen with HELP information about the primary
+commands and line-commands.
+:dt.L 'string'
+:dd.Locate 'string' in the member name, TTR, date/time updated,
+or records. The to be compared field depends on the sort order
+of the workspace (See SORT primary command).
+Specify 1-16 characters in the 'string' operand).
+.br
+After successful execution of the command, RPFPDS
+will display the screen, where the first line con-
+tains the member, where the first occurrence
+of 'string' was found (highlighted).
+If no string is specified the command will be
+ignored and the message: 'No string specified' is issued.
+:dt.LEFT
+:dd.Show left part of the member entries on a narrow screen.
+:dt.PFK
+:dd.Display PFK screen. you can alter here your PFK
+settings. To alter the PFKs press ENTER.
+To leave PFK press PF03/PF15.
+:lblbox.Note
+The changed PFK settings are only valid
+during this RPF session. To change the PFK's in the RPF Profile
+data set, select the defaults menu. (0 on the main menu)
+:elblbox.
+:dt.PRINT
+:dd.Copy the member list in a temporary data set and invoke
+the browse processor. In browse you have the PRINT command to
+print this listing in a SYSOUT class.
+:dt.RESET
+:dd.Reset all outstanding messages.
+The member list will be rebuild, all queued members
+be reset and the members deleted by an 'D'
+line-command will be removed.
+:dt.RIGHT
+:dd.Show right part of the member entries on a narrow screen.
+:dt.S member
+:dd.EDIT the specified member. If the member does not exist
+EDIT will be invoked with an input screen to create the member.
+.br
+If the PDS selection list has been entered from BROWSE or Library
+Functions (option 1 in the main menu or option 1 in the utility menu),
+the specified member will be browsed. If in this case the member is
+not found an error message will be displayed and the command
+will be repeated.
+:dt.SORT
+:dd.Sort the members on member name (default).
+:dt.SORT CHA
+:dd.Sort the members on date/time last updated instead of
+alphabetic order, so it is easy to find the
+last changes. This sort is in DESCENDING order.
+:dt.SORT SIZE
+:dd.Sort the members on number of records instead of
+alphabetic order, so it is easy to find the
+last smallest or biggest members. This sort is in DESCENDING order.
+:dt.SORT TTR
+:dd.Sort the members on TTR - order instead of
+alphabetic order, so it is easy to find the
+members and its associated aliases. This sort is in DESCENDING order.
+:dt.TOP
+:dd.Start display with the top of the directory listing. An alias
+is 'T'.
+:dt.TSO
+:dd.Invoke the RPF TSO command processor to give TSO commands.
+:dt.UP
+:dd.Display the previous screen.
+.br
+If 'M' is entered in the command field and the 'UP' command is given
+by means of a PFK, the 'TOP' command will be executed.
+:dt.XMIT nje name/userid
+:dd.Transmit the queued members (with the X line command) to
+NJE node/userid or Nickname. The TSO command TRANSMIT or XMIT will
+be used to transmit the members. In the receiving node you can
+issue the TSO command RECEIVE to receive the members.
+.br
+XMIT works only on systems with TSO/E or NJE38 installed.
+:edl.
+:lblbox.Note
+All these commands can be set under PFK's. Press the
+corresponding PFK to execute the command.
+If you enter a command and one or more line commands in the
+member area, the line commands will be executed first.
+:elblbox.
+:p.
+Explanation of the line commands in the member area.
+The following commands can be issued:
+:dl.
+:dt.A
+:dd.Assign an alias.  Type in the 'newname'
+field too. The response can be:
+:ul c.
+:li.Alias assigned, after successful assignment,
+:li.Access denied, Update on PDS rejected by security system.
+:li.Newname omitted or invalid, The newname is invalid or not
+specified.
+:li.STOW Error, if the operation is
+unsuccessful.  Possible errors are:  member deleted
+by previous 'D', 'newname' already exists,
+insufficient space in directory, insufficient
+virtual storage or trying to assign an alias in a PDS/E.
+:eul.
+:dt.B
+:dd.Display the member, BROWSE will be invoked.
+See :hdref refid=brw for more information concerning browse
+The following responses can appear:
+:ul c.
+:li.Browsed, successful display.
+:li.Member not found, the member was deleted by a
+previous 'D' operation.
+:li.Browse not available, The specified data set has a
+record length > 255.
+:eul.
+:dt.D
+:dd.Delete the specified member.
+RPF will ask for confirmation if the attribute 'Confirm member delete'
+is set to '/', with the confirmation panel.
+If you press ENTER, delete will be performed.
+If the PF03 or PF15 key is used, the member won't be deleted.
+.br
+If the attribute 'Confirm member delete' is set to <blank>, the
+member will be deleted unconditionally.
+.br
+The possible responses are:
+:ul c.
+:li.Deleted, a successful delete
+:li.Access denied, Update on PDS rejected by security system.
+:li.Error in DELETE, The delete is unsuccessful.
+(delete is confirmed)
+:li.Not deleted, the confirmation panel is ended
+with PF03 or PF15.
+:eul.
+:dt.E
+:dd.EDIT the member with the RPF editor.
+This member will be edited with the default
+options. See :hdref refid=edit to get an explanation
+of the EDIT functions. After termination of the
+editor with the 'SAVE' or 'END' primary command in EDIT,
+RPF will return to the selection list.
+If the member is saved in the same member and
+data set the userdata field will be updated upon
+return to the PDS member selection list and the comments field will
+be highlighted.
+.br
+After EDIT the following responses can be found
+in the comment field.
+:ul c.
+:li.Edited, Successful edit.
+:li.I/O error. Unrecoverable error detected.
+:li.Updated/Replaced, Member updated due to EDIT
+(can be another member)
+:li.Created. Member added due to EDIT (can be another member)
+:li.Member not found. Member deleted by previous 'D' operation.
+:li.EDIT not available. PDS has a record length of >= 255
+and/or the RECFM is :hp2.not:ehp2. F(B) or V(B).
+:li.Data set/Member in use, The data set and member name
+cannot be edited, because another TSO-user is busy with
+EDIT of the same data set and member with RPF or with
+the IBM product ISPF.
+:li.Workspace too small, The EDIT is terminated due to this reason.
+Increase the workspace size in the defaults menu.
+:li.No temporary data set, Library Functions are unable
+to save the workspace, because the allocation of the
+save data set is failed.
+This error is already detected upon start of RPF
+with the message: 'Init error RC= 0024'
+:eul.
+:lblbox.Note
+It is possible, that both messages 'Edited' and
+'Created' or 'Updated/Replaced' are present in this
+PDS screen. This will be archieved by saving the
+edited member in another member in the same PDS.
+Example: member 'A' is selected with an 'E' before
+the member. In EDIT the member is saved into 'B',
+that was not present in this PDS. After completion,
+the message after member 'A' was 'Edited' and
+member 'B' is now present in the directory, with
+the message 'Created'.
+:elblbox.
+:dt.F
+:dd.Archive the member in the VSAM Archive cluster.
+Possible responses are:
+:ul c.
+:li.Archived, member successfully saved onto the Archive.
+:li.Not Archived, Archive menu exited with PF03/PF15.
+:li.ARCHIVER not installed.
+:dt.R
+:dd.Rename the specified member. Type in the 'newname'
+field too. The response can be:
+:ul c.
+:li.Renamed, after successful rename,
+:li.Access denied, Update on PDS rejected by security system.
+:li.Newname omitted or invalid,
+The newname is invalid or not specified or
+:li.Error in RENAME, if the rename is unsuccessful.
+possible errors are:  member deleted by previous
+'D', 'newname' already exists, insufficient space in
+directory, or insufficient virtual storage.
+:eul.
+:dt.P
+:dd.Print the specified member in the default SYSOUT class.
+The responses can be:
+:ul c.
+:li.Printed, successful print of the member.
+:li.Member not found, the member is deleted by a previous 'D' operation.
+:li.Alloc error SYSOUT, severe error. contact RPF support.
+:eul.
+:dt.S
+:dd.Select the specified member. The 'S' line-command is only
+valid, if the member selection list has been invoked by
+BROWSE (option 1) EDIT (option 2), Reset (option 3.0) or Library.
+(option 3.1) from the main menu.
+:dt.V
+:dd.Display the member with the editor in VIEW mode.
+See :hdref refid=edit for more information concerning view.
+The following responses can appear:
+:ul c.
+:li.Viewed, successful display.
+:li.Member not found, the member was deleted by a
+previous 'D' operation.
+:li.Edit/View not available, The specified data set has a
+record length > 255 or RECFM = not F(B) or V(B).
+:eul.
+:dt.X
+:dd.Queue the member to the XMIT queue. You can queue more than 1
+member.
+.br
+You will be notified with the response 'Queued for transmission'
+:edl.
+:p.
+If the line command is not 'A', 'D', 'E', 'F', 'P',
+'R', 'S', 'V', 'X' or blank the message:
+'Select A,B,D,E,F,P,R,S,V or X' will be set in the
+comments field for that member.
+:lblbox.Note
+If you terminate Library Functions you can EDIT
+your member list with the editor in 'NONUM' mode
+you can do it as follows:
+:ol c.
+:li.Terminate Library Functions with 'END'.
+:li.Terminate utility menu with 'X' (PF03/PF15).
+:li.Select -2- on main menu and change options,
+but always CLEAR the dsname field.
+:li.Press ENTER to EDIT the member list.
+:eol.
+:elblbox.
+:h3 id=allo.Data set functions
+:p.
+If you select '2' on the RPF utility menu or '3.2' on the RPF
+main menu, you get a data entry screen.
+.br
+You can change the following fields on the screen:
+:ol.
+:li.The option: Specify 'A' for creation, 'D' for deletion or
+or PF03/PF15 to return.
+:li.The Prefix: The first qualifier of the TSO library.
+:li.The Library: The second qualifier of the TSO library.
+:li.The Type: The third qualifier of the TSO library.
+:li.Other data set: A fully qualified data set name. If this data set
+name is specified, PREFIX, LIBRARY and TYPE are ignored.
+:li.The unit name: The default is SYSDA.
+:li.The record format: specify F, FB, FBM, FBA, FBS, V, VB, VBM, VBA,
+VBS or U.
+:li.Volume serial: The volume on which the data set must reside.
+If the volume is omitted, a storage volume will be used.
+:li.The LRECL: Specify a value between 18 and 32760. The value '0' is
+only allowed if RECFM=U. If LRECL is omitted or '0' and RECFM is not
+U, LRECL will be defaulted to 80.
+:li.Space unit: Specify here 'CYL', 'TRK' or 'BLK'
+:li.The BLKSIZE: Specify a value between 18 and 32767.
+BLKSIZE should be a multiple of LRECL if RECFM=F(B/A/M/S).
+If RECFM=V(B/A/M), the BLKSIZE should be at least LRECL+4.
+If BLKSIZE is omitted or '0', BLKSIZE has been defaulted to LRECL
+for fixed records, to LRECL+4 for variable records or to 6144 for
+RECFM=U.
+:li.Primary: The primary space of the data set in cylinders,
+tracks or blocks.
+:li.Secondary: The secondary space of the data set or zero if
+you don't want a secondary space.
+:li.The number of directory blocks.
+If you specify zero a sequential data set will
+be created, otherwise a partitioned data set will be created.
+:eol.
+For option D (DELETE) only items 1-4 are used.
+.sp
+If you press ENTER the data set will be created and the allocation
+panel will be redisplayed with the message:
+'Data set allocated' or 'Data set deleted' in the message area.
+.br
+If an error occurs during allocation retry will be performed and
+a suitable error message will be displayed.
+.br
+With option D, RPF will ask for confirmation of delete the data set.
+With PF12/PF24 the data set will be deleted. With PF03/PF15
+the deletion will be rejected.
+:p.
+The 'SPACE UNIT' and 'PRIMARY' fields are required. If 'Other
+data set' is not specified, PREFIX and LIBRARY also are required.
+The 'PREFIX', 'LIBRARY' and 'TYPE' fields may contain more than
+1 data set level.
+:h3.Move/Copy sequential data sets or members in partitioned data sets
+:p.If you select '3' on the utility menu or '3.3' on the main menu, a
+data entry screeen will be presented. In this screen
+you can specify the FROM data set and the TO data set.
+Both data sets should be sequential or
+partitioned an should have the same RECFM en LRECL. If the data set
+has a RECFM=U (usually for a LOAD library), the
+BLKSIZE of the TO data set should be equal or larger than the
+BLKSIZE of the FROM data set.
+.br
+In the menu, you can specify the option (M for Move or C for Copy),
+the data set names of both data sets and the volumes if the
+data sets are not cataloged.
+.br
+The last parameter is Replace like members YES/NO. You can alter
+this parameter to force replacement of the
+members yes or no. The default can be specified in the defaults menu of
+option 0.1. This parameter is ignored if the data sets are sequential.
+:p.
+Sequential data sets will be immediately copied and a message with
+the number of records copied will be displayed and the allocation
+menu is re-displayed.
+:p.
+If '(*)' is specified immediately after the data set name of the
+FROM data set, all members of this data set will be copied/moved to
+the TO data set, depending on the REPLACE parameter. The user will be
+notified how many members are copied or moved and the data entry
+screen will be re-displayed.
+:p.If no '(*)' is specified, a member selection list is
+displayed. Each line of the list contains the following.
+:ul.
+:li.The line command. This is an input field. The only line command
+= 'S'
+:li.The member name. This field is protected.
+:li.The newname field to rename the member after Move or Copy.
+:li.The comments field. This is a protected field. This field contains
+the RPF statistics in the directory or a response
+of the S command entered in field 1. See :hdref refid=pdsm
+for a description of the RPF or ISPF
+statistics.
+:eul.
+The Move/Copy commands are&colon.
+:dl tsize=18
+:dthd.Primary command
+:ddhd.Function
+:dt.=n or =n.n
+:dd.Terminate Move/Copy, return to main and execute option 'n' or
+'n.n'.
+:dt.BOTTOM
+:dd.Display the last screen of the directory listing.
+This command may be abbreviated as 'B'
+:dt.DOWN
+:dd.Display the next screen.
+.br
+If 'M' is entered in the command field and the 'DOWN' command is given
+by means of a PFK, the 'BOTTOM' command will be executed.
+:dt.END or RETURN
+:dd.Terminate Move/Copy. RPF will return to
+the allocation menu with 'END' or main menu with
+the 'RETURN' command
+:dt.L 'string'
+:dd.Locate 'string' in the member name.
+.br
+After successful execution of the command, Move/Copy
+will display the screen, where the first line con-
+tains the member, where the first occurrence
+of 'string' was found (highlighted).
+If no string is specified, the command will be ignored
+and the message 'No string specified' is issued.
+:dt.PFK
+:dd.Display PFK screen. you can alter here your PFK
+settings. To alter the PFKs press ENTER.
+To leave PFK press PF03/PF15.
+:lblbox.Note
+The changed PFK settings are only valid
+during this RPF session. To change the PFKs in the RPF profile
+data set, select the defaults menu. (0 on the main menu)
+:elblbox.
+:dt.RESET
+:dd.Reset all outstanding messages.
+The member list will be rebuild, all queued members
+members be reset and the members deleted by an 'D'
+line-command will be removed.
+:dt.SORT
+:dd.Sort the members on member name (default).
+:dt.SORT CHA
+:dd.Sort the members on date/time last updated instead of
+alphabetic order, so it is easy to move/copy the members with the
+last changes. This sort is in DESCENDING order.
+:dt.SORT SIZE
+:dd.Sort the members on number of records instead of
+alphabetic order, so it is easy to find the
+last smallest or biggest members. This sort is in DESCENDING order.
+:dt.SORT TTR
+:dd.Sort the members on TTR - order instead of
+alphabetic order, so it is easy to find the
+members and its associated aliases. This sort is in DESCENDING order
+:dt.TOP
+:dd.Start display with the top of the directory listing.
+.br
+An alias is 'T'.
+:dt.UP
+:dd.Display the previous screen.
+.br
+If 'M' is entered in the command field and the 'UP' command is given
+by means of a PFK, the 'TOP' command will be executed.
+:edl.
+:lblbox.Note
+All these commands can be set under PFKs. Press the corresponding
+PFK to execute the command.
+:elblbox.
+:p.With the line command 'S', you can get the following responses.
+:ul c.
+:li.:hp2.Copied :ehp2.
+The member has been successfully copied.
+:li.:hp2.Moved :ehp2.
+The member has been successfully copied and has been deleted from
+the FROM data set.
+:li.:hp2.Not deleted, no update access :ehp2.
+The delete of the member during MOVE processing is blocked by a
+security system like RACF.
+:li.:hp2.Replaced :ehp2.
+The member has been successfully copied or moved and member in
+TO data set has been replaced.
+:li.:hp2.Member not Replaced :ehp2.
+A member with the same name has been found in the
+TO data set and the parameter Replace
+like members was set to NO.
+:li.:hp2.'S' is the only valid line command :ehp2.
+Another line command than S was entered.
+:li.:hp2.Error in IEBCOPY, see output :ehp2.
+The MOVE/COPY operation failed. The SYSPRINT
+output of IEBCOPY will be browsed.
+:li.:hp2.Unable to delete member :ehp2.
+The STOW operation to delete the member of the
+FROM data set failed.
+:eul.
+:h3 id=vtc. VTOC and data set list functions.
+:p.
+If you select '4' on the utility menu or '3.4' on the main menu,
+you get a data entry screen for the desired data set qualifier,
+volume serial and parm.
+The screen contains 4 input fields:
+:ol.
+:li.The requested option (1,2 or V). Default is option 1.
+:li.The data set level (a fuzzy qualifier). Example: level
+SYS1 and SYS1.L are both valid.
+:li.The name of the volume serial, which VTOC should be listed.
+:li.The parm; 'SHORT' for a normal VTOC,  'LONG' for a VTOC
+with an extra line with the full data set name (44 pos.) and
+the startaddress of the specified data set or 'VOL' for VTOC
+without header and trailer lines and instead of the creation date
+the volume will be displayed.
+:eol.
+:p.
+After having altered the data set level, volume and PARM press ENTER.
+If only a data set level has been specified and option 1 is selected or
+defaulted, the catalog will be searched with the specified data
+set level.
+.br
+If the volume serial (and data set level) has been specified and
+the volume is online, the screen will be locked
+and the message 'VTOC running...' appears in the message area of the
+screen.
+:lblbox.Note
+If PF03 or PF15 is pressed RPF will return to the VTOC
+menu or main menu if '3.4' was selected.
+:elblbox.
+:p.
+If VTOC or catalog processing has been finished, RPF will invoke
+RPFVTOC1 for a data set selection
+list in option 1 and will invoke the editor in NONUM
+mode for option 2.
+Here you have all the EDIT facilities. See :hdref refid=edit for
+a description of the EDIT functions.
+If you terminate the data set selection list or editor RPF returns
+to the VTOC menu.
+:p.
+:hp2.Option 1:ehp2.
+.br
+In option 1, a data set selection list will be presented. In this list
+the following information will be displayed for each data set:
+:ol.
+:li.The data set name
+:li.The creation date if a volume has been specified or the volume
+if only the data set level has been specified.
+:li.The last reference date
+:li.The record format
+:li.The logical record length
+:li.The block length
+:li.The number of extents of the data set (max 123)
+:li.The allocated space in tracks
+:li.The free tracks inside the data set
+:eol.
+In this data set list you can issue then following primary or line
+commands.
+:dl tsize=18
+:dthd.Primary command
+:ddhd.Function
+:dt.=n or =n.n
+:dd.Terminate VTOC, return to main and execute option 'n' or
+'n.n'.
+:dt.BOTTOM
+:dd.Display the last screen of the directory listing.
+This command may be abbreviated as 'B'
+:dt.DOWN
+:dd.Display the next screen.
+.br
+If 'M' is entered in the command field and the 'DOWN' command is given
+by means of a PFK, the 'BOTTOM' command will be executed.
+:dt.END or RETURN
+:dd.Terminate the data set selection list. RPF will go back to
+the VTOC menu with 'END' or main menu with
+the 'RETURN' command
+:dt.HELP
+:dd.Display a screen with HELP information about the primary
+commands and line-commands.
+:dt.L 'string'
+:dd.Locate 'string' in the data set name
+.br
+After successful execution of the command, VTOC
+will display the screen, where the first line contains
+the data set, where the first occurrence
+of 'string' was found (highlighted).
+If no string is specified, the command will be ignored
+and the message 'No string specified' is issued.
+:dt.LEFT
+:dd.Show left part on a narrow screen including data set name.
+:dt.PFK
+:dd.Display PFK screen. you can alter here your PFK
+settings. To alter the PFKs press ENTER.
+To leave PFK press PF03/PF15.
+:lblbox.Note
+The changed PFK settings are only valid
+during this RPF session. To change the PFKs in the RPF profile
+data set, select the defaults menu. (0 on the main menu)
+:elblbox.
+:dt.REFRESH
+:dd.The data set list or VTOC list will be refreshed with
+updated data.
+:dt.RIGHT
+:dd.Show right part on a narrow screen including data set name.
+:dt.TOP
+:dd.Start display with the top of the directory listing.
+.br
+An alias is 'T'.
+:dt.TSO
+:dd.Execute TSO commands. Module RPFTSO will be invoked.
+:dt.UP
+:dd.Display the previous screen.
+.br
+If 'M' is entered in the command field and the 'UP' command is given
+by means of a PFK, the 'TOP' command will be executed.
+:edl.
+:p.
+Before the data set name you are able to enter line commands. The
+The following line commands are possible&colon.
+:dl.
+:dt.A
+:dd.Allocate a new data set, the ALLOC menu will be displayed.
+In this menu the data set name, SPACE parameters and DCB parameters
+are inherited from the data set in the data set list, where the
+line command is given. See :hdref refid=allo for more
+information about allocation of data sets.
+:dt.B
+:dd.Display the data set, BROWSE will be invoked. If the low
+level qualifier of the data set is '.ZIP', RPF will try to invoke
+the program MINIUNZ to UNZIP the data set. The output will be
+browsed. If MINIUNZ is not found or the low level qualifier is
+not '.ZIP', the selected original data set will be browsed.
+.br
+See .hdref refid=brw for more information concerning browse.
+.br
+The following responses can appear&colon
+:ul c.
+:li.:hp2.Browsed:ehp2., successful display
+:li.:hp2.Access denied:ehp2.. No permission (RACF) to access.
+:li.:hp2.No temporary data set:ehp2., RPFVTC1 is not allococated
+in RPFINIT. VTOC is unable to save the workspace. This error is
+already detected upon start of RPF with the message
+:hp2.'Init error Rc=0024':ehp2.
+:li.:hp2.Browse/View not available:ehp2.. The specified data set has
+record length longer then 255 bytes (except if RECFM=U).
+:li.:hp2.Error in Browse/View:ehp2.. The data set cannot be browsed
+due to an error.
+:eul.
+:dt.C
+:dd.Catalog a data set. The following responses are possible&colon.
+:ul c.
+:li.:hp2.Cataloged:ehp2.. The data set has been successfully
+cataloged.
+:li.:hp2.Data set already cataloged:ehp2.
+:li.:hp2.VSAM data set:ehp2.. A VSAM component cannot be cataloged
+in this way. Usually a VSAM data set is always cataloged.
+:li.:hp2.Error in catalog processing:ehp2.. The catalog
+function had abended for some reason.
+:li.:hp2.Temporary data set:ehp2.. Temporary data sets should not be
+cataloged.
+:eul.
+:dt.D
+:dd.Delete the specified data set. RPF will display a
+confirmation panel. If you press PF12/PF24, delete will be
+performed. Pressing PF03/PF15 will reject the deletion.
+.br
+The possible responses are&colon.
+:ul c.
+:li.:hp2.Deleted:ehp2., a successful delete
+:li.:hp2.Scratch error:ehp2.. Data set is uncataloged, but cannot
+be scratched. Re-catalog the data set with the 'C' line command
+or scratch the data set with IEHPROGM.
+:li.:hp2.VSAM data set:ehp2.. You try te delete
+a VSAM component.
+:li.:hp2.Error in delete:ehp2.. The delete is unsuccessful.
+(delete is confirmed)
+:li.:hp2.Deleted rejected by user:ehp2.. The confirmation panel
+is ended with PF03/PF15.
+:eul.
+:dt.E
+:dd.Edit the data set with the RPF editor. See .hdref refid=edit
+for more information about EDIT. After EDIT the following responses
+can be found in the comment field&colon.
+:ul c.
+:li.:hp2.Edited:ehp2.. Successful edit.
+:li.:hp2.Access denied:ehp2.. No permission (RACF) to access.
+:li.:hp2.I/O error:ehp2.. Unrecoverable error detected.
+:li.:hp2.Edit not available:ehp2.. Data set has a record length > 255
+and the RECFM is :hp2.not:ehp2. F(B) or V(B).
+:li.:hp2.Error in EDIT:ehp2.. The data set cannot be edited due
+to an error.
+:li.:hp2.No temporary data set:ehp2., VTOC is ubale to save the
+workspace, because the allocation of the save data set has failed.
+This error is
+already detected upon start of RPF with the message
+:hp2.'Init error rc=0024':ehp2.
+:li.:hp2.Data set/member in use:ehp2. The data set and member name
+cannot be edited, because another TSO-user is busy with
+EDIT of the same data set and member with RPF or with
+the IBM product ISPF.
+:eul.
+:dt.I
+:dd.Display additional information of the data set.
+Information like DCB information, allocation type (ABSTR, BLOCK,
+TRACK or CYLINDER), number of tracks, free tracks in
+the data set, volume and devicetype, number of allocated directory
+blocks (if a PDS), free directory blocks and number of members
+will be displayed.
+You can leave the information screen with ENTER, PF03 or PF15.
+The response of the 'I' line command is:
+:ul c.
+:li.:hp2.Info - I:ehp2.. Information successfully displayed.
+:eul.
+:dt.M
+:dd.Invoke Library Functions. A member selection will be displayed.
+See :hdref refid=pdsm for more information about Library Functions.
+After member list, the following responses can be found
+in the comment field&colon.
+:ul c.
+:li.:hp2.Member list:ehp2.. Member list successful processed
+:li.:hp2.Member list not available:ehp2.. Data set is not partitioned
+:li.:hp2.Access denied:ehp2.. No permission (RACF) to access.
+:li.:hp2.Error processing member list:ehp2..
+Member list cannot be created due to an error.
+:li.:hp2.No temporary data set:ehp2., VTOC is ubale to save the
+workspace, because the allocation of the save data set has failed.
+This error is
+already detected upon start of RPF with the message
+:hp2.'Init error rc=0024':ehp2.
+:eul.
+:dt.R
+:dd.Rename a data set. A RENAME panel will be displayed.
+You can enter a valid newname. If you press ENTER, an attempt will
+be made to rename the data set.
+Cataloged data sets will be cataloged with the new name.
+Rename is not possible for a multivolume data set or a VSAM data set.
+In the rename panel a suitable message will be displayed if you
+enters a wrong newname.
+After RENAME, the following responses can be found
+in the comment field&colon.
+:ul c.
+:li.:hp2.Renamed:ehp2.. Data set successfully renamed.
+:li.:hp2.Error in RENAME:ehp2.. The RENAME macro had suffered a
+nonzero return code. Possible cause: data set in use or
+user is not authorized to RENAME the data set.
+:eul.
+:dt.S
+:dd.Display additional information of the data set.
+Information like DCB information, allocation type (ABSTR, BLOCK,
+TRACK or CYLINDER), number of tracks, free tracks in
+the data set, volume and devicetype will be displayed.
+Unlike the line command 'I', the involved data set will not
+be opened, so the last reference date remains untouched.
+You can leave the information screen with ENTER, PF03 or PF15.
+The response of the 'S' line command is:
+:ul c.
+:li.:hp2.Info - S:ehp2.. Information successfully displayed.
+:eul.
+:dt.U
+:dd.Uncatalog a data set. The following responses are possible&colon.
+:ul c.
+:li.:hp2.Uncataloged:ehp2.. The data set has been successfully
+uncataloged
+:li.:hp2.Data set not in catalog:ehp2.
+:li.:hp2.VSAM data set:ehp2.. A VSAM component cannot be uncataloged.
+:li.:hp2.Error uncatalog processing:ehp2.. The uncatalog
+function had abended for some reason.
+:eul.
+:dt.V
+:dd.Display the data set, EDIT will be invoked in VIEW mode.
+See .hdref refid=edit for more information about EDIT/VIEW.
+for more information concerning browse. The following responses
+The following responses can appear&colon
+:ul c.
+:li.:hp2.Viewed:ehp2., successful display
+:li.:hp2.Access denied:ehp2.. No permission (RACF) to access.
+:li.:hp2.No temporary data set:ehp2., RPFVTC1 is not allococated
+in RPFINIT. VTOC is unable to save the workspace. This error is
+already detected upon start of RPF with the message
+:hp2.'Init error Rc=0024':ehp2.
+:li.:hp2.Edit/View not available:ehp2..
+The specified data set has not a RECFM of FB or VB or does
+contain a record length longer than 255 bytes.
+:li.:hp2.Error in Browse/View:ehp2.. The data set cannot be viewed due
+to an error.
+:eul.
+:dt.Z
+:dd.Compress the data set. IEBCOPY will be invoked to perform this
+function. The following responses are possible&colon.
+:ul c.
+:li.:hp2.Compressed:ehp2.. The data set has been successfully
+compressed.
+:li.:hp2.Error during compress:hp2.. IEBCOPY suffers an unsuccessful
+return code.
+:li.:hp2.Access denied:ehp2.. No permission (RACF) to access.
+:li.:hp2.DYNALLOC error:ehp2.. One or more workdata sets of IEBCOPY
+cannot be allocated. This can be caused by an abend of a previous
+RPF session or space problems on dasd.
+:li.:hp2.Compress not available:ehp2.. The data set is not a PDS
+or you are trying to compress SYS1.LINKLIB.
+:li.:hp2.IEBCOPY not APF authorized:ehp2.. RPF runs not APF
+authorized.
+:eul.
+If the line command is not 'A', 'B', 'C', 'D', 'E', 'M', 'I', 'R', 'S',
+'U', 'V', 'Z' or blank the message:
+:hp2.'Select A,B,C,D,E,I,M,R,S,U,V,Z':ehp2. will be set in the comments
+field for that data set.
+:edl.
+:p.
+:hp2.Option 2:ehp2.
+.br
+:p.The information is loaded in the EDIT workspace and the data sets
+are sorted in alphabetical order.
+The first 3 lines displayed are header lines.
+This 1st line shows the name of the volume, the julian date and
+time, the used parm ('SHORT' or 'LONG') and the VTOC type
+(VTOC=IX for indexed or VTOC=OS for a standard VTOC).
+The second header line will give you the VTOC boundaries
+The VTOC indicators (DS4VTOCI, see debugging handbook),
+The number of directory blocks and the number of DSCBs on
+a track.
+The third line contains the number of tracks/cylinder, the
+lenght of the track in bytes and the total number of cylinders on
+the volume.
+The last line of the workspace describes the empty space on the
+volume.
+:p
+The VTOC function of RPF supports the new indexed VTOC structure
+too. (data facilities/device support df/ds)
+If a volume with an indexed VTOC is taken the following extra
+information will be displayed:
+:ul c.
+:li.The total number of free VTOC index records (VIRS).
+:li.'VTOC=IX' in the header line.
+:eul.
+For the displayed data sets the following information is displayed:
+:ol c.
+:li.The DSNAME. (the first 26 positions if PARM=SHORT/VOL or
+blanks if PARM=LONG)
+:li.The creation date or the volume if PARM=VOL is used
+:li.The last reference date.
+:li.The data set organization.
+:li.The record format.
+:li.The logical record length.
+:li.The block length.
+:li.The number of extents of the data set (max 123).
+:li.The allocated space in tracks.
+:li.The free tracks inside the data set.
+:eol.
+If the volume for which you requested a VTOC listing is not mounted
+the message 'Volume not available' appears in the message area
+and the data entry screen will be displayed with retry possibility.
+.br
+If you terminate EDIT with END, the VTOC menu re-appears.
+.sp
+:hp2.Option V:ehp2.
+.br
+This option displays five summary lines on the VTOC menu. These
+lines contains VTOC and volume information and a summary
+of the free space on the volume.
+After execution, the VTOC menu re-appears.
+:h3.LIBRARIAN maintenance.
+:p.
+If you select '5' on the RPF utility or '3.5' on the RPF main
+menu, a data entry screen for the desired LIBRARIAN master file
+will be displayed.
+.br
+You can change the 'Master file' and 'Volume serial'  fields.
+Press ENTER to perform the allocation.
+If option '1' has been entered, the data set should be a disk master
+file. With option '2' a tape master file should be specified.
+If the allocation is not successful an error message will be displayed
+in the message area. You can type in '1' or '2'
+and alter the fields or press PF03/PF15 to leave the allocation
+menu.
+:p.
+After successful allocation RPF goes to the LIBRARIAN maintenance
+screen.
+The screen is divided into 5 parts:
+:ol c.
+:li.The header line.
+:li.The message area.
+:li.The command area for the commands.
+:li.The LIBRARIAN description field.
+:li.The LIBRARIAN module area.
+:eol.
+Each line of the module area contains the following fields:
+:ul.
+:li.The operation. This is an input field.
+The codes are:
+:ol c.
+:li.'B', BROWSE the module.
+:li.'D', Delete the module.
+:li.'E', EDIT the module.
+:li.'P', Print the module to the default SYSOUT class.
+:eol.
+:li.The module name. This field is protected.
+:li.The description of the module. This field is protected field.
+:li.The programmer's name field, which contains the name
+of the creator of that module, or an response of a line
+command entered in field 1.
+If it is an response of a line command, this field will
+be highlighted.
+.br
+The response can be:
+:ol c.
+:li.*Browsed  successful display.
+:li.*Copied  successful copy.
+:li.*Deleted  successful delete.
+:li.*EDIT N/A  module not EDIT due to init error rc= 0024.
+:li.*COPY N/A  module not copied due to init error rc= 0024.
+:li.*Edited  successful EDIT.
+:li.*Printed  successful print.
+:li.*Not-Browsed module deleted by previous DELETE.
+:li.*Not-Copied module deleted by previous DELETE or SAVE menu
+exited.
+:li.*Not-del  delete overruled by user.
+:li.*Not-Edit  module deleted by previous DELETE.
+:li.*WS too small  The EDIT workspace is too small. Increase in
+RPF option 0.1.
+:li.*NOT-PRT  module deleted by previous DELETE.
+:li.*Sel B,D,E or P Wrong command entered.
+:eol.
+:eul.
+The RPF LIBRARIAN maintenance commands are:
+:dl tsize=18
+:dthd.Primary command
+:ddhd.Function
+:dt.BOTTOM
+:dd.Display the last screen of the directory listing.
+An alias of BOTTOM is B.
+:dt.DOWN
+:dd.Scroll 1 page forward.
+.br
+:dt.END or RETURN
+:dd.Terminate LIBRARIAN maintenance. RPF will go back to
+the utility menu with 'END' or main menu with
+the 'return' command
+:dt.INDEX
+:dd.Edit the LIBRARIAN index. The RPF editor will be
+invoked.
+:dt.L 'string'
+:dd.Locate member 'string' or member name, that start
+with 'string' (specify 1-8 characters in the
+'string' operand).
+After successful execution of the command, LIBRARIAN
+maintenance will display the screen, within the
+first line the LIBRARIAN module, where the first
+occurrence of 'string' was found (highlighted).  If
+no match can be found the next module, which contains
+the text next higher than the to be located string
+will be the first line on the screen.
+:dt.PFK
+:dd.Display PFK screen. You can alter here your PFK
+settings. To terminate the PFK screen enter 'END'.
+:lblbox.Note
+The changed PFK settings are only valid
+during this RPF session. To change the PFKs in the RPF profile
+data set, select the defaults menu. (0 on the main menu)
+:elblbox.
+:dt.TOP
+:dd.Start display with the top of the directory listing.
+An alias of TOP is T.
+:dt.UP
+:dd.Scroll 1 page backward.
+.br
+If you are on the first screen the message
+:edl.
+:h3 id=outp. The RPF output processor.
+The RPF output processor is available if you select '6' on the
+utility menu or '3.6' on the main menu. The output panel contains
+the following fields&colon.
+:ul c.
+:li.The option field
+:li.The selection possibilities
+:li.The jobname to be entered
+:li.The JES2 job-id to be entered
+:li.The output class
+:li.The status area
+:eul.
+You can specify the following options&colon.
+:ul c.
+:li.L, display the job status. The status of the specified jobname
+will be displayed in the status area. If you specify only the
+user id (default), all the jobs starting with 'userid' + 1
+jobname character will be displayed. If usermod ZP60016 has been
+applied in MVS38J, all the jobs starting with 'userid' + 1, 2 or 3
+jobname characters will be displayed. The status of the specified
+jobname(s) will be displayed in the status area.
+:li.D, delete the held output from Spool.
+:li.R, requeue the output to another output class. Specify a new
+output class in the appropriate field.
+:li.P, print the output into a data set with the name
+'userid.RPFOUT.Dyyddd.Thhmmss.OUTLIST'. This data set will be
+allocated with RECFM=VB,LRECL=255,BLKSIZE=6100 and cataloged.
+You can process this data set afterwards.
+:li.<blank>, display the output of the job. All the HELD output data sets
+of the job will be read from the JES2 Spool and the BROWSE processor
+will be invoked. See :hdref refid=brw for more information
+concerning BROWSE.
+:li.PF03/PF15, terminate the output processor and go to the utility
+menu.
+:eul.
+:p.
+If one or more errors occurs, a suitable message will be displayed
+with retry possibility.
+:h3 id=search. The RPF search processor.
+The SEARCH function is available, if you select '8' on the
+utility menu or '3.8' on the main menu.
+.br
+A data entry screen will be displayed to select a sequential
+or a partitioned data set. In this menu also a
+search string should be specified and the 'Skip numbers'
+and 'Ignore case' options are present.
+This entry menu is like the EDIT menu.
+The data set should have a record format of fixed or variable
+records with record length with a maximum of 255.
+.br
+If 'Skip numbers' = 'Y' the last 8 bytes of the records of
+fixed data will be excluded for SEARCH or the first 8 bytes
+of variable data will be excluded for SEARCH.
+.br
+If 'Skip numbers' = 'C' the last 8 bytes, and the first 6
+bytes of card image fixed data will be excluded for SEARCH.
+If not fixed and/or card image the value 'Y' is assumed.
+.br
+If 'Skip numbers' = 'N' the entire record will be searched.
+.br
+If 'Ignore case' = 'Y' the string will be matched not matter
+if the data is upper-, lower- or mixed case.
+.br
+If 'Ignore case' = 'N' the string should exactly match.
+:p.
+If '=n(.n)' is entered in the data set name,
+RPF returns to the main menu and executes option n(.n).
+.br
+After successful allocation, the data set will be scanned for the
+specified string. After the scan the output will be browsed.
+See :hdref refid=brw for more information about RPF Browse.
+:h3.ARCHIVER maintenance.
+:p.
+If you select '9' on the RPF utility or '3.9' on the RPF main
+menu, a data entry screen for the desired ARCHIVER VSAM cluster
+will be displayed.
+.br
+ARCHIVER is a free component, written by Rick Fochtman and
+available on www.cbttape.org in file 147. With Archiver you
+can archive data sets and members in one VSAM cluster, called
+'the Archive'. Members in the Archive are called 'items'.
+.br
+In the data entry screen, you specify the data set name of
+of ARCHIVER VSAM cluster and filters for ITEMS, GROUPS, SUBGROUPS
+and ITEMS. If these filter fields are blank, all items in the
+ARCHIVE cluster are selected.
+.br
+The field 'Confirm item delete' can be set to '/' or <blank> to
+unconditionally delete the ITEM or not.
+:p.
+In the filter fields, you can use wildcards '*' for 1 or more
+characters and/or '%' for a single character.
+:p.
+Example: select the items starting with ABC of group SOURCE with
+subgroup V2R1M1 and V2R1M2 and type ASM.
+:xmp.
+- Item         = ABC*
+- Group        = SOURCE
+- Subgroup     = V2R1M%
+- Type         = ASM
+:exmp.
+:p.
+After successful allocation an ARCHIVER item selection list is
+displayed.
+The screen is divided into 4 parts:
+:ol c.
+:li.The header line.
+:li.The message area.
+:li.The command area for the commands.
+:li.A list or ARCHIVER items.
+:eol.
+Each line of the module area contains the following fields:
+:ul.
+:li.The operation. This is an input field.
+The codes are:
+:ol c.
+:li.'B', Browse the item.
+:li.'D', Delete the item. The RPF browser will be invoked
+to view the output. If the attribute 'Confirm item delete' is
+set to '/', a confirmation screen will be displayed. With value
+<blank>, the item will be deleted unconditionally.
+:li.'E', EDIT the item.
+:li.'N', Browse the NOTES of an Archiver item if present.
+Check the '*' after the VERSION.
+:li.'P', Print the item to the default SYSOUT class.
+:li.'R', Rename the item with the Archiver ALTER function.
+:li.'V', View the item.
+:eol.
+:li.The item name, version, '*' or 'A', Group, Subgroup, Type,
+DSORG- RECFM- LRECL and BLKSIZE of the original data set and
+the number of records.
+.br
+If an '*' is present after the version, the ITEM contains notes,
+which can be listed with the line command 'N'.
+.br
+If an 'A' is present after the version, this ITEM is an alias.
+The true name, true name GROUP, true name SUBGROUP, true name TYPE
+and true name VERSION are displayed instead of the date and DCB info.
+The alias is not selectable for line commands.
+:li.The creation date of the item or a message.
+.br
+The message can contain the following&colon
+:ol c.
+:li.Browse error, error in browse processing.
+:li.Browsed, successful display.
+:li.Deleted, successful delete.
+:li.EDIT N/A, module not EDITed, because the RECFM is not Fixed,
+Variable or has a LRECL > 255.
+:li.Edited, successful EDIT.
+:li.NOTES listed, successful browse of the item notes.
+:li.Printed, successful print.
+:li.Renamed, successful ALTER.
+:li.Alloc error, an error occurs during delete or NOTES processing.
+:li.Not deleted, PF03/PF15 pressed on confirm screen.
+:li.Not renamed, PF03/PF15 pressed on RENAME screen.
+:li.No NOTES, The item does not contain NOTES data.
+:li.Rename error, Allocation Archiver data sets failed.
+:li.Invalid sel., invalid line command entered.
+:li.Truncated, EDIT workspace too small.
+:li.View N/A, module not viewed, because the RECFM is not Fixed,
+Variable or has a LRECL > 255.
+:li.Viewed, successful VIEW.
+:eol.
+:eul.
+The RPF ARCHIVER maintenance commands are:
+:dl tsize=18
+:dthd.Primary command
+:ddhd.Function
+:dt.BOTTOM
+:dd.Display the last screen of the directory listing.
+An alias of 'BOTTOM' is 'B'.
+:dt.DOWN
+:dd.Scroll 1 page forward.
+:dt.END or RETURN
+:dd.Terminate ARCHIVER maintenance.
+:dt.L 'string'
+:dd.Locate item 'string' or item name, that start
+with 'string' (specify 1-8 characters in the
+'string' operand). If found, the item will be the
+first line of the item list.
+:dt.LEFT
+:dd.Scroll to the left part of the screen on narrow screens.
+:dt.PFK
+:dd.Display PFK screen. You can alter here your PFK
+settings. To terminate the PFK screen enter 'END'.
+:lblbox.Note
+The changed PFK settings are only valid
+during this RPF session. To change the PFKs in the RPF profile
+data set, select the defaults menu. (0 on the main menu)
+:elblbox.
+:dt.REFRESH
+:dd.Read again the archive and re-populate the screen with the
+Archiver items.
+:dt.RIGHT
+:dd.Scroll to the right part of the screen on narrow screens.
+:dt.TOP
+:dd.Start display with the top of the item listing. An alias of
+'TOP' is 'T'
+:dt.UP
+:dd.Scroll 1 page backward.
+:edl.
+:h2.Foreground assembler and linkage editor.
+:p.
+If you enter '4' on the RPF main menu, you get the assembler panel.
+This screen contains many fields, which are described below:
+:dl tsize=25
+:dt.The Sourcelib field.
+:dd.In this field, the member name and library name should be
+specified. The data set should be cataloged. Leave member name
+blank if the data set is sequential.
+:dt.The OBJECT lib field.
+:dd.In this field, the member name and library of a object card
+image library should be specified. If the member name is omitted,
+the member name of the source lib will be used.
+If the library is omitted, a temporary data set will be allocated
+if assembly is selected, or no data set will be allocated if
+assembly is not selected.
+:dt.The LOAD lib field.
+:dd.In this field, the member name and library of a load library
+should be specified. If the member name is omitted, the member name
+of the object library will be used.
+By default this field contains the name of the source library.
+Only the last qualifier of the data set name is changed into 'LOAD'.
+:dt.The INCLUDE library field.
+:dd.This field gives you the possibility to specify a DDNAME and
+a DSNAME of an extra OBJECT or LOAD library to perform extra
+inclusions of OBJECT or LOAD modules during link edit.
+Both DDNAME and DSNAME should be specified to perform the
+allocation of this data set.
+The INCLUDE of the OBJECT or LOAD modules can be done by using
+the control statement fields.
+:dt.The MACLIB fields.
+:dd.This field contains 6 fields for maclibs to be allocated
+to the assembler. The defaults are the 'SYS1.MACLIB' for the
+1st field, the 'SYS1.AMODGEN' for the 2nd field, and the
+data set entered in the allocation menu in the 5th field, if
+the data set is partitioned.
+If one or more maclib fields are blank, the field will be
+skipped.
+.br
+Ex. if 1st maclib is specified, 2nd maclib is blank and 3rd
+maclib is specified, 2nd maclib will be skipped and 3rd maclib
+becomes 2nd maclib.
+:dt.The assembler field.
+:dd.You can specify here 'Y' or 'N' to assemble your source or not.
+Default is 'Y'.
+:dt.The assembler output field.
+:dd.This field contains 'Y',  or 'N'. Default is 'N'
+If you specify 'Y' the SYSPRINT comes on the screen after
+assembly (and link).
+.br
+With 'N' no browse will be invoked, except if the assembler has
+given a nonzero returncode. Then the SYSTERM output will be browsed.
+:dt.The additional assembler parm field.
+:dd.The default is blanks. You can specify here the the additional
+parameters for the assembler. The parameters 'NODECK', 'LOAD'
+and 'LINECOUNT(51)' are already specified.
+:dt.The linkage editor field.
+:dd.You can specify here 'Y' or 'N' to link edit  your assembler
+object deck or not. Default is 'Y'.
+:dt.The linkage editor parm field.
+:dd.You can specify here the linkage editor parm.
+default is 'LIST,XREF,NCAL'.
+:dt.The Linkage Editor output field
+:dd.Select 'Y' or 'N' to BROWSE the linkage editor output after
+BROWSE of the assembler output. Default is 'N' if the linkage editor
+has a return code of 0 and 'Y' if the link has a return
+code not equal 0.
+:dt.The loadmodule field.
+:dd.This member name is the name of the loadmodule created by
+the linkage editor. If this member name is omitted the
+member name of the object library is used.
+:dt.The printer name
+:dd.Specify here the name of the remote printer, which will receive
+the output if a "PRINT" primary command has been entered. If no
+printer specified, the output will be locally printed.
+:dt.The output class
+:dd.Specify here the output class for the listing.
+:dt.The control statement fields.
+:dd.In these fields you can specify max 6 control statements
+for the linkage editor.
+:edl.
+If you hit ENTER after changing the fields all the data sets will
+be allocated. After successful allocation of the all the assembler
+files the assembler will be invoked. The name of the assembler is
+the name specified in the defaults menu. The start of the
+assembler will be indicated to the user with the message
+'nnnnnnnn running.' in the message area of the screen (nnnnnnnn =
+the name of the assembler)
+.sp
+If the return code is 4 or below, the linkage editor will be invoked
+(only if linkage editor=Y is selected on the screen).
+The start of the linkage editor will be indicated to the user by means
+of the message 'IEWL     running...' in the message area.
+:p.
+If the assembler has ended with a return code higher than 4 the
+message 'RC ASM=xx' will appear and the linkage editor will
+not be executed.
+:p.
+If the assembler and/or linkage editor has ended, the message
+'(RC ASM=xx,) (RC LKED=xx)' will be displayed on the screen.
+You can change now only the assembler output field on the screen.
+press ENTER to go to the output screen.
+.br
+The output screen is the BROWSE screen, see :hdref refid=brw for more
+detailed information concerning BROWSE.
+:p.
+After completion of browse of the output of assembler end/or
+linkage editor, the assembler menu will reappear.
+:lblbox.Note
+You can escape from the assembler screen with the command 'END'
+or the PFKs 3 or 15.
+RPF will go back to the main menu.
+:elblbox.
+:h2 id=tso. RPF TSO command processor.
+:p.
+If you select function '6' on the RPF main menu the RPF
+TSO command processor will be attached.
+The TSO command processor screen contains an input field
+of 156 characters to type in the TSO command.
+With 'END' in the input field (or PF03/PF15),
+RPF returns to the main menu. Also the command '=n' or '=n.n' will
+terminate TSO and the option 'n' or 'n.n' will be executed from
+the RPF main menu.
+Almost each TSO command can be executed. RPF starts the output
+in line 10 on the screen and can be continued on the next
+screens. If the TSO command is completed, RPF displays the
+message 'RPF TSO: READY' together with three asterisks ('***').
+press ENTER to review the command processor screen with the last
+entered command.
+.br
+The last 10 TSO commands will be saved in the screen from row 10
+until row 19. To repeat a saved command, place the cursor on any
+place in the command and hit 'Enter'. The command will be
+placed in the input area. You can alter this command before
+execution.
+After finishing RPF, the last 10 commands will be saved in the
+RPF profile data set with member name @RPFTSO.
+:p.
+If a command does not exist or it is not recommended to do that
+(like LOGON,LOGOFF and RPF) RPF TSO will come back with the
+message 'Command is not supported'
+:h2 id=help. The RPF HELP facility.
+:p.
+If you select '7', press PF01 or PF13 on the RPF main menu,
+or the HELP command in EDIT, the HELP menu will be displayed.
+On the HELP menu you can select the following options:
+:sl.
+:li.1. The RPF introduction.
+The introduction contains a short description of how RPF works.
+:li.2. The RPF commands.
+These screens contain a short description of the RPF commands.
+:li.3. The RPF return codes.
+These screens contain an explanation of the return codes, that
+are displayed in some RPF messages.
+:li.4. The RPF messages:
+These screens contain all the RPF messages.
+:li.5. The RPF Release notes.
+These screens contain the latest improvements made by the
+RPF developers.
+:li.X. Terminate the RPF HELP menu.
+RPF will go back to the main menu.
+:esl.
+It is also possible to select the HELP functions directly from
+the RPF main menu, without interference of the HELP menu (e.g.
+select '7.5' for HELP-Release notes). If the function is terminated
+in this case, RPF always returns to the main menu.
+:p.
+Primary commands in the HELP panels.
+:p.
+For the primary commands of the HELP panels see :hdref refid=brw
+:p.
+RPF also have 2 TSO HELP members, named RPF and RPFED. These
+members belong in a HELP data set specified in the //SYSHELP
+DD-statement in your TSO logon procedure. These members give
+a brief description about RPF and the stand-alone TSO
+command processor RPFED. The members RPFHELP1, RPFHELP2,
+RPFHELP3, RPFHELP4 and RPFHELP should also be present in one
+of the libraries in the //SYSHELP concatenation.
+:h2.The RPF TEST mode.
+:p.
+The TEST mode is not intended for the normal RPF users. It is an
+authorized function for the RPF developers.
+If you enter '8' on the RPF main menu, the user must supply a
+password.
+:p.
+If you enter five wrong passwords, RPF will go back to the main
+menu.
+:p.
+If the password is correct, the RPF test menu will be displayed.
+you can select the following numbers.
+:sl.
+:li.1. Display the session status. Press ENTER to go back to the main
+menu.
+:li.2. The operator mode
+:li.3. Display the RPF control blocks and entry points.
+The entry points can be reloaded with the RELOAD 'modname' command.
+:li.4. Attach a program to be tested.
+:li.5. Display the RPF internal return codes.
+:li.X. (or PF03 or PF15) Terminate the RPF test menu.
+:esl.
+:h2.The RPF operator mode.
+:p.
+To enter the RPF operator mode you should enter '9' on the
+RPF main menu.
+The operator mode is in non fullscreen mode.
+The operator mode is announced with a header line
+and the message 'RPFOPER: Enter function, 'HELP' or 'END'',
+which is displayed upon entry of RPFOPER or if the 'K' command
+has been given.
+The following commands are available.
+:dl tsize=18
+:dthd.Command
+:ddhd.Function
+:dt.A=ALL
+:dd.Display all the executing tasks in the system.
+(batch, time sharing users, initiators and started tasks)
+Each line contains: the taskname, the address space
+number in hex, the type (JOB, STC or TSU),
+.br
+'N-TIMING' if no SMF timing is used, the
+dispatching priority, and 'Swapped out' if the task is swapped out.
+:dt.A=JOB
+:dd.Display only the batch jobs in the system.
+:dt.A=STC
+:dd.Display only the started tasks and the inactive
+initiators in the system.
+:dt.A=TSU
+:dd.Display only the time-sharing users in the system.
+:dt.A=nnnn
+:dd.Display address space id nnnn. Leading zeroes may be omitted.
+:dt.J=ALL
+:dd.Display all the tasks in the system, except the
+inactive initiators.
+:dt.J=jobname
+:dd.Display job 'jobname' in the system.
+:dt.D VOL=vvvvvv
+:dd.Display the UCB of volume=vvvvvv the display of the
+UCB contains the following information:
+:ul c.
+:li.The address where the UCB is found.
+:li.The type of the UCB (DASD, COMM DEV, DISPLAY,
+TAPE, UNIT REC or UNKNOWN)
+:li.The first 48 bytes of the UCB in hex.
+:li.'ONLINE' or 'OFFLINE'
+:li.The unit address of that volume
+:li.The volume serial number if available.
+:eul.
+:dt.D UCB=ddd or dddd
+:dd.Display the UCB of device ddd or device dddd. This display
+contains the same information as the 'D VOL=vvvvvv' command.
+:dt.K
+:dd.Clear the screen. A header line will be displayed.
+:dt.HELP
+:dd.Display the commands of RPF oper.
+:dt.END or E
+:dd.Terminate RPF operator mode.
+The message 'RPF OPER, All functions completed' will
+be displayed together with three asterisks ('***')
+press ENTER to return to the RPF main menu.
+:edl.
+:p.
+Messages of the RPF operator mode.
+:ol.
+:li.RPF OPER: A=nnnn,     - Not found on the ASCB chain
+.br
+Invalid address space id entered in 'A=nnnn' command.
+:li.RPF OPER: J=jjjjjjjj, - Not found on the ASCB chain
+.br
+Jobname jjjjjjjj not found in the system.
+:li.RPF OPER: UCB not found
+.br
+Volume in 'D VOL' or device address in 'D UCB' command not found
+in the system.
+:li.RPF OPER: Invalid command entered
+.br
+Not one of the above commands entered.
+:eol.
+:p.
+RPFOPER can be run as a command on the native TSO terminal (the
+READY prompt).  Enter the command RPFOPER to run this command.
+:h2.TSO command processor RPFED
+:p.
+In native TSO, the TSO command processor RPFED is available.
+You can use the TSO command RPFED to edit a data set or
+member, RPFBR to browse a data set or member, RPFPD
+to invoke Library Functions or RPFST to perform RESET ISPF stats
+function.
+:p.
+Syntax:
+:xmp.
+RPFED data setname VOLUME(vvvvvv) LINES(nnnnn)
+RPFBR data setname VOLUME(vvvvvv) LINES(nnnnn)
+RPFPD data setname VOLUME(vvvvvv) LINES(nnnnn)
+RPFST data setname VOLUME(vvvvvv) LINES(nnnnn) +
+      NEWUSER(new userid) VERSION(nnnn)
+:exmp.
+:p.
+The VOLUME keyword is optional and can be used if the 'data setname'
+is not cataloged.
+:p.
+The LINES keyword specified the maximum lines to process
+and should be a value between 200 and 50,000. The default is
+7,000 lines.
+.br
+If RPFED/RPFBR/RPFPD and RPFST runs in addressing mode 31, the number
+of lines will be automatically multiplied by 10.
+:p.
+The NEWUSER and VERSION keywords are optional and only used if
+the RPFST (Reset ISPF stats) command verb is used.
+The default value for NEWUSER is your TSO userid. The default for
+VERSION = 0100 (ISPF vv + ISPF mm).
+:p.
+RPFED will invoke the RPF editor or the Edit member selection list.
+.br
+RPFBR will invoke the RPF browser or the Browse member selection list.
+.br
+RPFPD will invoke RPF Library Functions. If using RPFPD,
+'data setname' should be a partitioned data set.
+.br
+RPFST executes the RESET ISPF stats function.
+'data set name' should be a partitioned data set.
+:p.
+The normal TSO rules are in effect. If omitting the data
+set name, the command processor will prompt you for the
+data set. If you put the data set name between apostrophes,
+the data set is treated as fully qualified. If no
+apostrophes are used, the data set name will be prefixed with
+your user id.
+:p.
+See :hdref refid=edit for a description of the editor and the
+Edit member selection list or :hdref refid=brw for a description
+of the browse and the Browse member selection list or
+:hdref refid=reset for a description of the RESET function,
+or :hdref refid=pdsm for a description of the PDS functions.
+:h2.TSO command processor RPFV
+:p.
+In native TSO, the TSO command processor RPFV is available.
+You can use the TSO command RPFV to create an RPF data set
+list (RPF 3.4).
+Syntax:
+:xmp.
+RPFV { PREFIX(dsn-prefix) | PREFIX(NONE) VOLUME(volser)
+       LINES(nnnnn) }
+:exmp.
+:p.
+Default for PREFIX is the userid. Default for VOLUME = blanks.
+The PREFIX is a fuzzy prefix. Prefixes like 'SYS1' or
+or 'SYS1.L' are both valid
+:p.
+If the volume serial is specified, only the data sets with this
+prefix are selected.
+.br
+If PREFIX(NONE) is specified, a volume serial is required to
+create a data set list of all data sets of that volume.
+:p.
+The LINES keyword specified the maximum lines to process
+and should be a value between 200 and 50,000. The default is
+7,000 lines.
+.br
+If RPFV runs in addressing mode 31, the number
+of lines will be automatically multiplied by 10.
+:p.
+See :hdref refid=vtc (option 1) for more
+information about the DSLIST function.
+:h2.RPF messages.
+:h3.messages of the RPF main processor.
+:msgl compact.
+:msg.(C) 1979-2025 Skybird
+:sysact.None.
+:presp.None, successful sign on to RPF.
+:msg.//ISPPROF not found
+:sysact.RPF choose her own defaults.
+:presp.Specify an ISPPROF DD-statement in the TSO logon procedure
+or allocate the profile data set with the ALLOCATE command.
+:msg.Data set/member in use
+:sysact.EDIT canceled, return to main menu.
+:presp.This will happen if the data set and member
+is edited or being save by another TSO
+user with RPF or the IBM product SPF.
+Wait for availability of the member or EDIT another member.
+:msg.Data set/member saved
+:sysact.None
+:presp.None
+:msg.I/O error
+:sysact.EDIT or Browse terminated. Mainmenu displayed.
+:presp.Examine the involved data set or select another data set.
+:msg.Init. error rc= xxxx
+:sysact.Session defaults not retrieved from the
+RPF profile data set (except rc=24).
+:presp.
+:ul c.
+:li.If rc=04, the profile data set cannot be opened.
+Contact RPF support.
+:li.If rc=12, RPF was unable to allocate a
+temporary data set under DDNAME=RPFEDT1, RPFCTPST and/or RPFVTC1.
+.br
+The following actions can be tried:
+:ol.
+:li.Stop RPF, free RPFEDT1 and RPFVTC1 with the TSO
+command 'FREE' and restart RPF.
+:li.Accept the error but the EDIT
+function of Library Functions and LIBRARIAN
+maintenance and the EDIT, BROWSE en Member List functions in VTOC
+are not available.
+:li.If no solution can be found, contact RPF support.
+:eol.
+:li.If rc=16, the EDIT workspace cannot be GETMAIN'ed. Increase
+the REGION size of the TSO session.
+:eul.
+:msg.Invalid option
+:sysact.Function ignored.
+:presp.Select function 0-9 or X.
+:msg.No workspace available
+:sysact.EDIT workspace NOT getmained.
+:presp.Relogon your TSO session with a larger region size or
+decrease your workspace size.
+See :hdref refid=def for more information.
+:msg.Not saved: RC= xxxx
+:sysact.The profile member is not updated.
+.br
+If rc=4, open error on the profile data set, try to
+select the defaults menu several times,
+If you have no success, contact RPF support.
+.br
+If rc=8, one of the members in the profile data set were not found.
+Restart RPF. The members will be created.
+.br
+If rc=20, error caused by initialization error.
+See the initialization error message.
+If rc=24, the EDIT workspace cannot be FREEMAIN'ed.
+:msg.RPFUSER1 not found
+:sysact.Function ignored.
+:presp.Your installation does not supply a RPFUSER1
+exit. you have 2 possibilities:
+.br
+1. Ignore the error
+.br
+2. Write a RPFUSER1 exit
+:msg.Save canceled by user
+:sysact.None
+:presp.PF03/PF15 pressed on SAVE menu or CANCEL primary command
+given in EDIT.
+:msg.Workspace full
+:sysact.EDIT function terminated.
+:presp.SAVE your workspace and increase the size.
+:msg.Workspace too small
+:sysact.None.
+:presp:Increase the workspace size or EDIT another data set.
+:emsgl.
+:h3.RPF session default messages.
+:msgl compact.
+:msg.AUTOSAVE not Y or N
+:sysact.AUTOSAVE value ignored.
+:presp.Specify the correct value.
+:msg.COLS not Y or N
+:sysact.COLS value ignored.
+:presp.Specify the correct value.
+:msg.CAPS not AUT, ON or OFF
+:sysact.CAPS value ignored.
+:presp.Specify the correct value.
+:msg.Confirm not ' ' or /
+:sysact.Confirm value ignored.
+:presp.Specify the correct value.
+:msg.FREEMAIN failed, stop
+:sysact.Workspace not freemained.
+:presp.Severe error. Sign off and contact RPF support.
+:msg.GETMAIN failed, retry
+:sysact.Workspace not allocated. RPF will not leave
+the defaults menu.
+:presp.Decrease the size of the workspace.
+:msg.Invalid option
+:sysact.Function ignored.
+:presp.Select the right number on the menu.
+:msg.Invalid SYSOUT class
+:sysact.SYSOUT class ingnored.
+:presp.Enter SYSOUT class A-Z or 0-9.
+:msg.Invalid workspace size
+:sysact.Workspace size ignored.
+:presp.Enter a numeric number of lines with a
+minimum of 500 and a maximum of 999,999.
+:msg.No profile data set
+:sysact.Defaults not saved.
+:presp.The profile data set was not allocated to //ISPPROF.
+:msg.NULLS/REPLACE not YES or NO
+:sysact.Screen not exited.
+:presp.Correct this value.
+:msg.Upd. size destroys ws
+:sysact.Current workspace no longer valid.
+:presp.None.
+:emsgl.
+:h3.BROWSE messages.
+:msgl compact.
+:msg.Allocation error SYSOUT
+:sysact.'PRINT' primary command terminated.
+:presp.Severe error, contact RPF support.
+:msg.Bottom of data reached
+:sysact.F primary command executed, but no match found
+:presp.Scroll to correct position, or re-enter
+the F primary command with another string.
+:msg.BROWSE substituted
+:sysact.Browse is entered after trying to EDIT a RECFM=U data set.
+:presp.None.
+:msg.Chars ssssssssss found
+:sysact.F primary command executed, All matches are highlighted.
+:presp.None.
+:msg.Invalid character string
+:sysact.F primary command not executed.
+:presp.Specify correct string
+:msg.Invalid column number
+:sysact.Column number is not numeric or exceeds
+LRECL of data set. Command ignored.
+:presp.Enter a valid column number in the 'C' command.
+:msg.Invalid command
+:sysact.Command ignored.
+:presp.Enter a valid command.
+:msg.Job jjjjjjjj submitted
+:sysact.Contents of the data set submitted.
+:presp.None
+:msg.Listing made, SYSOUT=x
+:sysact.SPIN OFF SYSOUT data set created.
+:presp.None.
+:msg.No JCL data set
+:sysact.Submit not executed.
+:presp.Browse a JCL data set with a LRECL of 80.
+:msg.PFK definition invalid
+:sysact.PFK ignored.
+:presp.Redefine that PFK. the 'CON' attribute was not 'N', 'Y' or 'X'
+:msg.PFK not defined
+:sysact.PFK ignored.
+:presp.Define the PFK or hit another PFK.
+:msg.Submit failed
+:sysact.TSO SUBMIT command failed.
+:presp.Contact RPF support.
+:msg.Truncated to LRECL=255
+:sysact.Data sets with large records browsed but truncated.
+:presp.None.
+:emsgl.
+:h3.EDIT messages.
+:msgl compact.
+:msg.//* last update not found
+:sysact.String '//* last update: ' not found in workspace.
+:presp.Specify this string (without quotes) in the data.
+:msg.Abendx37 in RPFSAVE
+:sysact.EDIT workspace recovered and EDIT not left.
+:presp.Save data in another data set with the CREATE or REPLACE
+primary command.
+:msg.APPEND not executed
+:sysact.not executed, because workspace is too small.
+:presp.Increase the workspace size with option 0.1
+:msg.Boundary too small
+:sysact.'F', 'C', or 'FILL' command ignored.
+:presp.The character string in the command is
+longer than the boundary range.
+Use shorter character strings or reset
+the boundary range with the 'BNDS' primary command.
+:msg.Bottom of data reached
+:sysact.'F' command is ignored.
+:presp.Re-enter the 'F' or command with a valid character string.
+:msg.Characters X'..' found
+:sysact.FIND P'.' successful executed
+:presp.None
+:msg.Command not executed.
+:sysact.'COBOL ON' primary command ignored.
+:presp.The record format of the data set is variable or the record
+length is not 80. Edit a card-image data set with fixed records.
+:msg.Conflicting commands
+:sysact.Primary and (pending) line commands ignored.
+RPF will blank the command field and will
+issue an implicit 'RESET' to reset the pending line-commands.
+:presp.Do not enter line commands and primary
+commands other than 'F' , 'L' or 'M' together or do no enter
+conflicting line commands (like CC - CC - DD)
+:msg.COPY terminated
+:sysact.'CO' or 'MO' command ignored.
+:presp.SAVE the workspace, increase the workspace
+and re-EDIT the data set.
+:msg.Data saved
+:sysact.The workspace is successfully saved after the primary
+command 'SAVE'.
+:presp.None.
+:msg.Data set created/repl
+:sysact.The range of lines is successfully saved after the
+primary command 'CREATE'.
+:presp.None.
+:msg.Data set is empty
+:sysact.not executed, because appended data is empty.
+:presp.APPEND another data set or member.
+:msg.Data will be lost
+:sysact.Message 'Renumber 'Yes' or 'No'' appears after pressing ENTER.
+:presp.Enter 'Yes' or 'No' to renumber/not renumber.
+:msg.Date/Time cannot be added
+:sysact.No timestamp after '//* last update: ' added
+:presp.Specify at least 12 bytes after this string to contain
+the timestamp.
+:msg.Delete failed
+:sysact.'DEL' command ignored.
+:presp.Do not delete more lines, than are present
+from the start line till the end of the
+workspace. If you want to delete till
+the end of the workspace use '99999999'
+in the second operand or use the line command 'DB'.
+:msg.Enter "RETRY" or "END"
+:sysact.This message appears after the
+message 'Input convert failed'.
+:presp.Execute the indicated action.
+:msg.Enter SAVE, CANCEL or END
+:sysact.The END primary command has been given with AUTOSAVE=N. Edit
+will not terminate. SAVE will save the data, CANCEL stays in EDIT and
+END will terminate EDIT without saving (after a warning message).
+:presp.Execute indicated action or continue with EDIT.
+:msg.I/O error
+:sysact.APPEND not executed.
+:presp.Unrecoverable error. Append a different data set or member.
+:msg.Input convert failed
+:sysact.Screen not displayed. message
+'Enter "RETRY" or "END"' appears after pressing ENTER.
+:presp.Enter 'RETRY' or 'END' and contact RPF support.
+:msg.Input terminated
+:sysact.'I' command ignored.
+:presp.1. Input fewer lines or
+2. Save the workspace, increase workspace and re-EDIT the data set.
+:msg.Invalid boundaries
+:sysact.BNDS primary command ignored, set to last correct value
+:presp.Re-enter the command with right columns.
+:msg.Invalid character string
+:sysact.'C' ,'F' or 'FILL' command is ignored.
+:presp.Re-enter the command with
+a valid character string.
+:msg.Invalid characters xlated
+:sysact.Invalid characters xlated into periods.
+:presp.none.
+:msg.Invalid command
+:sysact.Command ignored.
+:presp.Enter a valid command or 'HELP' to list the commands.
+:msg.Invalid COPY range
+:sysact.'CO' or 'MO' command ignored.
+:presp.Try to copy or move a line range into that
+same range, enter a correct CO or MO command.
+:msg.Invalid line number
+:sysact.'L' command ignored.
+:presp.Line number not numeric or line number not
+:msg.Invalid scroll value
+:sysact.Scroll field reset to last value.
+:presp.The first character entered in the scroll
+value was not a 'C', 'H', 'L' or a 'P'.
+.br
+No action is needed; RPF will reset the last correct value.
+found in workspace. Enter the right line number.
+:msg.Job jjjjjjjj submitted
+:sysact.Workspace submitted.
+:presp.None
+:msg.Line x invalid
+:sysact.Command ignored.
+:presp.Enter a line number that exists in the workspace.
+:msg.Line-x not found
+:sysact.Command ignored.
+:presp.Enter the right line number in the command.
+:msg.Lines not numeric
+:sysact.Command ignored.
+:presp.One or more lines were not numeric. Enter numeric lines.
+:msg.No card image data set
+:sysact.JCL or SUB(MIT) command ignored.
+:presp.Use a data set or member with a record length of 80.
+:msg.No clipboard file
+:sysact.RPFCTPST was not allocated due to some reason.
+:presp.Check empty space on disk volumes with use attribute
+"storage" or "public" and restart RPF.
+:msg.No JOB statement found
+:sysact.Submit not executed.
+:presp.Check the job statement, add this and re-submit.
+:msg.Nothing to RETRIEVE
+:sysact.No commands retrieved. Possible the first command entered
+in the RPF session.
+:presp.none.
+:msg.Number of Lines invalid
+:sysact.Screen changes and command ignored.
+:presp.
+Trying to insert more than 999,999 lines with
+an 'I' or an 'R' primary command.
+:msg.PASTE buffer too large
+:sysact.Records of clipboard not pasted.
+:presp.Increase workspace size (option 0.1) or paste the records
+into another data set.
+:msg.PFK definition invalid
+:sysact.PFK ignored.
+:presp.The 'CON' attribute of the PFK is not
+'N', 'Y' or 'X'. redefine that PFK.
+:msg.PFK not defined
+:sysact.PFK ignored.
+:presp.Define the PFK or hit another PFK.
+:msg.Renumber 'Yes' or 'No'
+:sysact.This message appears after the
+message 'Data will be lost'.
+:presp.Execute the indicated action.
+:msg.Save rejected in VIEW
+:sysact.SAVE command and END command with changes made not executed.
+:presp.EDIT the data set or member with EDIT instead of VIEW or
+use the primary commands CREATE or REPLACE to save the data.
+:msg.SUBMIT failed
+:sysact.Submit terminated.
+:presp.Check if the 'JCL' attribute is present
+in the TSO 'SYS1.UADS' data set.
+If the JCL attribute is present, then it
+is a severe error. Contact RPF support.
+If the JCL attribute is not present, you are
+not authorized to submit jobs. Contact
+RPF support to add the JCL attribute.
+:msg.Text not found
+:sysact.'C' command is ignored.
+:presp.Re-enter the 'C' or command with a valid character string.
+:msg.Use CUT before PASTE
+:sysact.The clipboard file is empty.
+:presp.Use a CUT command to add records to the clipboard.
+:msg.Workspace not numbered
+:sysact.UNNUM primary command ignored.
+:presp.Enter the 'RENUM' primary command first before clear the last
+8 columns or columns 01-06 (COBOL mode) of the workspace
+or ignore the message.
+:msg.Workspace renumbered
+:sysact.Successful execution of RENUMBER primary command.
+:presp.None.
+:msg.Workspace too small
+:sysact.EDIT terminated. RPF returns in the data entry menu.
+:presp.Increase workspace size with the defaults menu. (option 0.1).
+:msg.xxxx changes made
+:sysact.Successful 'C' command. User will be notified
+of the number of changes made by RPF.
+:presp.None.
+:msg.xxxx lines filled
+:sysact.'FILL' primary command executed successfully.
+:presp.None.
+:msg.xxxx Lines xlated
+:sysact.'UC' or 'LC' primary command executed successfully.
+:presp.None.
+:msg.xxxx records cut
+:sysact.RPF has xxxx records written to the clipboard file
+:presp.None. Use PASTE to paste the clipboard in another data set or
+member.
+:msg.xxxx records pasted
+:sysact.The clipboard has been successfully pasted.
+:presp.None.
+:emsgl.
+:h3.EDIT hardcopy messages.
+:msgl compact.
+:msg.ACB open err. xxxxxxxx
+:sysact.Hardcopy aborted, 'ACB' cannot be opened.
+:presp.Investigate the open error code and retry.
+:msg.Alloc error xxxx PRINT
+:sysact.Hardcopy: temporary data set not allocated,
+refer to MVS Job management or z/OS MVS Programming:
+Authorized Assembler Services for the error code.
+:presp.Contact RPF support.
+:msg.Copies invalid
+:sysact.'HAR' command ignored.
+:presp.Re-enter the command with a right copy number.
+:msg.Copies not numeric
+:sysact.'HAR' command ignored.
+:presp.Re-enter the command with numeric copy number.
+:msg.Hardcopy failed xxxx
+:sysact.Hardcopy aborted, 'SEND', 'OPNDST' or 'INQUIRE'failed.
+:presp.This can be a malfunction of the printer.
+Investigate 'xxxx' (RC, FDBK2) and contact RPF support.
+:msg.Hardcopy made
+:sysact.Hardcopy executed successful.
+:presp.None.
+:msg.LU=xxxxxxxx invalid
+:sysact.'HAR' command ignored
+:presp.The printer-name specified do not exist
+in the network. Specify another printer name.
+:msg.Printer in use, retry
+:sysact.Hardcopy aborted.
+:presp.Someone else is using that printer. Wait
+for completion or specify another printer.
+:msg.VTAM cb error
+:sysact.Hardcopy aborted.
+:presp.Error caused 'GENCB' error. Contact RPF support.
+:emsgl.
+:h3.LIBRARIAN messages.
+:msgl compact.
+:msg.Alloc. error work DS
+:sysact.LIBRARIAN write function has been aborted.
+:presp.Press ENTER to return to the main
+menu and contact RPF support.
+:msg.Alloc. error xxxx on DS
+:sysact.LIBRARIAN update: Function ignored retry screen displayed.
+:presp.Refer to 'MVS/ESA Authorized Assembler Programming'
+chapter 'Dynamic allocation services' to get an explanation of the
+error code. Correct this error and retry.
+:msg.Data set not in catalog
+:sysact.LIBRARIAN update: Function ignored. Retry screen displayed.
+:presp.Specify another master file or supply the volume.
+:msg.Data set not on volume
+:sysact.LIBRARIAN update: Function ignored. Retry screen displayed.
+:presp.Specify another master file or volume.
+:msg.Invalid option
+:sysact.LIBRARIAN update: Function ignored.
+:presp.Select function 1 or 2.
+:msg.Specify Masterfile
+:sysact.LIBRARIAN update: RPF waits for action.
+:presp.Execute indicated action.
+:msg.Userid not in table
+:sysact.LIB update: Userid set in 'PGMR' field
+instead of the name of the owner of the userid.
+:presp.Contact RPF support to add an
+entry in the userid/name table (RPFLIB02).
+:emsgl.
+:h3.Archiver update messages.
+:msgl compact.
+:msg.Alloc. error work DS
+:sysact.Retry screen displayed.
+:presp.severe error, contact RPF support.
+:msg.Alloc error xxxx
+:sysact.Retry screen displayed.
+:presp.Archive cluster cannot be allocated. Specify
+another Archive cluster.
+:msg.Data set not cataloged
+:sysact.Retry screen displayed.
+:presp.Specify a cataloged Archive VSAM cluster.
+:msg.Item name is required
+:sysact.Retry screen displayed.
+:presp.enter a valid item (member) name.
+:msg.Specify Archive
+:sysact.Retry screen displayed
+:presp.Specify an Archiver VSAM cluster.
+:emsgl.
+:h3.Messages of the RPF utility processor.
+:msgl compact.
+:msg.ARCHIVER not installed
+:sysact.module ARCHIVER not found, retry menu displayed
+:presp.Install ARCHIVER (file 147 on www.cbttape.org) or specify
+another option.
+:msg.I/O error
+:sysact.Reset, PDS or SEARCH not executed.
+:presp.Examine the involved data set or select another data set.
+:msg.Invalid option
+:sysact.Function ignored.
+:presp.Select function 1-9 or X.
+:msg.Not APF Authorized
+:sysact.Output processor not executed.
+:presp.Authorize the library, where RPF resides.
+:emsgl.
+:h3.Reset ISPF/RPF messages.
+:msgl compact.
+:msg.Invalid ISPF mod level
+:sysact.Retry RESET data entry screen displayed.
+:presp.Specify a value between 00 and 99 (always enter
+2 numbers).
+:msg.Invalid ISPF version
+:sysact.Retry RESET data entry screen displayed.
+:presp.Specify a value between 01 and 99 (always enter
+2 numbers).
+:msg.Invalid new User ID
+:sysact.Retry RESET data entry screen displayed.
+:presp.Specify a new user id with the syntax of a user id.
+(starts with an alphabetic character or national character).
+:msg.S=Reset,D=Delete stats
+:sysact.None, informational message in option 3.0.
+:presp.None.
+:emsgl.
+:h3.Library Functions messages.
+:msgl compact.
+:msg.BROWSE substituted
+:sysact.Selection list set in BROWSE mode if trying to EDIT a RECFM=U
+partitioned data set.
+:presp.None.
+:msg.Invalid command
+:sysact.Command ignored.
+:presp.Enter a valid command.
+:msg.Member not found
+:sysact.'S member' command ignored
+:presp.The member selection list is invoked from option 1 (Browse).
+specify an existing member.
+:msg.No string specified
+:sysact.'L' command ignored.
+:presp.Specify a string in the 'L' primary command.
+:msg.PFK definition invalid
+:sysact.PFK ignored.
+:presp.Redefine that PFK. The 'CON' attribute of
+the PFK must be 'N', 'Y' or 'X'.
+:msg.PFK not defined
+:sysact.PFK ignored.
+:presp.Define that PFK or press another PFK.
+:msg.Truncate to xxxxx entries
+:sysact.The first xxxxx members are in the member area.
+:presp.Increase the size of the workspace
+with the defaults menu and invoke the member selection
+list again or accept this truncation.
+:emsgl.
+:h3.Data set functions messages.
+:msgl compact.
+:msg.Access denied
+:sysact.Data set not created. Rejected by a security system like
+RACF.
+:presp.Use another data set name or created an access rule.
+:msg.Allocation RC=xx Err=yyyy
+:sysact.Data set creation terminated.
+:presp.Refer for the code xxx to 'TSO Guide to writing a Terminal
+Monitor Program or a Command Processor' chapter 'Using DAIR'.
+Correct the error and retry.
+:msg.Attribute list failed
+:sysact.Data set not created.
+:presp.Contact RPF support.
+:msg.BLK not multiple of LRECL
+:sysact.Function ignored.
+:presp.Correct LRECL or BLKSIZE. This will happen if RECFM=F(B/M/A/S).
+:msg.BLKSIZE exceeds 32767
+:sysact.Function ignored.
+:presp.Decrease BLKSIZE
+:msg.BLKSIZE smaller than 18
+:sysact.Function ignored.
+:presp.Increase BLKSIZE
+:msg.Data set allocated
+:sysact.Successful allocation of a new data set.
+:presp.None.
+:msg.Data set deleted
+:sysact.Data set uncataloged and scratched.
+:presp.None.
+:msg.Data set not on DASD
+:sysact.Data set not deleted.
+:presp.Do not specify tape data sets.
+:msg.Data set already exists
+:sysact.Creation of data set ignored.
+:presp.Spefify another data set name.
+:msg.Data set not in catalog
+:sysact.Data set not deleted.
+:presp.Retry. Enter the right data set name.
+:msg.Delete rejected
+:sysact.Data set not deleted (PF03/PF15 entered on confirm screen)
+:presp.None
+:msg.Invalid LRECL
+:sysact.Function ignored.
+:presp.Specify a numeric value
+:msg.Invalid option
+:sysact.Function ignored.
+:presp.Select 'A' or 'D' on the retry menu.
+:msg.Invalid BLKSIZE
+:sysact.Function ignored.
+:presp.Specify a numeric value
+:msg.Invalid RECFM
+:sysact.Function ignored.
+:presp.Specify RECFM=F, FB, FBM, FBA, FBS, V, VB, VBM, VBA, VBS or U
+:msg.LIBRARY not specified
+:sysact.Data set creation ignored.
+:presp.Enter a 'A' in the command area and
+a library in the library area.
+:msg.LRECL exceeds 32760
+:sysact.Function ignored.
+:presp.Decrease LRECL.
+:msg.LRECL exceeds BLKSIZE
+:sysact.Function ignored.
+:presp.Correct LRECL or BLKSIZE
+:msg.LRECL smaller than 18
+:sysact.Function ignored.
+:presp.Increase LRECL
+:msg.LRECL+4 exceeds BLKSIZE
+:sysact.Function ignored.
+:presp.Correct LRECL or BLKSIZE. This will happen if RECFM=V(B/M/A)
+:msg.PREFIX not specified
+:sysact.Data set creation ignored.
+:presp.Enter a 'A' in the command area and
+a prefix in the prefix area.
+:msg.SCRATCH error data set
+:sysact.data set uncataloged, but not scratched.
+:presp.SCRATCH data set with IEHPROGM.
+:msg.Space not CYL/TRK/BLK
+:sysact.Creation of data set ignored.
+:presp.Re-specify space unit and retry.
+:msg.Space value not numeric
+:sysact.Data set creation ignored.
+:presp.Change these fields and retry.
+:msg.UNCATLG error data set
+:emsgl.
+:h3.Move/Copy messages.
+:msgl compact.
+:msg.xxxxxxx blocks copied
+:sysact.Sequential data set successfully copied.
+:presp.None.
+:msg.Access denied
+:sysact.Cursor set in data set name in error.
+:presp.Grant access or specify another data set.
+:msg.Abend xxx detected
+:sysact.Allocation menu re-displayed in case of a x37, 913 or B0A
+abend. Press ENTER to leave the MOVE/COPY menu.
+:presp.Compress the data set in case of a x37 abend, change the
+authorization profiles in case of a 913 abend or authorize the RPF
+load library in case of a B0A abend.
+.br
+Contact RPF support in case of another abend.
+:msg.Conflicting DCB parms
+:sysact.Allocation menu re-displayed.
+:presp.The RECFM of both data sets should be the same. If RECFM = F(B)
+or V(B), the LRECL should be the same. If RECFM=U, the BLKSIZE of the
+TO data set should be equal or larger than the BLKSIZE of the FROM
+data set.
+:msg.Data set allocation error
+:sysact.Allocation menu re-displayed.
+:presp.Specify a different data set name and/or volume for the
+data set in error.
+:msg.Data set name missing
+:sysact.Data entry scree re-displayed.
+:presp.Specify the data set (and volume) of both FROM and TO data sets.
+:msg.Data set not in catalog
+:sysact.Allocation menu re-displayed.
+:presp.Specify a volume or a correct data set name.
+:msg.Data set not on volume
+:sysact.Allocation menu re-displayed.
+:presp.Specify the right volume name or omit the volume if the
+data set is cataloged.
+:msg.Data set not PS or PO
+:sysact.Allocation menu re-displayed.
+:presp.Both FROM and TO data sets should be partitioned or sequential
+DSORG=PO or DSORG=PS).
+Correct the data set name in error.
+:msg.FROM and TO are the same
+:sysact.Allocation menu re-displayed.
+:presp.Specify different data sets/volumes for FROM and TO data set.
+:msg.I/O error input
+:sysact.MOVE/COPY not executed.
+:presp.Retry with another FROM data set.
+:msg.IEBCOPY error
+:sysact.Browse invoked to browse the SYSPRINT output of IEBCOPY and
+allocation menu re-displayed afterwards.
+:presp.IEBCOPY had a non-zero return code during copy of all members.
+See the IEBCOPY output.
+:msg.Invalid command
+:sysact.Command ignored.
+:presp.Enter a valid command.
+:msg.No members in FROM data
+:sysact.Allocation menu re-displayed.
+:presp.Do not specify empty partitioned data sets.
+:msg.No string specified
+:sysact.'L' command ignored.
+:presp.Specify a string in the 'L' primary command.
+:msg.PFK definition invalid
+:sysact.PFK ignored.
+:presp.Redefine that PFK. The 'CON' attribute of
+the PFK must be 'N', 'Y' or 'X'.
+:msg.PFK not defined
+:sysact.PFK ignored.
+:presp.Define that PFK or press another PFK.
+:msg.REPLACE not YES or NO
+:sysact.Allocation menu re-displayed.
+:presp.Correct this value
+Specify a valid 'string'.
+:msg.xxxxx members copied/moved
+:sysact.Allocation menu re-displayed
+:presp.None
+:emsgl.
+:h3.VTOC and data set list messages.
+:msg.Invalid command
+:sysact.Command ignored.
+:presp.Enter a valid command.
+:msg.Invalid option
+:sysact.Function ignored.
+:presp.Select function '1', '2' or 'V'.
+:msg.Invalid PARM
+:sysact.Retry screen displayed
+:presp.Specify PARM=SHORT, LONG or VOL and re-enter.
+:msg.No data sets found
+:sysact.Retry screen displayed
+:presp.No data sets found in the catalog with this level, specify
+a different level.
+:msg.PFK definition invalid
+:sysact.PFK ignored.
+:presp.Redefine that PFK. The 'CON' attribute of
+the PFK must be 'N', 'Y' or 'X'.
+:msg.PFK not defined
+:sysact.PFK ignored.
+:presp.Define that PFK or press another PFK.
+:msg.No string specified
+:sysact.'L' command ignored.
+:presp.Specify a string in the 'L' primary command.
+:msg.Volume not available
+:sysact.Function ignored.
+:presp.Specify an ONLINE volume.
+:msg.Volume not specified
+:sysact.Function ignored.
+:presp.Specify volume or exit (PF03/PF15)
+:msg.VTOC running...
+:sysact.The keyboard is locked and RPF is busy with
+reading the VTOC
+:presp.Wait for completion.
+:emsgl.
+:h3.LIBRARIAN maintenance messages.
+:msgl compact.
+:msg.Enter locate string
+:sysact.RPF waits for indicated action.
+:presp.Specify locate string (1 or more characters)
+:msg.Error in read, CODE= x
+:sysact.LIBRARIAN read aborted
+:presp.Refer for code 'x' to the LIBRARIAN
+documentation (LIB FAIR codes). Correct the error and retry.
+:msg.Invalid command
+:sysact.Command ignored.
+:presp.Enter a valid command.
+:msg.Module not on master
+:sysact.LIBRARIAN read: function ignored.
+:presp.None.
+:msg.Open error code= x
+:sysact.LIBRARIAN maintenance aborted,
+RPF will return to utility menu.
+:presp.Refer for code 'x' to the LIBRARIAN
+documentation (LIB FAIR codes). Correct the error and retry.
+:msg.PFK definition invalid
+:sysact.PFK ignored.
+:presp.Redefine that PFK. The 'CON' attribute of
+the PFK must be 'N', 'Y' or 'X'.
+:msg.PFK not defined
+:sysact.PFK ignored.
+:presp.Define that PFK or press another PFK.
+:msg.Specify Masterfile
+:sysact.RPF waits for action.
+:presp.Specify a valid LIBRARIAN master file.
+:emsgl.
+:h3.SEARCH messages.
+:msgl compact.
+:msg.Alloc error xxxx PRINT
+:sysact.SEARCH: temporary data set not allocated,
+refer to MVS Job management or z/OS MVS Programming:
+Authorized Assembler Services for the error code.
+:presp.Contact the RPF builders.
+:msg.Ignore case not Y or N
+:sysact.waits for the correct response.
+:presp.specify the correct value.
+:msg.Open data set failed
+:sysact.Severe error, contact the RPF builders.
+:presp.Contact the RPF Builders.
+:msg.Skip numbers not Y/C/N
+:sysact.waits for the correct response.
+:presp.specify the correct value.
+:emsgl.
+:h3.Archiver maintenance message
+:msgl compact.
+:msg.<ddname> alloc error.
+:sysact.Retry screen displayed.
+:presp.Look if <ddname> is already allocated onto the TSO session.
+If allocated, use the FREE command to free that dd-name.
+:msg.Confirm not ' ' or /
+:sysact:Confirm value ignored.
+:presp:Specify the correct value.
+:msg.Data set not cataloged
+:sysact.Retry screen displayed.
+:presp.Specify a cataloged Archive VSAM cluster
+:msg.Enter locate string
+:sysact.RPF waits for indicated action.
+:presp.Specify locate string (1 or more characters).
+:msg.Invalid command
+:sysact.none, command ignored
+:presp.Enter a valid command.
+:msg.No items meet criteria
+:sysact.data entry screen redisplayed.
+:presp.Specify filters to meet the criteria.
+:msg.PFK definition invalid
+:sysact.PFK ignored.
+:presp.Redefine that PFK. The 'CON' attribute of
+the PFK must be 'N', 'Y' or 'X'.
+:msg.PFK not defined
+:sysact.PFK ignored.
+:presp.Define that PFK or press another PFK.
+:msg.Specify Archive
+:sysact.Retry screen displayed.
+:presp.Specify an Archiver VSAM cluster
+:emsgl.
+:h3.Assembler monitor messages.
+:msgl compact.
+:msg.Alloc. error work data
+:sysact.Assembler screen exited.
+:presp.Severe error. press ENTER to return to the
+main menu and contact RPF support.
+:msg.Allocation RC=xxxx
+:sysact.Assembler redisplayed and cursor set in source lib field.
+:presp.See chapter 12.13 the message 'Allocation
+Failed RC= xxxx' for the returncode.
+Re-enter the source lib and/or member depending on the returncode.
+:msg.Data set name missing
+:sysact.Retry screen displayed.
+:presp.Specify an existing source library.
+:msg.Data set not in catalog
+:sysact.Retry screen displayed.
+:presp.Specify an existing maclib, source library, include
+library, object library or load library.
+:msg.DS (x) SAME AS DS (y)
+:sysact.RPF stops processing, sets cursor in the
+DSNAME (y) field and waits for action.
+:presp.Specify a different data set name.
+:msg.DYNALLOC error SYSLIB
+:sysact.SYSLIB concatenation not allocated.
+:presp.Severe error. press ENTER to leave the
+assembler screen and contact RPF support.
+:msg.IEWL     running..
+:sysact.RPF locks the keyboard and RPF has invoked
+the linkage editor.
+:presp.Wait for completion.
+:msg.Invalid key pressed
+:sysact.All input ignored.
+:presp.Hit only the ENTER, PF03 or PF15 key
+:msg.Member not found
+:sysact.Assembler redisplayed and cursor set in source lib field.
+:presp.Specify an existing member
+:msg.nnnnnnnn abended ccc
+:sysact.Assembler screen exited.
+:presp.The assembler or linkage editor had abended. Press ENTER
+to return to the main menu.
+:msg.nnnnnnnn not found
+:sysact.Assembler screen exited.
+:presp.Press Enter and go to option 0.1 to specify a different
+assembler program name.
+:msg.nnnnnnnn running..
+:sysact.RPF locks the keyboard and RPF has invoked
+the assembler with program name 'nnnnnnnn'.
+:presp.Wait for completion.
+:msg.No card image data set
+:sysact.Retry screen displayed.
+:presp.Specify a source library with a record length of 80.
+:msg.Rc ASM= xx (RC lkd= xx)
+:sysact.assembler (and linkage editor) executed.
+:presp.press ENTER to browse the output.
+:msg. Rc=xx Err=xxxx on (x)
+:sysact.RPF waits for response of the user
+and set the cursor on the DSNAME in error (DSNAME (x))
+:presp.Refer for the return code and error code to manual 'Writing
+a terminal monitor program or a command processor'
+.br
+Change the dsname field '(x)' and press
+ENTER or escape with the 'END' command.
+:msg.Rc=xxxx Attribute lst
+:sysact.Normally this should not occur. Assembler screen re-displayed.
+:presp.Issue TSO command FREE FILE(ASMMACLB) to circumvent this
+problem.
+:emsgl.
+:h3.TSO command processor messages.
+:msgl compact.
+:msg.Command name syntx err
+:sysact.Input ignored (syntax error IKJSCAN).
+:presp.Enter a right command name
+:msg.Command not supported
+:sysact.Command ignored.
+:presp.This TSO command does not exist or is not
+authorized. enter a valid command.
+:msg.Invalid command name
+:sysact.Input ignored (IKJSCAN)
+:presp.Do not enter only TSO command separators
+:msg.RPF-TSO: Abended completion code=xxx
+:sysact.Abend detected in the TSO command processor,
+recovery successful.
+:presp.Contact RPF support (severe error).
+:msg.RPF-TSO: ATTACH for processor failed
+:sysact.Severe error. will be recovered.
+:presp.Contact RPF support.
+:msg.RPF-TSO: Command abended CC= xxx
+:sysact.Abend detected in a TSO command,
+recovery successful
+:presp.If the code is severe (like 0Cx abends)
+contact RPF support.
+:msg.RPF-TSO: Command not found
+:sysact.None, BLDL failed
+:presp.Enter a valid TSO command
+:msg.RPF-TSO: Interrupt received
+:sysact.Recovered from 'ATTENTION' interrupt
+:presp.Press ENTER to continue
+:msg.RPF-TSO: Ready
+:sysact.TSO command executed.
+:presp.Press ENTER to continue.
+:emsgl.
+:h3.RPF HELP messages:
+:msgl compact.
+:msg.Alloc. error work data
+:sysact.No HELP members displayed.
+:presp.Severe error. Report this to RPF support.
+:msg.Invalid option
+:sysact.Function ignored.
+:presp.Select function 0-9 or X.
+:msg.No member RPFHELP. (. = 1,2,3,4,5)
+:sysact.Function ignored.
+:presp.Copy the members RPFHELP1, RPFHELP2, RPFHELP3, RPFHELP4 and
+RPFHELP5 to an HELP library, which is present in the //SYSHELP
+DD-statement in the TSO logon procedure, or concatenate the
+RPF HELP library on the //SYSHELP DD-statement.
+:emsgl.
+:h3.Data entry, PFK and SAVE messages.
+:msgl compact.
+:msg.Abend ccc detected.
+:sysact.abend caused by an OPEN abend. processing ignored.
+:presp.Refer to the System Codes manual for an explanation
+of the completion code 'ccc'.
+:msg.Access denied.
+:sysact.Function ignored on the retry screen.
+:presp.specify another data set or create an access rule in
+the security system.
+:msg.Alloc failed, Rc= xxxx
+:sysact.Entry screen and SAVE: retry screen displayed.
+:presp.
+:ul c.
+:li.If rc=12, allocation error, possible errors
+can be: 1. Data set allocated to another user
+with DISP=OLD, MOD or NEW. 2. Invalid data set
+name. 3. Required volume not mounted.
+correct the problems and retry.
+:li.If rc=16, the data set cannot be unallocated.
+this is a severe error. contact RPF support.
+:li.If rc=20, specify a data set with a record length of
+255 or less and a RECFM of F(B) or V(B)
+(edit, save and browse).
+:li.If rc=28, enter a data set with DSORG=PS or PO.
+:li.If rc=36, the authorization is failed, access has been
+rejected by a security system like RACF.
+:eul.
+:msg.ARCHIVER not installed
+:sysact.module ARCHIVER not found
+:presp.Install ARCHIVER (file 147 on www.cbttape.org)
+:msg.Confirm not ' ' or /
+:sysact.Confirm value ignored.
+:presp.Specify the correct value.
+:msg.Data set name missing
+:sysact.Data set entry and SAVE: retry screen displayed.
+:presp.Specify an existing data set (and volume).
+:msg.Data set not in catalog
+:sysact.Entry screen and SAVE: menu re-displayed.
+:presp.Specify a cataloged data set or specify a volume.
+:msg.Data set not on volume
+:sysact.Entry screen and SAVE: menu re-displayed.
+:presp.Specify an existing data set.
+:msg.Data set not partitioned
+:sysact.Data set entry: retry screen displayed.
+:presp.Specify a partitioned data set for option 3.0 or 3.1.
+:msg.Data set/member in use
+:sysact.SAVE: retry screen displayed and save
+ignored, because the same data set and
+member is processed by an RPF of another TSO user
+:presp.Wait for availability of the ds/member or
+save the data in another member or data set.
+:msg.I/O error
+:sysact.Data set not edited or saved, BLDL fails with RC=8.
+:presp.Repair data set or specify another data set.
+:msg.Invalid member name
+:sysact.SAVE not executed, retry screen displayed.
+:presp.Enter a valid member name.
+:msg.Invalid option
+:sysact.Function ignored on the retry screen.
+:presp.Select one of the functions displayed on the screen.
+:msg.Invalid record length
+:sysact.Data set or member not processed.
+:presp.EDIT a data set or member with a LRECL of at least 40
+and no more than 255.
+:msg.LIBRARIA not installed
+:sysact.module LIBRARIA not found, retry menu displayed.
+:presp.Install LIBRARIAN or specify another option.
+:msg.LRECL input > output
+:sysact.Save not executed, retry screen displayed.
+:presp.Specify a data set with a LRECL equal or larger than
+the input data set to avoid truncation of data.
+:msg.Member not found
+:sysact.Data set entry and SAVE: retry screen displayed.
+:presp.Specify an existing member.
+:msg.Member xxxxxxxx exists
+:sysact.SAVE: retry screen displayed.
+:presp.
+:ol.
+:li.Enter '2' to reuse the member.
+:li.Enter '1' and change the allocations
+to save in another data set or member.
+:li.Press PF03/PF15 to abort the save.
+:eol.
+:msg.PFK's RESET
+:sysact.Changes of PFKs executed.
+:presp.None.
+:msg.TEMPRPF restricted
+:sysact.Save not executed, retry screen displayed.
+:presp.Enter another member name. (TEMPRPF is used
+in the internals of RPF).
+:msg.Workspace empty
+:sysact.Edit current workspace not executed.
+:presp.None.
+:emsgl.
+:h2.Module list and installation requirements.
+:h3.Module list.
+:p.
+See :tref refid=tbl1 for the module list.
+:rdef id=rpf1 arrange='1 2 3 4' hp=0  align='l l c l'
+      cwidths='15 *' mindepth=1.
+:rdef id=rpf1h arrange='1 2 3 4' hp=2 align='l l c l'
+      cwidths='15 *' mindepth=2.
+:table refid=rpf1 id=tbl1 split=yes.
+:tcap.Module list
+:thd   refid=rpf1h.
+:c 1.Module
+:c 2.Function
+:c 3.AMODE
+:c 4.Attributes
+:ethd.
+:row   refid=rpf1.
+:c 1.RPFMAIN
+:c 2.RPF Main processor (alias RPF)
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFALLOC
+:c 2.RPF data set functions
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFARCH
+:c 2.Archiver maintenance processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFARSVE
+:c 2.Save member or data set into Archiver cluster
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFASM00
+:c 2.ISPF interface for RPF foreground assembly and link
+:c 3.24
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFASM
+:c 2.RPF Assembler and Linkage editor processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:C 1.RPFBRO
+:c 2.BROWSE processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFCHNG
+:c 2.Module to process the 'C' command
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFCNVDT
+:c 2.Module to convert a Julian date to a Gregorian date
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFC3270
+:c 2.Module to compress the 3270 data stream in EDIT and Browse
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFDAIR
+:c 2.RPF Dynamic allocation processor
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFDATAL
+:c 2.Allocation menu for EDIT and utility functions
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFDEF
+:c 2.Session defaults processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFDOC
+:c 2.Add timestamp after //* LAST UPDATE:
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFED
+:c 2.RPF Browse/Edit/RESET/PDS TSO command processor with
+aliasses RPFBR, RPFPD and RPFST
+:c 3.24 or 31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFEDIT
+:c 2.The RPF EDIT processor
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFEDITL
+:c 2.Load data set in EDIT workspace
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFEND
+:c 2.RPF clean up routine
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFFILL
+:c 2.Module for the 'FILL', 'UC' and 'LC' primary command
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFFIND
+:c 2.Module for the 'F' primary command.
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFHCPY
+:c 2.RPF hardcopy processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFHELP
+:c 2.RPF HELP processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFINIT
+:c 2.Housekeeping of RPF
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFJCL1
+:c 2.JCL checking routine part 1
+:c 3.31
+:c 4.
+:erow.
+:row.
+:c 1.RPFJCL2
+:c 2.JCL checking routine part 2
+:c 3.31
+:c 4.
+:erow.
+:row.
+:c 1.RPFLIB
+:c 2.LIBRARIAN maintenance (inc. LIBFAIR)
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFLIB01
+:c 2.LIBRARIAN update processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFLIB02
+:c 2.Userid/name table for RPFLIB01
+:c 3.24
+:c 4.
+:erow.
+:row.
+:c 1.RPFLISTC
+:c 2.Search the catalog for a certain data set level
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFMVCPY
+:c 2.RPF Move/Copy processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFOPER
+:c 2.RPF Operator mode
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFOUT
+:c 2.The output processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:row.
+:c 1.RPFPDS
+:c 2.Library processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFPFK
+:c 2.PFK definition processor
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFSAVE
+:c 2.SAVE workspace processor
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFSRCH
+:c 2.Search data set processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFSTAT
+:c 2.RPF session status
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFSUB
+:c 2.RPF job submitter
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFTEST
+:c 2.RPF TEST processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFTSO
+:c 2.RPF TSO command processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFUTIL
+:c 2.RPF utility menu
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFV
+:c 2.TSO command processor to create a DSLIST.
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFVTOC
+:c 2.VTOC read processor
+:c 3.31
+:c 4.RENT, REUS
+:erow.
+:row.
+:c 1.RPFVTOC1
+:c 2.VTOC data set selection list processor
+:c 3.N/A
+:c 4.RENT, REUS
+:erow.
+:etable.
+:note.Notes
+:ul c.
+:li.The modules with AMODE N/A are loaded and called, so the
+addressing mode will be inherited from the caller.
+:li.All the RPF programs are written in Assembler-XF.
+:li.RPF uses 11 user macros and 3 copy members:
+:ol c.
+:li.CALLTS:   general IKJDAIR execution routine (copy code).
+:li.CSR:      convert SBA to row/column,
+:li.DSNPARS:  copy member to parse the data set names (copy code).
+:li.JCLCOMM:  used in the JCL processor,
+:li.RCTOSBA:  calculatie a row/column to SBA,
+:li.RPFCOMM:  macro to define the RPF common area,
+:li.RPFPROF:  mapping macro of the @RPFPROF member,
+:li.RPFSA24:  conditional switch to AMODE 24 and
+:li.RPFSA31:  conditional switch to AMODE 31.
+:li.RPFSORT:  sort the EDIT workspace on a certain field.
+:li.SUBR:     call subroutines in RPFJCL1.
+:li.SYCONVHX: the convert hex to EBCDIC macro,
+:li.SYSVARS:  contains environment variables. Examine this
+member and change the values according your environment.
+This is only needed if you assemble the sources.
+:li.TPUTS:    copy code for terminal I/O.
+:eol.
+:li.Special for MVS38J and MVS/380 user's, 2 dummy macros called
+AMODE and RMODE are made to get correct assemblies with the
+Assembler-XF. If Assembler-H (IEV90) or HL-ASM (ASMA90) are used,
+do not use these macros.
+:li.For MVS38J and MVS/380 user's, 2 modified macros (GETMAIN and
+IHBOPLST) are made. You can copy these macros to SYS1.MACLIB, use
+job COPYMAC in the RPF JCL library. See chapter below.
+.br
+A better way is to include RPF.V200.MACLIB (rpf200s1.zip) as first
+library in the SYSLIB concatenation of the assembly of RPF
+(MVS38J only).
+.br
+The modifications on GETMAIN and IHBOPLST are made by Paul Edwards.
+:eul.
+:h3.Installation and requirements.
+:p.
+RPF will be distributed as 7 zipped XMI data sets. You will find
+these files on www.prince-webdesign.nl/rpf.
+:ul c.
+:li.File 1. rpf200mv.zip, the MVS38J and MVS380 load modules.
+:li.File 2. rpf200os.zip, the OS/390 and z/OS load modules.
+:li.File 3. rpf200he.zip, the RPF HELP library.
+:li.File 4. rpf200jc.zip, the RPF JCL library.
+:li.File 5. rpf200as.zip, the RPF source library.
+:li.File 6. rpf200pn.zip, the RPF ISPF panels.
+:li.File 7. rpf200s1.zip, the RPF macro library (for MVS38J and
+MVS380 only).
+:li.File 8. rpf200svas.zip, the RPF source library for OS/VS2 rel. 1
+(SVS).
+:li.File 9. rpf200vsld.zip, the SVS load modules
+:eul.
+:p.
+Files 1-4 are required to install RPF. Files 5 and 6 are optional.
+:p.
+After unzip, the files should be uploaded to your system with
+IND$FILE. After upload use the utility $RECV370 or the TSO command
+RECEIVE INDATASET.
+.br
+For Hercules or Hyperion user's, the dasdload function is
+available.
+:p.
+A sample of a RECV370 job is below:
+:fig place=inline frame=box concat=no.
+:xmp.
+//LOADRPF  JOB 01,'RPF LOAD',REGION=2048K,MSGCLASS=X,CLASS=A
+//RECV370 EXEC PGM=RECV370
+//STEPLIB  DD  DISP=SHR,DSN=load-lib-of-RECV370
+//XMITPRT  DD  SYSOUT=*
+//RECVLOG  DD  SYSOUT=*
+//*
+//XMITIN   DD  DISP=SHR,DSN=uploaded-XMI-file
+//SYSPRINT DD  SYSOUT=*
+//SYSIN    DD  DUMMY
+//SYSUT1   DD  DSN=&&SYSUT1,
+//             UNIT=SYSALLDA,
+//             SPACE=(CYL,(8,4),RLSE),
+//             DISP=(,DELETE)
+//SYSUT2   DD  DSN=RPF-library,
+//             UNIT=SYSALLDA,VOL=SER=vvvvvv,
+//             SPACE=(CYL,(8,4,25),RLSE),
+//             DISP=(,CATLG)
+:exmp.
+:figcap.Sample RECV370 job.
+:efig.
+:p.
+An alternative way to install RPF is obtaining RPF from
+www.cbttape.org. RPF is available in file 415 and will be
+distributed as 1 zipped XMIT file, which can be obtained with
+a Hyperion/Hercules dasdload function, with the RECV370 utility
+of Jim Morrison (file 571 on www.cbttape.org) or with the TSO/E
+RECEIVE INDATASET command.
+After obtaining file 415, read the member @INSTALL carefully.
+:p.
+The job below is optional.
+:ul c.
+:li.Member AMODE31 in the JCL library to set the correct
+correct addressing mode. This job is optional. Run this job
+against SYS2.CMDLIB.
+:eul.
+:h3.TSOKEYxx in SYS1.PARMLIB
+:p.
+RPF needs the following minimum buffers in member TSOKEYxx in
+SYS1.PARMLIB:
+.br
+HIBFREXT=16384
+.br
+LOBFREXT=8192
+:h3.SMS support and Indexed VTOC's
+:p.
+RPF has the possibility to support indexed VTOC's and some SMS
+facilities like PDS/E support and large volumes in OS/390
+and z/OS systems.
+.br
+Use the file rpf200os.zip to install the OS390 or z/OS load modules.
+With this support the package RPF/E has become obsolete.
+:p.
+If using indexed VTOC's in older systems like MVS/XA with DFP
+installed, no large volumes are supported.
+.br
+Update member SYSVARS in the source library and set the variables
+&SMS and &LARGE both to 0. Assemble and link RPFVTOC afterwards.
+RPFVTOC should be linked with the RENT attribute.
+:p.
+After RPF has been installed into SYS2.CMDLIB or equivalent with
+job $CMDLIB in the JCL library, you can delete the optional
+data sets if you wish:
+:ol c.
+:li.RPF.V200.ASM
+:li.RPF.V200.LOAD or RPF.V200.ZOS.LOAD
+:li.RPF.V200.JCL
+:li.RPF.V200.MACLIB
+:eol.
+:p.
+Start RPF on your TSO terminal and enter option 3.4 (data set list)
+and specify 'RPF' (without quotes) in the PREFIX field.
+Place a D before the data set name (and confirm the deletion with
+PF12 of PF24).
+:h3.Other requirements.
+:p.
+All the RPF modules can be assembled and linked separately.
+:p.
+The default unitname of existing not-cataloged data sets is SYSALLDA.
+The default unitname of newly created and temporary workdata sets is
+SYSDA. These defaults can be changed by applying the following ZAP
+:fig place=inline frame=box concat=no.
+:xmp.
+//ZAPUNIT  JOB (acct),pgmr
+//ZAP01   EXEC PGM=AMASPZAP,PARM='IGNIDRFULL'
+//SYSPRINT DD  SYSOUT=*
+//SYSLIB   DD  DSN=rpf.loadlib,DISP=SHR
+//SYSIN    DD  *
+ NAME RPFMAIN COMMAREA
+ VER 0018 E2E8E2C4C1404040               * C'SYSDA   '
+ REP 0018 ................               * replacement of SYSDA
+ VER 0020 E2E8E2C1D3D3C4C1               * C'SYSALLDA'
+ REP 0020 ................               * replacement of SYSALLDA
+/*
+:exmp.
+:figcap.Changing defaults
+:efig.
+The module RPFLIB needs the file access interface
+routines of the LIBRARIAN package.
+Upon link edit of RPFLIB the following modules should be
+included from the LIBRARIAN loadlibrary:
+1. FAIROPN.  2. FAIRMOD.  3. FAIRREC.  4. FAIRCLS.
+:p.
+:lblbox.Note
+The RPF common area can be mapped, by using the 'RPFCOMM'
+macro.
+:elblbox.
+:p.
+If you want to use the HAR primary command of RPF, then include
+the application 'RPFHCPY' in application major node of your
+VTAM definition library.
+Example how to define RPFHCPY follows below:
+:fig place=inline frame=box concat=no.
+:xmp.
+RPFHCPY APPL AUTH=(ACQ) /* HAR COMMAND OF RPF */
+:exmp.
+:figcap.define RPFHCPY
+:efig.
+In the main menu (option 5) is a user exit available:
+The name of the exit should be RPFUSER1.
+Each function in RPFUSER1 is allowed; e.g. filling the workspace,
+link and call other RPF-routines.
+The entry points of the following RPF routines are available
+The entry points can be found in the 'RPFCOMM' area.
+:ol c.
+:li.RPFEDIT (field named EPEDIT)
+:li.RPFDATAL (field named EPDATAL)
+:li.RPFDAIR (field named EPDAIR)
+:li.RPFCHNG (field named EPCHNG)
+:li.RPFFILL (field named EPFILL)
+:li.RPFFIND (field named EPFIND)
+:li.RPFEDITL (field named EPEDITL)
+:li.RPFPFK   (field named EPPFK)
+:li.RPFSAVE (field named EPSAVE)
+:li.RPFSUB  (field named EPSUB)
+:li.RPFUTIL (field named EPUTIL)
+:li.RPFVTOC1 (field named EPVTOC1)
+:li.RPFC3270 (field named EPC3270)
+:li.RPFCNVDT (field named EPCNVDT)
+:eol.
+The other RPF routines can be obtained by the 'LINK' macro
+In register 1 in RPFUSER1 is placed an address of a fullword,
+which contains the address of the 'RPFCOMM' area, which can be
+mapped by using the 'RPFCOMM' macro.
+It is recommended to use reg 11 as the address of the 'RPFCOMM'
+area and to use reg 13 as the base register.
+If you want to give a message in the RPF main menu upon exit of the
+RPFUSER1 routine, you can place a 25 byte message in field 'COMMPRM'
+of the 'RPFCOMM' area.
+If you have no RPFUSER1 exit in your installation, RPF will ignore
+the exit accompanied with the message:
+'RPFUSER1 not found'
+:p.
+Example how to write the exit.
+:fig place=inline frame=box concat=no.
+:xmp.
+RPFUSER1 CSECT
+         BALR   15,0                Clean Entry Point register
+         USING  *,15                Get temporary addressability
+         SAVE   (14,12),,*          Save registers
+         LA     11,SAVEAREA         Get save area
+         ST     11,8(0,13)          Forward pointer chain
+         ST     13,SAVEAREA+4       Backward pointer chain
+         LR     13,11               Pickup save ares
+         B      START               Branch around save area
+         DS     0F
+SAVEAREA DC     18F'-1'             Declaration of the save area
+START    DS     0H
+         DROP   15                  Kill temporary addressability
+         USING  SAVEAREA,13         Use register 13 as base
+         L      11,0(1)             Pickop parameter
+         USING  COMMAREA,11         Address 'RPFCOMM' area
+         ...                        )
+         ...                        )   Your own coding
+         ...                        )
+         ...                        )
+         LINK   EP=RPFPDS,PARAM=((11))  (example how to link)
+         ...
+         L      15,EPEDIT
+         CALL   (15),((11))        Example how to call RPF modules
+         ...
+COMMAREA RPFCOMM ,                  RPFCOMM dsect
+         END
+:exmp.
+:figcap.Example how to write the exit
+:efig.
+:p.Example how to define the RPF profile data set. You will
+find this job in member $PROFILE in the RPF JCL data set.
+Run this job only if you install RPF for the first time.
+If IBM's ISPF or Wally's ISPF is installed, skip this job.
+:fig place=inline frame=box concat=no.
+:xmp.
+//PROFILE  JOB 01,RPF,CLASS=A,MSGCLASS=X,REGION=0K,NOTIFY=Z531415
+//*********************************************************************
+//*
+//* DESC: INSTALL RPF PROFILE DATA SET.
+//*
+//*********************************************************************
+//PROFILE EXEC PGM=IEFBR14
+//PROFILE  DD  DSN='UserID'.ISP.PROF,UNIT=SYSDA,
+//             SPACE=(CYL,(1,,5)),DISP=(NEW,CATLG),
+//             DCB=(RECFM=FB,LRECL=80,BKSIZE=multiple of 80)
+:exmp.
+:figcap.Example how to define the RPF profile data set
+:efig.
+.br
+The name of the profile data set should be specified in the //ISPPROF
+DD-statement in the TSO logon procedure or allocated with the
+TSO ALLOCATE command (in the startup CLIST).
+:p.
+RPFLIB01 (the LIBRARIAN update processor)
+loads the module RPFLIB02 if present.
+RPFLIB02 refers to a table, which contains userid/name
+entries. This module should be update according your own company,
+you should specify the names of all the inhouse TSO-userids.
+A skeleton member called RPFLIB02 is added on the installation tape
+each entry in RPFLIB02 consist of a 7 byte userid and a 15 byte
+name field.
+:p.
+:lblbox.Note
+use no blanks inside the name field, except trailing blanks.
+an example how to use RPFLIB02 follow below:
+:elblbox.
+:p.
+:fig place=inline frame=box concat=no.
+:xmp.
+RPFLIB02  CSECT                                               *)
+*                                                             *)
+*         LICENSED MATERIAL (C)-2025 Skybird Systems          *)
+*                                                             *)
+$LENGTH   EQU  22          LENGTH OF ENTRY                    *)
+$ENTRIES  DC   A(($STOP-$START)/$LENGTH)  NUMBER ENTRIES      *)
+          DC   CL7'TSOUSER',CL15'CHARLIE.TSO    '
+          DC   CL7'IBMUSER',CL15'JOHN.CE        '
+$LAST     DC   22X'FF'      SHOULD BE THE LAST ENTRY          *)
+$STOP     EQU  *                                              *)
+          END                                                 *)
+:exmp.
+:figcap.RPFLIB02
+:efig.
+:p.
+:lblbox.Note
+The statements flagged with a '*)' are in the skeleton deck.
+:elblbox.
+:h2.RPF default PFKs and workspace size.
+:p.
+The default PFKs contain the following commands:
+:rdef id=rpf2 arrange='1 2 3' hp=0  align='l l c'
+      cwidths='15 48 10' mindepth=1.
+:rdef id=rpf2h arrange='1 2 3' hp=2 align='l l c'
+      cwidths='15 48 10' mindepth=2.
+:table refid=rpf2 id=tbl2 split=yes.
+:tcap.Default Program Function Keys
+:thd   refid=rpf2h.
+:c 1.PFK :c 2.Command :c 3.CON
+:ethd.
+:row refid=rpf2.
+:c 1.01  :c 2.HELP :c 3.N
+:erow.
+:row.
+:c 1.02 :c 2.not-defined :c 3.X
+:erow.
+:row.
+:c 1.03 :c 2.END SAVE :c 3.Y
+:erow.
+:row.
+:c 1.04 :c 2.RETURN :c 3.N
+:erow.
+:row.
+:c 1.05 :c 2.FIND :c 3.N
+:erow.
+:row.
+:c 1.06 :c 2.not defined:c 3.X
+:erow.
+:row.
+:c 1.07 :c 2.UP  :c 3.N
+:erow.
+:row.
+:c 1.08 :c 2.DOWN:c 3.N
+:erow.
+:row.
+:c 1.09 :c 2.not defined :c 3.X
+:erow.
+:row.
+:c 1.10 :c 2.LEFT:c 3.N
+:erow.
+:row.
+:c 1.11 :c 2.RIGHT:c 3.N
+:erow.
+:row.
+:c 1.12 :c 2.RETRIEVE :c 3.N
+:erow.
+:row.
+:c 1.13  :c 2.HELP :c 3.N
+:erow.
+:row.
+:c 1.14 :c 2.not-defined :c 3.X
+:erow.
+:row.
+:c 1.15 :c 2.END SAVE :c 3.Y
+:erow.
+:row.
+:c 1.16 :c 2.RETURN :c 3.N
+:erow.
+:row.
+:c 1.17 :c 2.FIND :c 3.N
+:erow.
+:row.
+:c 1.18 :c 2.not defined :c 3.X
+:erow.
+:row.
+:c 1.19 :c 2.UP  :c 3.N
+:erow.
+:row.
+:c 1.20 :c 2.DOWN:c 3.N
+:erow.
+:row.
+:c 1.21 :c 2.not defined :c 3.X
+:erow.
+:row.
+:c 1.22 :c 2.LEFT:c 3.N
+:erow.
+:row.
+:c 1.23 :c 2.RIGHT:c 3.N
+:erow.
+:row.
+:c 1.24 :c 2.RETRIEVE :c 3.N
+:erow.
+:etable.
+:p.
+The default workspace size=7,000 lines.
+.br
+:lblbox.Note
+All these defaults can be overruled by the user.
+Select '0' on the main menu to change the defaults.
+.br
+The defaults for the user are written on the RPF
+profile data set if available.
+:elblbox.

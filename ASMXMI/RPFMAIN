@@ -1,0 +1,1208 @@
+         PUNCH ' ALIAS RPF'
+         PUNCH ' SETCODE AC(1)'
+RPFMAIN  TITLE 'R P F  FULLSCREEN TSO COMMAND PROCESSOR'
+*---------------------------------------------------------------------*
+*                                                                     *
+*       Program:        RPFMAIN.                                      *
+*       Alias:          RPF.                                          *
+*       Attributes:     RENT, REUS.                                   *
+*                                                                     *
+*       Function:       RPF is a TSO command processor, which will    *
+*                       give you full screen support on your TSO      *
+*                       terminal.                                     *
+*                       The functions of RPF are:                     *
+*                       01. Edit and change source data on your screen*
+*                       02. Browse source data, output listing or     *
+*                           load modules                              *
+*                       03. Invoke Library Functions. (Like DELETE,   *
+*                           RENAME, VIEW or EDIT PDS members)         *
+*                       04. Display HELP information about RPF        *
+*                       05. Foreground assembly and link              *
+*                       06. Data set creation and deletion            *
+*                       07. OPER mode (Display the running tasks in   *
+*                           the system)                               *
+*                       08. TEST function (authorized) test the logic *
+*                           of RPF (RPF test is made only for the     *
+*                           builders of RPF).                         *
+*                       09. Perform VTOC functions.                   *
+*                       10. Data set selection list                   *
+*                       11. Alter/Display session defaults            *
+*                       12. LIBRARIAN maintenance (Edit, delete ad    *
+*                           copy LIBRARIAN modules (option 3.5).      *
+*                       14. Execute TSO commands                      *
+*                       15. Reset or Delete ISPF statistics.          *
+*                       16. Search strings in data sets.              *
+*                       17. Invoke the ARCHIVER (file 147 on          *
+*                           cbttape.org), process the items in the    *
+*                           Archiver VSAM cluster.                    *
+*                       18. Invoke RPFUSER1 exit                      *
+*                                                                     *
+*        Processor:     OS/VS Assembler or HL-assembler               *
+*        Environment:   OS/VS2 TSO/VTAM                               *
+*        Control Block: RPFCOMM which should be passed via reg.1 to   *
+*                       the RPF modules.                              *
+*                       The base register or RPFCOMM is register 11   *
+*        User exit:     RPFUSER1: Function -5- in MAIN menu           *
+*                                                                     *
+*        Registers:     R12 is the base register.                     *
+*                       R13 points to the dynamic work area within    *
+*                           the first 72 byte the save area.          *
+*                       R10 points to screen of the main menu.        *
+*                       R11 is always the address of the RPFCOMM      *
+*                           control block.                            *
+*                                                                     *
+*        RPF V2R0M0     Version: February 2025.                       *
+*        Documentation: rpf200guid.pdf or member RPFUGUID in the      *
+*                       Assembler library of RPF                      *
+*                                                                     *
+*        Author:        Rob Prins.                                    *
+*                                                                     *
+*        Change log:                                                  *
+*        Jun 02,2001 RPr: Goto allocation menu (RPFDATAL) if returned *
+*                         from EDIT or BROWSE instead of return to MAIN
+*        Jul 17,2002 RPr: Process the selection immediately if CMAINOPT
+*                         is not blank. These options are entered     *
+*                         with the '=n'/'=n.n' cmd from BROWSE/EDIT/PDS
+*        Jul 31,2002 RPr: Add name of TSO Proc in main menu        @rp2
+*        Aug 31,2002 RPr: Load RPFVTOC1 module                     @rp4
+*        Oct 11,2002 RPr: Add Calendar in MAIN menu                @rp5
+*        Oct 16,2002 RPr: Add Logo in menu                         @rp6
+*        Nov 02,2002 RPr: Display logo only initially              @rp7
+*        Nov 07,2002 RPr: Menu in extended colors                  @rp8
+*        Feb 14,2003 RPr: Ignore the '=' before the option         @rp9
+*        Jan 29,2004 RPr: Calender re-calculated after refresh     @rpa
+*        Mar 20,2006 RPr: Build date/time in splash screen         @rpb
+*        Dec 15,2018 RPr: Make RPF suitable for MVS/380 and up   @rpa01
+*                         Support is added for 31 and 64 bit     @rpa01
+*                         adressing                              @rpa01
+*        Jan 03,2019 RPr: Better recovery from GETMAIN error in    @rpm
+*                         RPFDEF                                   @rpm
+*        Jan 19,2019 RPr: Add OS release into screen               @rpl
+*        Jan 31,2019 RPr: Allow function 0, 9 and X after getmain  @rpn
+*                    RPr: error/abend in RPFDEF (flag $COMNOGO is set)*
+*        Feb 20,2019 RPr: Screen error resolved if returned from   @rpo
+*                         =n or =n.n command.                      @rpo
+*        Mar 10,2019 RPr: Screen lines and Write command saved     @rpp
+*                         in RPFCOMM                               @rpp
+*        Mar 23,2019 Rpr: Support added for all kinds of 3270 screens *
+*                         up to 62 lines x 160 columns (3290)         *
+*        Apr 14,2019 Rpr: Allow RPFEDIT to edit more than 80 columns  *
+*        Jan 14,2020 RPr: Intercept IO-error from RPFEDIT.            *
+*        Jan 25,2020 RPr: Allow terminals with buffer up to 9920.     *
+*        Apr 02,2020 RPr: RPF version moved to RPFCOMM.               *
+*                         Support screens up to 16384 bytes with a    *
+*                         maximum linecount of 99 and a maximum width *
+*                         of 200 bytes.                               *
+*        Apr 04,2020 RPr: Main menu redesigned.                       *
+*        May 31,2020 RPr: Bypass TPUT NOEDIT if screensize is 4096    *
+*                         or less                                     *
+*        Aug 02,2020 RPr: Message 'Data set/member saved' set if      *
+*                         EDIT workspace is saved.                    *
+*        Nov 08,2020 RPr: Test return code RPFPDS                     *
+*        Jan 06,2021 RPr: ATTACH to RPFTSO changed into LINK.         *
+*        Apr 19,2021 RPr: Change return codes of RPFEDIT.             *
+*        May 30,2021 RPr: Options during startup possible             *
+*                         e.g. RPF 3.4                                *
+*        Jun 03,2021 RPr: ESTAE routine removed.                      *
+*        Jun 04,2021 RPr: RPFMAIN is now reentrant.                   *
+*        Aug 18,2021 RPr: Substitute BROWSE if Editing a RECFM=U      *
+*                         data set.                                   *
+*        Mar 07,2022 RPr: Support HELP key (PF01 or PF13).            *
+*        Nov 16,2022 RPr: Terminal ID into main menu.                 *
+*        Jul 01,2023 RPr: Operand FAST deleted.                       *
+*        Sep 08,2023 RPr: RPFWORK and RPFWORK2 unallocated upon entry *
+*                         of main menu.                               *
+*        Mar 03,2024 RPr: Do not display 'Invalid option' if no data  *
+*                         entered.                                    *
+*        Dec 05,2024 RPr: Routine DSNPARS added to parse quoted and   *
+*                         non prefixed data set names.                *
+*        Dec 27,2024 RPr: TSO prefix in main menu.                    *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+RPFMAIN  CSECT
+RPFMAIN  AMODE 31
+RPFMAIN  RMODE 24
+         COPY  SYSVARS
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING RPFMAIN,R12             Provide addressability
+         LR    R6,R1                   Save CPPL address
+         GETMAIN R,LV=WORKL            Obtain dynamic workarea
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(,R13)              Forward pointer
+         LR    R13,R1                  Use our save area
+         USING WORKAREA,R13            Get addressability workarea
+         B     START
+SYSDATE  DC    CL8'&SYSDATE',C' ',CL8'&SYSTIME'
+START    DS    0H
+         LA    R3,COMML                Length of RPFCOMM
+         GETMAIN R,LV=(3)              Getmain
+         LR    R2,R1                   Set in register 2
+         L     R4,=V(COMMAREA)         Start input
+         LR    R5,R3                   Duplicate length
+         MVCL  R2,R4                   Copy RPFCOMM into dynamic area
+         LR    R11,R1                  Storage of RPFCOMM
+         USING COMMAREA,R11            Address COMMAREA
+         ST    R6,COMMCPPL             Save CPPL address
+         LA    R3,COMMASML             Length of RPFASM section
+         GETMAIN R,LV=(3)              Getmain
+         ST    R1,COMASMPT             Save it's address
+         LR    R2,R1                   Set in register 2
+         IC    R5,X'40'                Fill character
+         SLL   R5,24                   Promote to high-order
+         LR    R4,R2                   Start input
+         MVCL  R2,R4                   Blank RPFASM section of RPFCOMM
+         MVI   BUFFER,C' '             Clear TGET buffer ...
+         MVC   BUFFER+1(9),BUFFER      ... + overflow area
+         L     R14,CVTPTR(,0)          Adress CVT
+         USING CVTMAP,R14
+         MVC   COMMOS,CVTDCB           OS bits
+         DROP  R14                     CVT
+         CLI   COMMOS,X'13'            Native MVS?
+         BNE   START1                  No: do not touch COMMOS
+         LA    R1,136                  X'88'
+         SLL   R1,24                   Promote to high-order
+         LA    R1,0(,R1)               Clear high-order bit or byte
+         LTR   R1,R1                   Register zero?
+         BZ    START1                  No: no native MVS with AM31
+         MVI   COMMOS,X'93'            MVS with MVS380 installed
+START1   DS    0H
+         ST    R11,PRMCOMM             Save A(RPFCOMM)
+         LA    R2,SCREEN               Output screen address
+         LR    R10,R2                  Copy in base of SCR1TXTF
+         LA    R3,SCR1LENF             Length of screen
+         L     R4,=V(SCREENTX)         Start input
+         LR    R5,R3                   Duplicate length
+         MVCL  R2,R4                   Copy Main menu into dynamic area
+         USING SCREENTX,R10            Address SCR1TXT
+         XC    COMMFLGS,COMMFLGS       Clear all flags in RPFCOMM
+         L     R1,0(,R6)               Address of CPPLCBUF
+         LH    R3,0(,R1)               Length of CPPLCBUF
+         LH    R2,2(,R1)               # bytes preceding 1st operand
+         SH    R3,=H'4'                Subtract length of header
+         CR    R2,R3                   No operands provided?
+         BE    NOOPT                   Yes: carry
+         LA    R1,4(R1,R2)             Point to first operand
+         MVC   OPERAND,=CL4' '         Blank the field
+         SR    R3,R2                   Length of operand
+         CH    R3,=H'4'                Longer than 4?
+         BH    NOOPT                   Yes: ignore
+         BCTR  R3,0                    -/- 1 for execute
+         EX    R3,MVEOPER              Save operand
+         TR    OPERAND,COMTCAPS        Xlate to upper
+         B     *+10                    Branch over next instruction
+MVEOPER  MVC   OPERAND(0),0(R1)        << executed >>
+         CLI   OPERAND,C' '            No operands entered?
+         BE    NOOPT                   Yes: normal start
+         MVC   CMAINOPT,OPERAND        Move options
+NOOPT    DS    0H
+         L     R1,COMMCPPL
+         GTSIZE
+         MVI   SCR1TXT,COMMEWA         Move EWA
+         MVC   SCR9999,=X'00C21140401D4013'
+         MVI   SCR9999F,X'27'          Escape character TPUT FULLSCR
+         MVI   SCR9999,COMMEWA         Move EWA
+         MVI   COMMCMD,COMMEWA         And move in RPFCOMM
+         CH    R1,=H'80'               At least width of 80?
+         BL    NOFULLSC                No: error, no 3270 terminal
+         CH    R0,=H'24'               At least 24 lines?
+         BL    NOFULLSC                No: error, no 3270 terminal
+         CH    R1,=H'200'              No more width than 200?
+         BH    START13                 Yes: odd screen, make 24x80
+         CH    R0,=H'99'               More than 99 lines?
+         BH    START13                 Yes: odd screen, reset to 24x80
+         B     START07                 Test screen size (size*width)
+NOFULLSC DS    0H
+         LA    R1,NFULLMSG             Buffer address = message
+         LA    R0,L'NFULLMSG           Length of message
+         TPUT  (1),(0),R               Msg: No 3270 terminal
+         B     RETURN                  Return immediately
+START07  DS    0H
+         STM   R0,R1,COMMSIZE          Save them in RPFCOMM
+         MR    R0,R0                   Multiply size * width
+         C     R1,=F'1920'             1920 bytes?
+         BE    START13                 Yes: 3270 model 2
+         C     R1,=F'16384'            Maximum size (16K)?
+         BNH   START19                 No: good
+START13  DS    0H
+         MVI   SCR1TXT,COMMEW          Move EW
+         MVI   SCR9999,COMMEW          Move EW
+         MVI   COMMCMD,COMMEW          And move in RPFCOMM
+         LA    R0,24                   Set default
+         LA    R1,80                              24x80
+         STM   R0,R1,COMMSIZE          Save them in RPFCOMM
+         MR    R0,R0                   Screensize
+START19  DS    0H
+         LA    R1,1700(,R1)            Add some space for control
+*                                      characters like SBA and SF
+         ST    R1,COMMSCLN             And save this length
+         LM    R4,R5,COMMSIZE          Pickup lines
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Setup the screen with proper Set Buffer addresses,           *
+*        because the line length of the screen can vary               *
+*        That depends of the model of the screen                      *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird systems -*
+*
+*        Place the menu in the middle of the screen if a wide screen
+*        is used. This looks much nicer.
+*
+         XR    R2,R2                   Default no centering
+         CH    R5,=H'90'               At least 90 width?
+         BL    WRSBA01                 No: set menu not in center
+         LR    R2,R5                   Pickup width
+         SH    R2,=H'80'               Standard screen
+         SRL   R2,1                    Divide by 2
+WRSBA01  DS    0H
+*
+         LA    R0,1                    Row 1
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,SCR1TXT+3
+*
+         LA    R0,2                    Row 2
+         LA    R1,1                    Column 1+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R2C1+1
+*
+         LA    R0,12                   Row 12
+         LA    R1,59                   Column 59+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R12C59+1
+*
+         LA    R0,13                   Row 13
+         LA    R1,59                   Column 59+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,R13C59+1
+*
+         L     R0,COMMSIZE             Row Last
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC2+1
+*
+         LR    R0,R4                   Row last
+         LA    R1,52                   Column 52+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,RLASTC52+1
+*
+         LA    R3,R4C4                 Start line of menu
+         LA    R4,11                   11 lines menu
+         LA    R5,4                    First line is line 4
+         LA    R6,1                    Default increment is 1
+         CLC   COMMSIZE,=F'34'         34 lines or more in the screen?
+         BL    SCR01                   No carry
+         LA    R6,2                    Else increment is 2
+SCR01    DS    0H
+         LR    R0,R5                   Row
+         LA    R1,4                    Column 4+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)
+         AR    R5,R6                   Increment with 1 or 2
+         LA    R3,R4C4L(,R3)           Point to next line menu
+         BCT   R4,SCR01                Loop
+*
+         LA    R3,R3C62                Start line of system info
+         LA    R4,8                    8 lines system info
+         LA    R5,3                    First line is line 3
+SCR03    DS    0H
+         LR    R0,R5                   Row
+         LA    R1,62                   Column 62+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)
+         LA    R5,1(,R5)               Next line
+         LA    R3,R3C62L(,R3)          Point to next line system info
+         BCT   R4,SCR03                Loop
+*
+         LA    R3,R14C59               Start line of calendar
+         LA    R4,6                    8 calendar lines
+         LA    R5,14                   First line is line 14
+SCR05    DS    0H
+         LR    R0,R5                   Row
+         LA    R1,59                   Column 59+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)
+         LA    R5,1(,R5)               Next line
+         LA    R3,R14C59L(,R3)         Point to next line calendar
+         BCT   R4,SCR05                Loop
+*
+         LA    R3,R16C2                Start line of release block
+         LA    R4,7                    7 release lines
+         LA    R5,16                   First line is line 16
+         CLC   COMMSIZE,=F'34'         34 lines or more in the screen?
+         BL    SCR07                   No carry
+         LA    R5,26                   Else block start at row 26
+SCR07    DS    0H
+         LR    R0,R5                   Row
+         LA    R1,2                    Column 2+
+         LA    R1,0(R1,R2)             Center
+         L     R15,=V(RCTOSBA)         Routine
+         CALL  (15)                    Convert
+         STCM  R0,3,1(R3)
+         LA    R5,1(,R5)               Next line
+         LA    R3,R16C2L(,R3)          Point to next line release blk
+         BCT   R4,SCR07                Loop
+*
+*
+*        end of screen setup           ------------------------------*
+*
+         TIME  DEC                     Obtain time of day
+         SRL   R0,4                    Shift out fractions of seconds
+         ST    R0,COMSTIME             Save for later use
+         LOAD  EP=RPFCHNG
+         ST    R0,EPCHNG               EDIT primary command 'C'
+         LOAD  EP=RPFDAIR
+         ST    R0,EPDAIR               Dynamic allocation interface
+         LOAD  EP=RPFDATAL
+         ST    R0,EPDATAL              Allocation menu EDIT/Utilities
+         LOAD  EP=RPFVTOC1
+         ST    R0,EPVTOC1              Data set selection list
+         LOAD  EP=RPFEDIT
+         ST    R0,EPEDIT               The RPF Editor
+         LOAD  EP=RPFEDITL
+         ST    R0,EPEDITL              Load data into workspace
+         LOAD  EP=RPFUTIL
+         ST    R0,EPUTIL               RPFUTIL utility menu
+         LOAD  EP=RPFFIND
+         ST    R0,EPFIND               EDIT primary command 'F(IND)'
+         LOAD  EP=RPFFILL                                        @rpa01
+         ST    R0,EPFILL               EDIT primary command 'FILL'
+         LOAD  EP=RPFPFK                                         @rpa01
+         ST    R0,EPPFK                Primary command 'PFK'
+         LOAD  EP=RPFSAVE
+         ST    R0,EPSAVE               EDIT primary command 'SAVE'
+         LOAD  EP=RPFC3270                                         @rp4
+         ST    R0,EPC3270              RPFC3270 data stream compression
+         LOAD  EP=RPFCNVDT                                         @rp5
+         ST    R0,EPCNVDT              Convert date routine        @rp5
+         LOAD  EP=RPFSUB                                         @rpa01
+         ST    R0,EPSUB                RPF submit jobs           @rpa01
+         L     R1,=V(DSNPARS)          Data set name parse routine
+         ST    R1,EPDSNPA
+         MVC   SCR1RPFV(7),COMMVER     Move RPF version into screen
+         MVC   MSG1,COP1TXT            Copyright into message
+         MVC   SPLASH3+21(2),=C'20'    21th century
+         MVC   SPLASH3+23(2),SYSDATE+6 Year of build               @rpb
+         MVI   SPLASH3+25,C'-'
+         MVC   SPLASH3+26(2),SYSDATE   Month of build              @rpb
+         MVI   SPLASH3+28,C'-'
+         MVC   SPLASH3+29(2),SYSDATE+3 Day of build                @rpb
+         MVI   SPLASH3+31,C'T'
+         MVC   SPLASH3+32(2),SYSDATE+9 Hours of build              @rpb
+         MVI   SPLASH3+34,C':'         Colon between hours and minutes
+         MVC   SPLASH3+35(2),SYSDATE+12 Minutes of build           @rpb
+         MVC   SPLASH3+37(3),=C'+01'   Time zone (+1 from GMT)
+         MVC   SPLASH3+6(7),COMMVER    Move RPF version
+         MVC   EPLOC,=CL8'RPFINIT'     Module name to link to
+         BAL   R14,LINK                Link to RPFINIT
+         MVC   SCR1UID,COMMUSER        TSO UserID from RPFCOMM
+         LTR   R15,R15                 Initialization OK?
+         BZ    PUT1                    Yes: proceed.
+         CVD   R15,DBW                 Convert to decimal
+         MVC   MSG1,ERRCTXT            Msg: Init error rc=xxxx
+         UNPK  MSG1+21(4),DBW          and UNPACK
+         OI    MSG1+24,X'F0'           Clear sign
+         CLM   R15,1,=X'04'            Open error Profile?
+         BNE   PUT1                    No: good
+         MVC   MSG1,ERRFTXT            Msg: //ISPPROF not found
+PUT1     DS    0H
+         AIF   (&SVS).NOPFX
+         L     R1,COMMCPPL             Point to (IKJ)CPPL
+         L     R1,4(,R1)               Point to (IKJ)UPT
+         USING UPT,R1                  Make it addressable
+         MVC   COMMPREF(7),UPTPREFX    Move TSO prefix
+         MVI   COMMPREF+7,X'40'
+         MVC   COMMPRFL,UPTPREFL       and actual length
+         AIF   (NOT &OS390).RP8CH
+         CLC   =C'>7BYTES',COMMPREF    Do we have a >7 bytes prefix?
+         BNE   OSDS1                   No: we have a good prefix
+         MVC   COMMPREF,UPTPREF8       8 bytes prefix
+         MVC   COMMPRFL,UPTPRF8L       8 bytes length
+OSDS1    DS    0H
+.RP8CH   ANOP
+         DROP  R1                      IKJUPT
+         AGO   .NNPFX
+.NOPFX   ANOP
+         MVC   COMMPREF,COMMUSER       TSO prefix = Userid in SVS
+         MVC   COMMPRFL,COMMUSRL       Length of prefix
+.NNPFX   ANOP
+         XC    COMMPRM,COMMPRM         Clear COMMPRM ...
+         MVC   SCR1PFX,COMMPREF        Move TSO Prefix
+         TIME  DEC                     Get time of day
+         SRL   R0,4                    Shift out fractions of seconds
+         ST    R0,TIMEWORK
+         OI    TIMEWORK+3,X'0F'        Insert sign
+         MVC   TIMEDISP,PATT1          Pattern into TIMEDISP
+         ED    TIMEDISP(10),TIMEWORK   and EDIT
+         ST    R11,CALPRM              Parm 1 = RPFCOMM
+         ST    R13,CALPRM+4            Parm 2 = Workarea
+         LA    R1,CALPRM               Parameter                   @rpa
+         L     R15,=V(CALENDAR)        Routine address
+         BALR  R14,R15
+         LM    R4,R5,0(R1)             Pickup output               @rpa
+         MVC   SCR1CAL1,0(R4)          Month                       @rpa
+         MVC   SCR1CAL3,0(R5)          Days                        @rpa
+         MVC   SCR1CAL4,42(R5)         Days                        @rpa
+         MVC   SCR1CAL5,84(R5)         Days                        @rpa
+         MVC   SCR1CAL6,126(R5)        Days                        @rpa
+         MVC   SCR1CAL7,168(R5)        Days                        @rpa
+         MVC   SCR1CAL8,210(R5)        Days                        @rpa
+         NI    COMMFLG2,255-$COMRTRN   Reset default the return ind.
+         NI    COMMFLG3,255-$COMBR-$COMEDIT-$COMISPF-$COMSRCH-$COMSUBS
+*                                      Reset RPFDATAL/RPFPDS flags
+         CLC   CMAINOPT,=CL3' '        Options from EDIT/BRW/PDS?
+         BE    PUT1#                   No: branch
+         MVC   BUFFER(3),CMAINOPT      Move options to buffer
+         MVC   CMAINOPT,=CL3' '        Clear the options
+         B     FUNC0                   And process
+PUT1#    DS    0H
+         MVC   SCR1TME(8),TIMEDISP+2
+         L     R2,CVTPTR               Pointer CVT
+         SL    R2,=F'256'              Point to CVT Prefix         @rpl
+         USING CVTFIX,R2               Address it                  @rpl
+         L     R3,CVTSMCA              Point to SMCA
+         MVC   SCR1SID(4),16(R3)       Move system id
+         AIF   (&SVS).SVS1
+         MVC   SCR1OS,216(R2)          Move OS release (MVS/ESA and up)
+         XC    GTL(GTLL),GTL           Clear GTTERM list
+         GTTERM PRMSZE=SIZE,ALTSZE=SIZE+2,ATTRIB=SIZE+4,               X
+               TERMID=TERMINAL,MF=(E,GTL) Obtain size + terminal name
+         MVC   SCR1TERM,TERMINAL       Terminal name into screen
+         CLI   SCR1OS,X'00'            No SP release (CVTPRODN)?
+         BNE   *+10                    No: it's at least MVS/ESA
+.SVS1    ANOP
+         MVC   SCR1OS(4),CVTRELNO      It's MVS/XA or lower        @rpl
+         DROP  R2                      Kill addressability
+         LA    R2,ADDRTIOT             TIOT address
+         XC    FLDTIOT,FLDTIOT         Clear Extract list
+         EXTRACT (2),FIELDS=TIOT,MF=(E,FLDTIOT) obtain TIOT        @rp2
+         L     R2,ADDRTIOT             Obtain address of TIOT      @rp2
+         MVC   SCR1PRC,16(R2)          Move stepname of TSO-user   @rp2
+         TM    COMMFLG2,$COMNOGO       Does we have an EDIT workspace?
+         BNO   PUT1A                   Yes: good
+         MVC   MSG1,ERR3TXT            Msg: workspace not available
+PUT1A    DS    0H                                                  @rpm
+         LA    R1,PRMCOMM              Address of RPFCOMM
+         NI    COMMFLG1,255-$COMMALC   Tell RPFDAIR to unallocate
+         L     R15,EPDAIR              EP of RPFDAIR
+         CALL  (15)                    Unallocate RPFWORK* if allocated
+         LA    R1,SCR1TXT              Screen address
+         LA    R0,SCR1LEN              Length
+         L     R15,=V(TPUTS)           Main menu on screen
+         BALR  R14,R15
+         MVC   BUFFER,=CL4' '          Blank output buffer
+         MVI   MSG1,C'-'               Clear
+         MVC   MSG1+1(L'MSG1-1),MSG1         message
+         MVI   SPLASH1,C' '            Blank                       @rp7
+         MVC   SPLASH1+1(L'SPLASH1-1),SPLASH1 release              @rp7
+         MVC   SPLASH2,SPLASH1                       block         @rp7
+         MVC   SPLASH3,SPLASH1                                     @rp7
+         MVC   SPLASH4,SPLASH1                                     @rp7
+         MVC   SPLASH5,SPLASH1                                     @rp7
+         MVC   SPLASH6,SPLASH1                                     @rp7
+         MVC   SPLASH7,SPLASH1                                     @rp7
+         LA    R5,BUFFER               Output formatted buffer     @rpo
+         L     R3,COMMSCR              Load screen address
+         LR    R1,R3                   Buffer address
+         LA    R0,40                   Length
+         ICM   R1,8,=B'10000001'       Indicate TGET ASIS
+         TGET  (1),(0),R               Read the screen
+         LR    R4,R1                   And save length
+*
+*        Do a TGET ASIS to obtain the AID byte
+*        After the TGET ASIS remove the sba's from the output
+*
+         CLI   0(R3),X'F1'             PFK1 (HELP) pressed?
+         BE    FUNC7H                  Yes: goto HELP
+         CLI   0(R3),X'C1'             PFK13 (HELP) pressed?
+         BE    FUNC7H                  Yes: goto HELP
+         CLI   0(R3),X'F3'             PFK3 (End) pressed?
+         BE    END                     Yes: terminate RPF
+         CLI   0(R3),X'C3'             PFK15 (End) pressed
+         BE    END                     Yes: terminate RPF
+         XR    R2,R2                   Init output length
+         SH    R4,=H'3'                Skip AID and cursor address
+         BNP   CONV099                 <= zero: end of conversion
+         LA    R3,3(,R3)
+         LA    R5,BUFFER               Output address
+*
+*        Input screen is pointed to by R3
+*        Output screen is pointed to by R5
+*        The next section (to CONV099) will remove all the SBA's
+*        In the section CONV100 through CONV101, will be checked
+*        if data is entered. If so, place the options in pos.1 of
+*        the buffer.
+*
+CONV001  DS    0H
+         CLI   0(R3),COMMSBA           SBA order found?
+         BE    CONV003                 Yes: skip next 3 bytes input
+CONV002  DS    0H
+         MVC   0(1,R5),0(R3)           Move input byte to output area
+         OI    0(R5),X'40'             Xlate to upper
+         LA    R3,1(,R3)               Next byte input
+         LA    R2,1(,R2)               Count output bytes
+         LA    R5,1(,R5)               Next byte output
+         BCT   R4,CONV001              Loop until all done
+         B     CONV099                 Converion finished
+CONV003  DS    0H
+         LA    R3,3(,R3)               Skip 3 bytes input (the SBA)
+         SH    R4,=H'2'                Decrease BCT register
+         BNP   CONV099                 <= 0, all done
+         BCT   R4,CONV001              Examine next byte
+CONV099  DS    0H
+         LTR   R2,R2                   No data received?  (MVS SP 1.3)
+*        The RESHOW character has been deleted since MVS SP 1.3
+         BZ    PUT1A                   RESHOW screen
+         LA    R1,5                    Max length of BUFFER
+         LA    R2,BUFFER               Address of receive buffer
+CONV100  DS    0H
+         CLI   0(R2),X'40'             Blank?
+         BNE   CONV101                 No: option found in BUFFER
+         LA    R2,1(,R2)               Next byte in BUFFER
+         BCT   R1,CONV100              Loop until option found
+         B     PUT1                    No options entered, redisplay
+CONV101  DS    0H
+         MVC   BUFFER,0(R2)            Move option(s) to start buffer
+         CLI   BUFFER,X'6E'            RESHOW code ? (pre MVS SP 1.3)
+         BE    PUT1A                   Yes: Reshow screen
+         CLI   BUFFER,C'='             An '=' before the option?   @rp9
+         BNE   FUNC0                   No: Branch                  @rp9
+         MVC   DBW(4),BUFFER+1         Remove the '='              @rp9
+         MVC   BUFFER(4),DBW                                       @rp9
+         MVI   BUFFER+5,C' '           Blank last character        @rp9
+         B     FUNC0                   Select function
+ERR1     DS    0H
+         MVC   MSG1,ERR1TXT            Msg: Invalid option
+         B     PUT1                    Write MAIN menu             @rp1
+ERR6     DS    0H
+         MVC   MSG1,ERR6TXT            Msg: Open data set failed
+         B     PUT1                    Write MAIN menu             @rp1
+ERR7     DS    0H
+         MVC   MSG1,ERRETXT            Msg: RPFUSER1 not found
+         B     PUT1                    Write MAIN menu             @rpo
+FUNC0    DS    0H
+         CLI   BUFFER,C'0'             RPF Defaults?
+         BNE   FUNC7                   No: Test next function
+         CLI   BUFFER+1,C'.'           2ND option selected? (eg. 0.1)
+         BNE   FUNC0D                  No: goto defaults
+         MVC   COMDEFPT,BUFFER+2       Move option for defaults
+FUNC0D   DS    0H
+         MVC   EPLOC,=CL8'RPFDEF'      Module name to link to
+         BAL   R14,LINK                Link to RPFDEF
+         LTR   R15,R15                 Rc = 0?
+         BZ    PUT1                    Yes: good
+         CVD   R15,DBW                 Convert to packed
+         MVC   MSG1,ERRDTXT            Move error message
+         UNPK  MSG1+21(4),DBW          Convert to zoned
+         OI    MSG1+24,X'F0'           And clear sign
+         B     PUT1                    Back to MAIN menu
+FUNC7    DS    0H
+         CLI   BUFFER,C'7'             HELP selected?
+         BNE   FUNC9                   No: test next function
+         CLI   BUFFER+1,C'.'           Second option selected?
+         BNE   FUNC7H                  No: go to HELP
+         MVC   COMHLPPT,BUFFER+2       Move option for HELP
+FUNC7H   DS    0H
+         MVC   EPLOC,=CL8'RPFHELP'
+         BAL   R14,LINK                Link to module
+         B     PUT1                    Main menu on screen
+FUNC9    DS    0H                                                  @rpn
+         CLI   BUFFER,C'9'             Operator mode selected?     @rpn
+         BNE   FUNCX                   No: test next function
+         LA    R1,SCR9999              Screen address
+         LA    R0,L'SCR9999            Length
+         L     R15,=V(TPUTS)           Main menu on screen
+         BALR  R14,R15
+         MVC   EPLOC,=CL8'RPFOPER'     Module name to link to
+         BAL   R14,LINK                Link to RPFOPER
+         B     PUT1                    Get reply
+FUNCX    DS    0H
+         CLI   BUFFER,C'x'             End of RPF selected?
+         BE    END                     Yes: terminate RPF
+         CLI   BUFFER,C'X'             End of RPF selected?
+         BE    END                     Yes: terminate RPF
+         CLI   BUFFER,C'?'             Reset screen?
+         BE    PUT1                    Yes: rewrite MAIN menu
+FUNC1    DS    0H
+         TM    COMMFLG2,$COMNOGO       Is there a workspace?       @rpm
+         BO    PUT1                    No: redisplay main menu     @rpm
+*                                 $COMNOGO will be reset in RPFDEF @rpm
+         CLI   BUFFER,C'1'             BROWSE selected?
+         BNE   FUNC2                   No: test next function
+         OI    COMMFLG3,$COMBR         Set the Browse flag for
+*                                      RPFDATAL and RPFPDS
+         L     R15,EPDATAL             RPFDATAL module
+         LA    R1,PRMCOMM              Parameter is RPFCOMM
+         BALR  R14,R15                 Call RPFDATAL
+FUNC1#   DS    0H
+         B     *+4(15)                 Initiate branchlist (0,4,8)
+         B     FUNC1A                  Rc=0; invoke browser RPFBRO
+         B     FUNC1P                  Rc=4; invoke RPFPDS member list
+         B     PUT1                    Rc=8; exit entered
+FUNC1A   DS    0H
+         MVC   COMMPRM(8),=CL8'RPFWORK' DDNAME into COMMPRM
+         MVC   EPLOC,=CL8'RPFBRO'      Module name to link to
+         BAL   R14,LINK                Link to RPFBRO
+         LTR   R15,R15                 RC browse = 0000?
+         BZ    FUNC1Z                  Yes: branch
+         MVC   MSG1,COMMPRM            Else move message
+         B     FUNC1Z                  And branch
+FUNC1P   DS    0H                      Invoke RPFPDS
+         MVC   EPLOC,=CL8'RPFPDS'      Module name to link to
+         BAL   R14,LINK                Link to RPFPDS
+         LTR   R15,R15                 Rc RPFPDS = 0?
+         BNZ   ERR6                    No: issue the error
+FUNC1Z   DS    0H                      Invoke RPFPDS
+         TM    COMMFLG2,$COMRTRN       Return pressed ?
+         BO    PUT1                    Yes: go to main menu
+         B     FUNC1                   No: stay in allocation menu
+FUNC2    DS    0H
+         CLI   BUFFER,C'2'             EDIT selected?
+         BNE   FUNC3                   No: test next function
+         NI    COMMFLG3,255-$COMBR-$COMSUBS Reset Browse substition
+         OI    COMMFLG3,$COMEDIT       Set RPFDATAL/RPFPDS in EDIT mode
+         L     R15,EPDATAL             RPFDATAL module
+         LA    R1,PRMCOMM              Parameter is RPFCOMM
+         BALR  R14,R15                 Call RPFDATAL
+         TM    COMMFLG3,$COMBR         Browse substituted?
+         BO    FUNC1#
+         B     *+4(15)
+         B     FUNC2E                  Rc=0;  Invoke the editor
+         B     FUNC2P                  Rc=4;  Invoke RPFPDS
+         B     PUT1                    Rc=8;  Back to main menu
+FUNC2E   DS    0H
+         L     R15,EPEDIT              RPFEDIT module
+         LA    R1,PRMCOMM              Parameter is RPFCOMM
+         BALR  R14,R15                 Invoke RPFEDIT
+         B     FUNC2E6(R15)            Branchlist
+FUNC2E6  B     FUNC200                 Rc = 00, succesful EDIT
+         B     FUNC204                 Rc = 04, workspace too small
+         B     FUNC200                 Rc = 08, not used
+         B     FUNC212                 Rc = 12, I/O error
+         B     FUNC216                 Rc = 16, data set/member in use
+         B     FUNC220                 Rc = 20, Save canceled, CAN cmd
+FUNC200  DS    0H
+         ICM   R1,15,COMMPRM           Has RPFSAVE added a pointer to
+         BZ    FUNC202                 the ISPF stats or X'FF'?
+*                                      If present, data is saved.
+         MVC   COMMPRM(25),MSG3TXT     Msg: Data set/member saved
+*                                      will be displayed in RPFDATAL
+FUNC202  DS    0H
+         TM    COMMFLG2,$COMRTRN       Return pressed ?
+         BNO   FUNC2                   No: redisplay allocation menu
+         ICM   R1,15,COMMPRM           Has RPFSAVE added a pointer to
+         BZ    PUT1                    the ISPF stats or X'FF'?
+*                                      If present, data is saved.
+         MVC   MSG1,MSG3TXT            Msg: Data set/member saved
+*                                      will be displayed in main menu.
+         B     PUT1                    Redisplay main menu
+FUNC204  DS    0H
+         MVC   COMMPRM(25),MSG2TXT     Msg: Workspace too small
+         B     FUNC2                   Recall RPFDATAL
+FUNC212  DS    0H                      IO-error
+         MVC   MSG1,ERR5TXT            Msg: I/O error
+         B     PUT1                    Back to main menu
+FUNC216  DS    0H
+         MVC   COMMPRM(25),ERR2TXT     Msg: data set/member in use
+         B     FUNC2                   Re-issue RPFDATAL
+FUNC220  DS    0H
+         MVC   COMMPRM(25),ERRGTXT     Msg RPFDATAL: Save canceled
+         TM    COMMFLG2,$COMRTRN       Return pressed ?
+         BNO   FUNC2                   No: redisplay allocation menu
+         MVC   MSG1,ERRGTXT            Msg: Save canceled
+         B     PUT1                    Write MAIN menu
+FUNC2P   DS    0H                      Invoke RPFPDS
+         MVC   EPLOC,=CL8'RPFPDS'      Module name to link to
+         BAL   R14,LINK                Link to RPFPDS
+         LTR   R15,R15                 Rc RPFPDS = 0?
+         BNZ   ERR6                    No: issue the error
+         TM    COMMFLG2,$COMRTRN       Return pressed ?
+         BO    PUT1                    Yes: go to main menu
+         B     FUNC2
+FUNC3    DS    0H
+         CLI   BUFFER,C'3'             UTILITY selected?
+         BNE   FUNC4                   No: test next function
+         CLI   BUFFER+1,C'.'           2nd option selected (=3.n)?
+         BNE   FUNC3U                  No: Invoke RPFUTIL
+         MVC   COMUTIPT,BUFFER+2       Move option for RPFUTIL
+FUNC3U   DS    0H
+         L     R15,EPUTIL              Entry point RPFUTIL
+         LA    R1,PRMCOMM              Address of RPFCOMM
+         BALR  R14,R15                 Invoke RPFUTIL
+         B     PUT1                    Write MAIN menu
+FUNC4    DS    0H
+         CLI   BUFFER,C'4'             Foreground assembler?
+         BNE   FUNC5                   No: test next function
+         XC    ASMECB,ASMECB           Clear ECB
+         XC    ATCHLST(ALSTLEN),ATCHLST Clear Subfield ATTACH
+         LA    R15,ATCHLST             SF field
+         LA    R2,ASMECB               ECB address
+         ATTACH EP=RPFASM,ECB=(2),PARAM=((11)),                        X
+               SF=(E,(15)),MF=(E,ATCHPRM)
+*                                      Attach RPFASM
+         ST    R1,TCBADDR              Save address subtask TCB
+         WAIT  ECB=ASMECB              Wait for completion RPFASM
+         LA    R3,TCBADDR              TCB address
+         DETACH (3)                    Kill subtask
+         B     PUT1                    Write MAIN menu
+FUNC5    DS    0H
+         CLI   BUFFER,C'5'             RPFUSER1 exec selected?
+         BNE   FUNC6                   No: test next function
+         MVC   RPFUSER1(4),=X'0001000E' 1 entries + length
+         MVC   RPFUSER1+4(8),=CL8'RPFUSER1'  Exit module name
+         BLDL  0,RPFUSER1              Try to find RPFUSER1
+         LTR   R15,R15                 Found?
+         BNZ   ERR7                    No: Msg: RPFUSER1 not found
+         MVC   EPLOC,=CL8'RPFUSER1'    Module name to link to
+         BAL   R14,LINK                Link to RPFUSER1
+         CVD   R15,DBW                 Convert return code
+         MVI   MSG1,C'-'               Clear
+         MVC   MSG1+1(L'MSG1-1),MSG1         message
+         ICM   R1,15,COMMPRM           No message from RPFUSER1?
+         BNZ   FUNC5B                  No: display message from exit
+         MVC   MSG1,ERRATXT            Else display only the RC
+         UNPK  MSG1+21(4),DBW          Unpack
+         OI    MSG1+24,X'F0'           Clear sign
+         B     PUT1                    Write MAIN menu
+FUNC5B   DS    0H
+         MVC   MSG1,COMMPRM            Move message from RPFUSER1
+         B     PUT1                    Write MAIN menu with message
+FUNC6    DS    0H
+         CLI   BUFFER,C'6'             Invoke TSO interface?
+         BNE   FUNC8                   No: test next function
+         MVC   EPLOC,=CL8'RPFTSO'
+         BAL   R14,LINK                Link to module
+         B     PUT1                    Write MAIN menu
+FUNC8    CLI   BUFFER,C'8'             TEST mode selected?
+         BNE   ERR1                    No: invalid option          @rpn
+         MVC   EPLOC,=CL8'RPFTEST'
+         BAL   R14,LINK                Link to module
+         B     PUT1                    Write MAIN menu
+END      DS    0H
+         TIME  DEC                     Obtain RPF end time
+         SRL   R0,4
+         ST    R0,COMTTIME             End time of RPF
+         MVC   EPLOC,=CL8'RPFEND'
+         BAL   R14,LINK                Link to module
+RETURN   DS    0H
+         L     R2,COMASMPT             RPFASM section of RPFCOMM
+         FREEMAIN R,LV=COMMASML,A=(2)  Get rid of this area
+         FREEMAIN R,LV=COMML,A=(11)    Get rid of RPFCOMM
+         LR    R3,R13                  Our WORKAREA
+         L     R13,4(,R13)             Load caller's save area
+         FREEMAIN R,LV=WORKL,A=(3)     Release WORKAREA
+         RETURN (14,12),RC=0           Return to TSO
+*
+         TITLE 'Link to modules'
+LINK     DS    0H
+         ST    R14,LINKR14             Save register 14
+         RPFSA24                       Switch to amode 24        @rpa01
+         LA    R1,PRMCOMM              Address of A(PRMCOMM)
+         XC    LNKLST,LNKLST           Clear EP and DCB address
+         LINK  EPLOC=EPLOC,SF=(E,LNKLST)
+         RPFSA31                       Restore addressing mode   @rpa01
+         L     R14,LINKR14             Restore register 14
+         BR    R14                     Return
+         TITLE 'Constants'
+ERR1TXT  DC    CL25'---------- Invalid option'
+ERR2TXT  DC    CL25'-- Data set/Member in use'
+ERR3TXT  DC    CL25'-- No workspace available'
+ERR5TXT  DC    CL25'--------------- I/O error'
+ERR6TXT  DC    CL25' Open failed or I/O error'
+ERRATXT  DC    CL25'---------------- Rc= XXXX' 21
+ERRCTXT  DC    CL25'- Initial error: Rc= XXXX' 21
+ERRDTXT  DC    CL25'----- Not saved: Rc= XXXX' 21
+ERRETXT  DC    CL25'------ RPFUSER1 not found'
+ERRFTXT  DC    CL25'----- //ISPPROF not found'
+ERRGTXT  DC    CL25'--- Save canceled by user'
+COP1TXT  DC    CL25'--- (C)-1979-2025 Skybird'
+MSG2TXT  DC    CL25'----- Workspace too small'
+MSG3TXT  DC    CL25'--- Data set/member saved'
+NFULLMSG DC    C'Terminal should be at least 24 lines x 80 columns'
+PATT1    DC    X'F02021207A20207A2020' Pattern ED instrction TIME rout
+         LTORG ,
+         DROP
+         COPY  TPUTS
+         TITLE 'Calendar Routine'
+*---------------------------------------------------------------------*
+*                                                                     *
+*        Routine:   Calendar                                          *
+*        Function:  Create the calendar, which should appear on the   *
+*                   MAIN menu                                         *
+*        Input:     R1 2 fullwords.                                   *
+*                   Fullword 1 = address of RPFCOMM                   *
+*                   Fullword 2 = address of WORKAREA                  *
+*        Output     2 fullwords. The first fullword contains the      *
+*                   address of a 21 byte monthname. The second        *
+*                   word contains the day table (6 rows of 28 bytes)  *
+*                   The two words are pointed to by R1                *
+*                                                                     *
+*------------------------------------------ (C)-2025 Skybird Systems -*
+         SPACE 2
+CALENDAR CSECT
+         SAVE  (14,12),,*
+         LR    R12,R15                 Setup base register
+         USING CALENDAR,R12            Provide addressability
+         L     R11,0(,R1)              Address of RPFCOMM
+         USING COMMAREA,R11            Make RPFCOMM addressable
+         L     R10,4(,R1)              Address of WORKAREA
+         USING WORKAREA,R10            Make WORKAREA addressable
+         LA    R1,SAVECAL              Our save area
+         ST    R13,4(,R1)              Backward pointer
+         ST    R1,8(0,R13)             Forward pointer
+         LR    R13,R1
+         LA    R1,YYDDD                Prepare
+         ST    R1,CNVDTPRM                    PARM
+         LA    R1,DDMMYY                           for
+         ST    R1,CNVDTPRM+4                          RPFCNVDT
+         MVI   SUN,C' '                Blank
+         MVC   SUN+1(L'SUN-1),SUN           the calender
+         L     R6,X'4C'                Pointer CVT
+         MVC   YYDDD,57(R6)            Julian date
+         L     R15,EPCNVDT             Load RPFCNVDT routine
+         MVI   DDMMYY,X'00'            Parm 1 is 3 bytes long
+         LA    R1,CNVDTPRM             Parm for RPFCNVDT
+         BALR  R14,R15                 Execute this routine
+         MVC   TODAY,DD                Move day# in month of today
+         LA    R7,YEAR                 Table with daynumbers
+         PACK  DBW,YY                  Year
+         CVB   R4,DBW                  Make binary
+         XR    R5,R5                   Clear Odd reg.
+         SRDL  R4,2                    Divide by 4
+         LTR   R5,R5                   Still zero
+         BNZ   NOLEAP                  No: not a leap year
+         LA    R7,LEAP                 Use LEAP table instead of YEAR
+NOLEAP   DS    0H
+         PACK  DBW,MONNBR              Number of the month
+         CVB   R4,DBW                  Make it binary
+         BCTR  R4,0                    Minus 1
+         SLL   R4,1                    x2
+         LA    R7,0(R4,R7)             Pount to right offset in table
+         LH    R4,0(,R7)               Pick up daynumber
+         CVD   R4,DBW                  Make 1st day on month packed
+         MVC   YYDDD+1(2),DBW+6        And move in Julian date
+         L     R15,EPCNVDT             Load RPFCNVDT routine
+         LA    R1,CNVDTPRM             Parm for RPFCNVDT
+         BALR  R14,R15                 Execute this routine
+         PACK  DBW,DAYNBR              Year
+         CVB   R4,DBW                  Make binary
+         BCTR  R4,0                    Minus 1
+         MH    R4,=H'6'                x6                          @rp8
+         LA    R3,42                   42 entries
+         LA    R8,SUN                  Find first day in month
+         MVC   0(3,R8),=AL3(HDEFAULT)  Move default attribute      @rp8
+         MVI   3(R8),C' '                                          @rp8
+         LA    R8,6(,R8)               Next address                @rp8
+         BCT   R3,*-14                 Loop
+         LA    R8,SUN                  Find first day in month
+         LA    R8,0(R4,R8)             This day is the 1st of the month
+         LH    R6,2(,R7)               Next month in table
+         LH    R5,0(,R7)               This month
+         SR    R6,R5                   # days in the month
+         LA    R4,1                    First day
+LOOP     DS    0H
+         CVD   R4,DBW                  make zoned
+         UNPK  4(2,R8),DBW             Unpack day#
+         OI    5(R8),X'F0'             Clear sign                  @rp8
+         CLC   4(2,R8),TODAY           Day of today                @rp8
+         BNE   *+10                    No: branch                  @rp8
+         MVC   0(3,R8),=AL3(REVERSE)   Move attr reversed video    @rp8
+         CLI   4(R8),C'0'              not significant zero?       @rp8
+         BNE   *+8                     No: branch
+         MVI   4(R8),C' '              Yes: replace by blank       @rp8
+         LA    R8,6(,R8)               Next day in table           @rp8
+         LA    R4,1(,R4)               Count day
+         BCT   R6,LOOP                 Loop until table filled
+*
+         LA    R8,SUN                  Point to day table
+         ST    R8,ADAYTAB              Save it's address
+         MVC   MONTH#1+4(9),MNAME#E    Move monthname
+         MVC   MONTH#1+14(4),CC        Move year including century
+         LA    R8,MONTH#1              Monthname
+         ST    R8,AMONTH               Save it's address
+         LA    R1,AMONTH               Set in reg.1
+         L     R13,4(,R13)             Restore address savearea
+         L     R14,12(,R13)            Restore reg.14
+         LM    R2,R12,28(R13)          Restore reg.2-12
+         SR    R15,R15                 Return code = 0000
+         BR    R14                     Return to RPFMAIN
+*
+*
+YEAR     DC    H'1'                    1 january
+         DC    H'32'                   1 february
+         DC    H'60'                   1 march
+         DC    H'91'                   1 april
+         DC    H'121'                  1 may
+         DC    H'152'                  1 june
+         DC    H'182'                  1 july
+         DC    H'213'                  1 august
+         DC    H'244'                  1 september
+         DC    H'274'                  1 october
+         DC    H'305'                  1 november
+         DC    H'335'                  1 december
+         DC    H'366'                  1 jan next year
+*
+LEAP     DC    H'1'                    1 january
+         DC    H'32'                   1 february
+         DC    H'61'                   1 march
+         DC    H'92'                   1 april
+         DC    H'122'                  1 may
+         DC    H'153'                  1 june
+         DC    H'183'                  1 july
+         DC    H'214'                  1 august
+         DC    H'245'                  1 september
+         DC    H'275'                  1 october
+         DC    H'306'                  1 november
+         DC    H'336'                  1 december
+         DC    H'367'                  1 jan next year
+         LTORG ,
+         DROP  ,
+         RCTOSBA RENT=YES
+         TITLE 'SCREEN FORMATS'
+SCREENTX CSECT
+SCR1TXTF DC    X'27'
+SCR1TXT  DC    X'F5C21100001DF8' WRITE ERASE / R01,C00
+SCR1LNE  DC    CL78'------------------------------ RPF Main menu ------C
+               ---------------------------'
+         ORG   SCR1LNE+54
+MSG1     DS    CL25
+         ORG   ,
+R2C1     DC    X'110000',X'1DF8',C'Option  ===>',X'1DC113'
+         DC    X'40404040401DF0'
+*
+R4C4     DC    X'110000',AL3(WHITE),C'0  ',AL3(TURQ)
+         DC    CL13'DEFAULTS'
+         DC    AL3(GREEN)
+         DC    CL37'Alter / Display session defaults'
+R4C4L    EQU   *-R4C4
+*
+         DC    X'110000',AL3(WHITE),C'1  ',AL3(TURQ)
+         DC    CL13'BROWSE'
+         DC    AL3(GREEN)
+         DC    CL37'View or browse data sets or members'
+*
+         DC    X'110000',AL3(WHITE),C'2  ',AL3(TURQ)
+         DC    CL13'EDIT'
+         DC    AL3(GREEN)
+         DC    CL37'Update or create data sets or members'
+*
+         DC    X'110000',AL3(WHITE),C'3  ',AL3(TURQ)
+         DC    CL13'UTILITY'
+         DC    AL3(GREEN)
+         DC    CL37'Enter UTILITY'
+*
+         DC    X'110000',AL3(WHITE),C'4  ',AL3(TURQ)
+         DC    CL13'ASSEMBLER'
+         DC    AL3(GREEN)
+         DC    CL37'Foreground ASSEMBLER and LINK edit'
+*
+         DC    X'110000',AL3(WHITE),C'5  ',AL3(TURQ)
+         DC    CL13'USER'
+         DC    AL3(GREEN)
+         DC    CL37'Execute RPF user routine'
+*
+         DC    X'110000',AL3(WHITE),C'6  ',AL3(TURQ)
+         DC    CL13'TSO'
+         DC    AL3(GREEN)
+         DC    CL37'Execute TSO commands'
+*
+         DC    X'110000',AL3(WHITE),C'7  ',AL3(TURQ)
+         DC    CL13'TUTORIAL'
+         DC    AL3(GREEN)
+         DC    CL37'Display HELP information'
+*
+         DC    X'110000',AL3(WHITE),C'8  ',AL3(TURQ)
+         DC    CL13'TEST'
+         DC    AL3(GREEN)
+         DC    CL37'Enter TEST mode (Authorized)'
+*
+         DC    X'110000',AL3(WHITE),C'9  ',AL3(TURQ)
+         DC    CL13'OPERATOR'
+         DC    AL3(GREEN)
+         DC    CL37'Enter OPERATOR mode'
+*
+         DC    X'110000',AL3(WHITE),C'X  ',AL3(TURQ)               @rp8
+         DC    CL13'EXIT'
+         DC    AL3(GREEN)
+         DC    CL37'Terminate RPF'
+*
+*        RPF release block, one time display
+*
+R16C2    DC    X'110000',AL3(WHITE)       r16 or r26 c2            @rp8
+SPLASH1  DC    C'____________________________________________________'
+R16C2L   EQU   *-R16C2
+*
+         DC    X'110000',AL3(WHITE)       r18,c02+                 @rp6
+SPLASH2  DC    C'|                                                  |'
+         DC    X'110000',AL3(WHITE)       R19,C02+                 @rp6
+SPLASH3  DC    C'| RPF 1234567 Build: yyyy-mm-dd 00:00              |'
+         DC    X'110000',AL3(WHITE)       R20,C02+                 @rp6
+SPLASH4  DC    C'| Use of RPF is free, modifications in consultation|'
+         DC    X'110000',AL3(WHITE)       R21,C02+                 @rp6
+SPLASH5  DC    C'| with me. Information: prin0096@gmail.com         |'
+         DC    X'110000',AL3(WHITE)       R22,C02+                 @rp6
+SPLASH6  DC    C'| www.prince-webdesign.nl/rpf                      |'
+         DC    X'110000',AL3(WHITE)       R23,C02+                 @rp6
+SPLASH7  DC    C'|__________________________________________________|'
+*
+RLASTC2  DC    X'110000',AL3(TURQ)        Row last c2
+         DC    C'Hit ',AL3(WHITE),C'PF03/15'
+         DC    AL3(TURQ),C' to terminate RPF'
+RLASTC52 DC    X'115DE2',AL3(WHITE)       Row last c52
+         DC    CL29'(C)-1979-2025 Skybird Systems'
+*
+*        System info lines on the right of the screen
+*
+R3C62    DC    X'110000',AL3(GREEN),C'User ID - ',AL3(TURQ) r03,c62+
+SCR1UID  DC    CL8' '
+R3C62L   EQU   *-R3C62
+         DC    X'110000',AL3(GREEN),C'Time    - ',AL3(TURQ) r04,c62+
+SCR1TME  DS    CL8
+         DC    X'110000',AL3(GREEN),C'System  - ',AL3(TURQ) r04,c62+
+SCR1SID  DC    CL8' '
+         DC    X'110000',AL3(GREEN),C'TSO-proc- ',AL3(TURQ) r06,c62+
+SCR1PRC  DS    CL8
+         DC    X'110000',AL3(GREEN),C'Prefix  - ',AL3(TURQ) r07,c62+
+SCR1PFX  DC    CL8' '
+         DC    X'110000',AL3(GREEN),C'Terminal- ',AL3(TURQ) r08,c62+
+SCR1TERM DC    CL8' '
+         DC    X'110000',AL3(GREEN),C'Release - ',AL3(TURQ) r09,c62+
+SCR1RPFV DC    CL8' '
+         DC    X'110000',AL3(GREEN),C'OS Rel  - ',AL3(TURQ) r10,c62+
+SCR1OS   DC    CL8' '                                              @rpl
+*
+*        Calendar lines on the right of the screen
+*
+R12C59   DC    X'110000',AL3(RED)         r12,c59+                 @rp5
+SCR1CAL1 DC    CL21' '                                             @rp5
+*
+R13C59   DC    X'110000',AL3(RED)         r13,C59+                 @rp5
+SCR1CAL2 DC    CL21' Su Mo Tu We Th Fr Sa'                         @rp5
+*
+R14C59   DC    X'110000',AL3(BLUE)        r14,c59+                 @rp5
+SCR1CAL3 DC    CL42' '                                             @rp5
+R14C59L  EQU   *-R14C59
+*
+         DC    X'110000',AL3(BLUE)        r15,c59+                 @rp5
+SCR1CAL4 DC    CL42' '                                             @rp5
+         DC    X'110000',AL3(BLUE)        r16,c59+                 @rp5
+SCR1CAL5 DC    CL42' '                                             @rp5
+         DC    X'110000',AL3(BLUE)        r17,c59+                 @rp5
+SCR1CAL6 DC    CL42' '                                             @rp8
+         DC    X'110000',AL3(BLUE)        r18,c59+                 @rp5
+SCR1CAL7 DC    CL42' '                                             @rp8
+         DC    X'110000',AL3(BLUE)        r19,c59+                 @rp5
+SCR1CAL8 DC    CL42' ',AL3(HDEFAULT)                               @rp8
+*
+SCR1LEN  EQU   *-SCR1TXT
+SCR1LENF EQU   *-SCR1TXTF              Length TPUT FULLSCR
+*
+         COPY  DSNPARS
+*
+         TITLE 'RPFCOMM area'
+COMMAREA RPFCOMM DSECT=NO
+         TITLE 'Working storage'
+WORKAREA DSECT
+SAVE     DS    18F
+SAVECAL  DS    18F
+DBW      DS    D                       For CVB and CVD instructions
+SBAR0R1  DS    D
+FLDTIOT  DS    XL12                    EXTRACT MF=L
+ADDRTIOT DS    F                       To contain addres of TIOT   @rp2
+CALPRM   DS    2F                      Parm of CALENDAR
+CNVDTPRM DS    2F                      Parm of RPFCNVDT
+PRMCOMM  DS    F                       Contains address of RPFCOMM
+TIMEWORK DS    F                       Work field TIME routine
+LNKLST   DS    XL8                     LINK SF=L
+ATCHLST  ATTACH SF=L                   ATTACH SF=(E,ATCHLST)
+ALSTLEN  EQU   *-ATCHLST
+ATCHPRM  DS    XL4                     ATTACH MF=(E,ATCHPRM)
+         AIF   (&SVS).SVS2
+GTL      GTTERM MF=L
+GTLL     EQU   *-GTL
+.SVS2    ANOP
+SIZE     DS    2F                      Terminal size and alt size
+TERMINAL DS    CL16                    Terminal name (LU name)
+TIMEDISP DS    CL10                    Output field TIME routine
+SCR9999F DS    X                       Escape char. TPUT FULLSCR
+SCR9999  DS    XL8                     '00C21140401D4013'
+BUFFER   DS    CL5                     \___ Buffer + overflow area ___/
+         DS    CL5                     /                              \
+TCBADDR  DS    F                       Subtask TCB or RPFASM
+ASMECB   DS    F
+OPERAND  DS    CL4                     To receive operands of RPF cmd.
+AMONTH   DS    F
+ADAYTAB  DS    F
+EPLOC    DS    CL8                     Module to link to
+LINKR14  DS    F
+*
+SUN      DS    CL252                   Each day max 5 in a month   @rp8
+*
+SCREEN   DS    CL(SCR1LENF)            RPF main menu
+*
+DDMMYY   DS    0CL49                   Output field from CONVDATE
+DAYNBR   DS    CL2                     Daynumber in the week - 01=SUN
+DAYNM#E  DS    CL9                     Dayname in English
+DAYNM#D  DS    CL9                     Dayname in Dutch
+         DS    CL1
+DD       DS    CL2
+         DS    CL1
+MONNBR   DS    CL2                     Monthnumber in year - 01=Jan
+MNAME#E  DS    CL9                     Monthname in English
+MNAME#D  DS    CL9                     Monthname in Dutch
+         DS    C
+CC       DS    CL2                     Century
+YY       DS    CL2                     Year
+*
+YYDDD    DS    PL3                     Julian date (packed)
+TODAY    DS    CL2
+*
+MONTH#1  DS    CL21
+*
+RPFUSER1 DS    0F                      Align on fullword (BLDL)
+         DC    AL2(1)                  One entry
+         DC    AL2(14)                 Length of data
+         DC    CL8'RPFUSER1'           Name of exit
+TTRKZ    DC    XL6'00'                 TTRKZC
+WORKL    EQU   *-WORKAREA
+R0       EQU   0
+R1       EQU   1
+R2       EQU   2
+R3       EQU   3
+R4       EQU   4
+R5       EQU   5
+R6       EQU   6
+R7       EQU   7
+R8       EQU   8
+R9       EQU   9
+R10      EQU   10
+R11      EQU   11
+R12      EQU   12
+R13      EQU   13
+R14      EQU   14
+R15      EQU   15
+         TITLE 'DSECTS USED BY RPFMAIN'
+         CVT   DSECT=YES,PREFIX=YES,LIST=NO
+         IKJUPT
+         PRINT NOGEN
+         DCBD  DSORG=PS,DEVD=DA
+         END

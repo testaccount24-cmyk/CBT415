@@ -1,0 +1,72 @@
+From: Rob Prins <robprins2@kpnmail.nl>
+Sent: zondag 22 augustus 2021 18:19
+To: 'Sam Golob' <sbgolob@cbttape.org>
+Subject: RPF 190 Release Notes
+
+Dear Sam,
+
+I found some known issues in RPF 189. (a few 0c4 abends and
+incorrouts).
+
+Thatâ is why I have release RPF190.
+
+RPF190 has 1 new function and that is Browse substitution if you
+try to EDIT a RECFM=U dataset or library.
+
+The rest are fixes and I have changed 9 modules to make these
+re-entrant. 24 modules are now re-entrant.
+
+And the most dynamic allocations are changed in TSO IKJDAIR calls
+to make RPF compatible with pre-MVS versions.
+
+And last but not lease. Some DCB abend exits are written to
+intercepts IO errors and authorization abends.
+
+The release notes are:
+
+RPFSAVE Fix wrong entry in PDS (3.1) after (AUTO)SAVE after 'E'
+line command.
+RPFVTOC1 Module made re-entrant and re-usable.
+RPFFIND Module made re-entrant and re-usable.
+RPFALLOC Dynamic allocations replaced by IKJDAIR calls.
+DSNTYPE removed and RACHECK/RACROUTE REQUEST=AUTH added to check
+authorization before create.
+RPFPDS Module made re-entrant and re-usable.
+RPFBRO Screen area moved to a GETMAIN'ed area and made dependent
+of screen size. Internal DATE routine replaced by call to
+RPFCNVDT.
+RPFSAVE Abend 0C4 fixed if entering option 5 (Archiver).
+RPFDATAL Search string not blanked after SEARCH in opt. 3.8
+RPFARCH Dynamic allocations replaced by IKJDAIR calls and module
+made re-entrant and re-usable.
+RPFARSVE Dynamic allocations replaced by IKJDAIR calls and module
+made re-entrant and re-usable.
+RPFHELP Module made re-entrant and re-usable.
+RPFDOC Module made re-entrant and re-usable and internal DATE
+routine replaced by call to RPFCNVDT.
+RPFSTAT Module made re-entrant and re-usable and internal DATE
+routine replaced by call to RPFCNVDT.
+RPFHCPY Internal DATE routine replaced by call to RPFCNVDT.
+RPFOUT Module optimized, SSOB dynamically allocated.
+RPFDEF Fix display return code of option 0 (defaults).
+RPFMAIN and RPFVTOC1 Substitute BROWSE if trying to EDIT a
+dataset with RECFM=U.
+RPFSRCH Module made re-entrant and re-usable.
+
+
+
+Would you like to post the enclosed file?
+
+Thanks in advance,
+
+All the best of everything to you and your family.
+
+Rob Prins
+
+Haremakers 54, 1531 LC Wormer
+
+Ploegdijk 2 H633 7241 SC Lochem
+T 06-46312299
+E robprins2@kpnmail.nl
+www.prince-webdesign.nl
+
